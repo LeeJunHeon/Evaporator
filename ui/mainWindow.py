@@ -349,14 +349,14 @@ class Ui_Form(object):
 
         self.stackedWidget.addWidget(self.page_2)
 
-        # --- manual tweak (button style / indicators / line thickness / alignment) ---
-        self._apply_custom_ui()
-
         self.retranslateUi(Form)
 
         self.stackedWidget.setCurrentIndex(0)
 
         QMetaObject.connectSlotsByName(Form)
+
+        # ✅ 위젯 크기 확정된 뒤 커스텀 적용(선 깨짐/배치 붕괴 방지)
+        QTimer.singleShot(0, self._apply_custom_ui)
 
     # setupUi
 
@@ -442,9 +442,9 @@ class Ui_Form(object):
             b.setCheckable(True)
             b.setStyleSheet(K_TOGGLE_QSS)
 
-        # Door는 챔버K처럼 둥근 그라데이션
+        # ✅ Door도 다른 버튼과 동일 스타일
         self.doorBtn.setCheckable(True)
-        self.doorBtn.setStyleSheet(K_DOOR_QSS)
+        self.doorBtn.setStyleSheet(K_TOGGLE_QSS)
 
         # Process / HMI는 “일반 버튼” + 밝은 스타일
         self.processBtn.setCheckable(False)
@@ -452,12 +452,20 @@ class Ui_Form(object):
         self.processBtn.setStyleSheet(K_NAV_QSS)
         self.hmiBtn.setStyleSheet(K_NAV_QSS)
 
-        # ===== 선(프레임) 스타일 & 굵기 =====
-        self._align_hmi_frames(line_thickness=24)   # ✅ 선 굵기 증가 (원하면 22/26으로 조절)
+        self._resize_hmi_buttons()
+        self._apply_multiline_texts()
+
+        # ✅ Process 버튼을 F.T.M과 같은 높이로 맞춤
+        self._align_process_with_ftm()
+
+        self._align_hmi_frames(line_thickness=20)
         self._style_hmi_frames()
 
-        # ===== Air/Water + ALL STOP (챔버K 스타일) =====
-        self._ensure_air_water_allstop_kstyle()
+        # ✅ 우상단: Air/G1/G2/Water, 우하단: ALL STOP
+        self._ensure_top_indicators_and_bottom_allstop()
+
+        # ✅ Chamber 글자 다시 보장(레이아웃 변경 후에도 안 사라지게)
+        self._ensure_chamber_label()
 
     def _ensure_air_water_allstop_kstyle(self):
         # 배치 기준: FTM 높이(y), 우측은 R/P 라인이 닿는 우측선(frame_19) 기준
@@ -824,4 +832,114 @@ class Ui_Form(object):
             g = w.geometry()
             w.setGeometry(g.translated(0, -d))
 
+    def _resize_hmi_buttons(self):
+        """HMI 페이지 버튼 크기 키우되, 중심점은 그대로 유지"""
+        def resize_keep_center(btn: QPushButton, w: int, h: int):
+            g = btn.geometry()
+            cx = g.x() + g.width() // 2
+            cy = g.y() + g.height() // 2
+            btn.setGeometry(cx - w // 2, cy - h // 2, w, h)
+
+        # 기본 토글 버튼(밸브/펌프 등)
+        base = [self.vvBtn, self.ftmBtn, self.rvBtn, self.mvBtn, self.fvBtn, self.rpBtn, self.pushButton_13]
+        for b in base:
+            resize_keep_center(b, 120, 78)
+
+        # 텍스트 긴 버튼(셔터/파워/메인셔터) 더 넓게
+        long_btns = [self.mainshutterBtn, self.ms1powerBtn, self.ms1shutterBtn, self.ms2powerBtn, self.ms2shutterBtn]
+        for b in long_btns:
+            resize_keep_center(b, 135, 82)
+
+        # Door도 동일 사이즈로(스타일은 위에서 동일 토글로 바꿈)
+        resize_keep_center(self.doorBtn, 120, 78)
+
+        # Process는 지금처럼 일반 버튼 유지(원하면 같이 키워도 됨)
+        resize_keep_center(self.processBtn, 120, 78)
+
+
+    def _apply_multiline_texts(self):
+        """긴 텍스트를 2줄로 바꿔서 잘림 방지(translate 이후 실행이라 안전)"""
+        self.mainshutterBtn.setText("Main\nShutter")
+        self.ms1powerBtn.setText("M.S 1\nPower")
+        self.ms1shutterBtn.setText("M.S 1\nShutter")
+        self.ms2powerBtn.setText("M.S 2\nPower")
+        self.ms2shutterBtn.setText("M.S 2\nShutter")
+
+    def _align_process_with_ftm(self):
+        """Process 버튼 top을 F.T.M 버튼 top과 동일하게"""
+        g = self.processBtn.geometry()
+        target_y = self.ftmBtn.geometry().y()
+        self.processBtn.setGeometry(g.x(), target_y, g.width(), g.height())
+        self.processBtn.raise_()
+
+    def _ensure_top_indicators_and_bottom_allstop(self):
+        """
+        요구사항:
+        - 우상단: Air, G1, G2, Water (총 4개)
+        - 우하단: ALL STOP
+        """
+        # ---- 스타일(챔버K 느낌 유지) ----
+        LED_ON = "background: #38d62f; border-radius: 18px; border: 2px solid #333;"
+        LED_OFF = "background: #d82c2c; border-radius: 18px; border: 2px solid #333;"
+        ALLSTOP_QSS = """
+            QPushButton {background: #A0A0A0; color: red; font-weight: bold; font-size: 18pt;
+                        border-radius: 8px; border: 2px solid #555555;}
+            QPushButton:pressed {background: #808080; border-color: #333333;}
+        """
+
+        page_w = self.page.width()
+        page_h = self.page.height()
+
+        margin = 22
+
+        # ---- (1) 우상단 인디케이터 4개 ----
+        led_d = 36
+        gap = 18
+        label_h = 20
+        top_y = margin
+
+        names = ["Air", "G1", "G2", "water"]  # 챔버K 표기 참고(원하면 Water로 바꿔도 됨)
+        total_w = led_d * 4 + gap * 3
+        start_x = page_w - margin - total_w
+
+        # 최초 생성
+        if not hasattr(self, "indLeds"):
+            self.indLeds = {}
+            self.indTexts = {}
+            for name in names:
+                led = QFrame(self.page)
+                txt = QLabel(self.page)
+                txt.setText(name)
+                txt.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
+                txt.setStyleSheet("font-weight: bold; font-size: 13pt; color: black;")
+                # 초기 ON(초록)로 표시
+                led.setStyleSheet(LED_ON)
+
+                self.indLeds[name] = led
+                self.indTexts[name] = txt
+
+        # 위치 갱신
+        for i, name in enumerate(names):
+            x = start_x + i * (led_d + gap)
+            self.indLeds[name].setGeometry(x, top_y, led_d, led_d)
+            self.indTexts[name].setGeometry(x - 10, top_y + led_d + 4, led_d + 20, label_h)
+
+        # ---- (2) 우하단 ALL STOP ----
+        btn_w, btn_h = 190, 90
+        x_btn = page_w - margin - btn_w
+        y_btn = page_h - margin - btn_h
+
+        if not hasattr(self, "allStopBtn"):
+            self.allStopBtn = QPushButton(self.page)
+            self.allStopBtn.setText("ALL STOP")
+            self.allStopBtn.setCheckable(False)
+            self.allStopBtn.setStyleSheet(ALLSTOP_QSS)
+
+        self.allStopBtn.setGeometry(x_btn, y_btn, btn_w, btn_h)
+
+        # ---- 앞으로 ----
+        for name in names:
+            self.indLeds[name].raise_()
+            self.indTexts[name].raise_()
+        self.allStopBtn.raise_()
 

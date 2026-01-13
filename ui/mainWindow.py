@@ -479,6 +479,10 @@ class Ui_Form(object):
 
         # 4) 선 정렬(끝점 딱 맞춤)
         self._align_hmi_frames()
+        
+        # Process 버튼 높이를 F.T.M과 동일하게
+        self.processBtn.move(self.processBtn.x(), self.ftmBtn.y())
+        self._ensure_air_water_allstop()
 
         # 5) frame은 전부 뒤로
         for f in frames:
@@ -489,6 +493,102 @@ class Ui_Form(object):
             b.raise_()
         self.processBtn.raise_()
         self.widget.raise_()
+
+    def _ensure_air_water_allstop(self):
+        """
+        요구사항:
+        - 상단에 Air/Water 인디케이터 추가
+        - 위치: F.T.M과 같은 높이(y), 우측 F/V 버튼 영역 상단(x 기준)
+        - All Stop 버튼은 인디케이터 '왼쪽'에 붙여서 배치
+        """
+        # 이미 만들어져 있으면(재호출 대비) 위치만 갱신
+        ftm_y = self.ftmBtn.geometry().y()          # F.T.M과 같은 높이
+        fv_g = self.fvBtn.geometry()                # 우측 기준
+        x_anchor = fv_g.x()                         # F/V 버튼의 x를 기준으로 위에 배치
+
+        led_d = 34          # 원형 LED 지름
+        text_h = 18         # 라벨 높이
+        gap = 14            # Air-Water 간격
+        label_gap = 4       # LED-텍스트 간격
+
+        # 인디케이터 2개가 들어갈 전체 폭
+        indicators_w = led_d * 2 + gap
+        indicators_x = x_anchor + (fv_g.width() - indicators_w) // 2  # F/V 폭 중앙 정렬
+        led_y = ftm_y + 6  # 버튼과 시각적으로 맞추려고 약간 내려줌(원하면 0으로)
+
+        # All Stop 버튼(인디케이터 왼쪽에 붙임)
+        all_w = 140
+        all_h = 71
+        all_x = indicators_x - 10 - all_w
+        all_y = ftm_y
+
+        # --- 생성(최초 1회) ---
+        if not hasattr(self, "allStopBtn"):
+            self.allStopBtn = QPushButton(self.page)
+            self.allStopBtn.setObjectName("allStopBtn")
+            self.allStopBtn.setText("ALL STOP")
+            self.allStopBtn.setStyleSheet("""
+                QPushButton{
+                    background-color: rgb(180,180,180);
+                    color: rgb(200,0,0);
+                    border: none;
+                    border-radius: 10px;
+                    font-weight: 800;
+                    font-size: 16px;
+                }
+                QPushButton:pressed{
+                    background-color: rgb(150,150,150);
+                }
+            """)
+
+            # Air LED + label
+            self.airLed = QLabel(self.page)
+            self.airLed.setObjectName("airLed")
+            self.airText = QLabel(self.page)
+            self.airText.setObjectName("airText")
+            self.airText.setText("Air")
+            self.airText.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
+
+            # Water LED + label
+            self.waterLed = QLabel(self.page)
+            self.waterLed.setObjectName("waterLed")
+            self.waterText = QLabel(self.page)
+            self.waterText.setObjectName("waterText")
+            self.waterText.setText("Water")
+            self.waterText.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
+
+            # 기본 색(원하면 초기값 red로 바꿔도 됨)
+            self.airLed.setStyleSheet(f"""
+                background-color: rgb(0,200,0);
+                border: 2px solid rgb(80,80,80);
+                border-radius: {led_d//2}px;
+            """)
+            self.waterLed.setStyleSheet(f"""
+                background-color: rgb(0,200,0);
+                border: 2px solid rgb(80,80,80);
+                border-radius: {led_d//2}px;
+            """)
+            self.airText.setStyleSheet("color: rgb(30,30,30); font-weight: 700;")
+            self.waterText.setStyleSheet("color: rgb(30,30,30); font-weight: 700;")
+
+        # --- 위치 갱신(항상) ---
+        self.allStopBtn.setGeometry(all_x, all_y, all_w, all_h)
+
+        air_x = indicators_x
+        water_x = indicators_x + led_d + gap
+
+        self.airLed.setGeometry(air_x, led_y, led_d, led_d)
+        self.airText.setGeometry(air_x - 10, led_y + led_d + label_gap, led_d + 20, text_h)
+
+        self.waterLed.setGeometry(water_x, led_y, led_d, led_d)
+        self.waterText.setGeometry(water_x - 10, led_y + led_d + label_gap, led_d + 20, text_h)
+
+        # 프레임이 뒤로 가더라도 얘네는 앞으로 보이게
+        self.allStopBtn.raise_()
+        self.airLed.raise_()
+        self.airText.raise_()
+        self.waterLed.raise_()
+        self.waterText.raise_()
 
     def _ensure_chamber_label(self):
         # 중복 생성 방지

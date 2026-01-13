@@ -507,12 +507,12 @@ class Ui_Form(object):
         ftm_y = self.ftmBtn.geometry().y()  # y는 F.T.M과 동일
 
         led_d = 34
-        gap_led = 16          # ✅ Air-Water 간격(조금 넓게)
-        gap_stop = 28         # ✅ AllStop과 Air 사이 간격(조금 넓게)
+        gap_led = 40          # ✅ Air-Water 간격(조금 넓게)
+        gap_stop = 40         # ✅ AllStop과 Air 사이 간격(조금 넓게)
 
         # ✅ 우측 기준: R/P 라인이 나가서 닿는 '우측 외곽선(frame_19)'의 오른쪽 edge
         right_edge = self.frame_19.geometry().right()
-        right_margin = 14     # ✅ 기준선 대비 살짝 안쪽으로 (가로 마진)
+        right_margin = 5     # ✅ 기준선 대비 살짝 안쪽으로 (가로 마진)
 
         # water가 가장 오른쪽
         water_x = (right_edge - right_margin) - led_d

@@ -349,7 +349,7 @@ class Ui_Form(object):
 
         self.stackedWidget.addWidget(self.page_2)
 
-        # --- Custom UI styling/alignment (manual edit) ---
+        # --- manual tweak (button style / indicators / line thickness / alignment) ---
         self._apply_custom_ui()
 
         self.retranslateUi(Form)
@@ -357,6 +357,7 @@ class Ui_Form(object):
         self.stackedWidget.setCurrentIndex(0)
 
         QMetaObject.connectSlotsByName(Form)
+
     # setupUi
 
     def retranslateUi(self, Form):
@@ -387,115 +388,135 @@ class Ui_Form(object):
     # retranslateUi
 
     # ---------------------------------------------------------------------
-    # Custom additions (manual edit)
+    # Manual UI tweak (Chamber-K style)
     # ---------------------------------------------------------------------
     def _apply_custom_ui(self):
+        # ===== 챔버K 스타일(QSS) =====  (UI.py에서 가져온 스타일 기반) :contentReference[oaicite:2]{index=2}
+        K_TOGGLE_QSS = """
+        QPushButton {background: #A0A0A0; color: white; font-weight: bold; font-size: 18pt;
+                    border-radius: 8px; border: 2px solid #555555;}
+        QPushButton:checked {background: #32FF32; color: black; font-weight: bold; font-size: 18pt;
+                            border-radius: 8px; border: 2px solid #229b12;}
         """
-        요구사항 반영:
-          - HMI쪽 버튼: 기본 빨강
-              * 일반(토글 X): pressed 동안만 초록 (Process, HMI)
-              * 토글(밸브류): checked(유지) 시 초록
-          - Frame(선): 회색, 테두리 없음, 전부 뒤로(lower)
-          - 선 정렬: 버튼/Chamber 기준으로 끝점 맞춤
-          - 가운데 큰 widget: 회색 + "Chamber" 텍스트
-        """
-        # 1) 가운데 위젯/그래프 위젯 회색
-        self.widget.setStyleSheet("background-color: rgb(220, 220, 220); border: none;")
-        self.graphWidget.setStyleSheet("background-color: rgb(220, 220, 220); border: none;")
 
-        # 1-1) 가운데 위젯에 'Chamber' 텍스트
-        self._ensure_chamber_label()
-
-        # 2) 버튼 스타일
-        toggle_qss = """
+        K_DOOR_QSS = """
         QPushButton {
-            background-color: rgb(220, 0, 0);
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #f0f0f0, stop:1 #A0A0A0);
             color: white;
-            border: none;
-            border-radius: 6px;
+            font-weight: bold; font-size: 18pt;
+            border-radius: 20px;
+            padding: 8px 0;
+            border: 3px solid #555;
         }
         QPushButton:checked {
-            background-color: rgb(0, 170, 0);
-        }
-        QPushButton:pressed {
-            background-color: rgb(0, 170, 0);
-        }
-        QPushButton:disabled {
-            background-color: rgb(160, 160, 160);
-            color: rgb(240, 240, 240);
-        }
-        """
-        momentary_qss = """
-        QPushButton {
-            background-color: rgb(255, 255, 255);
-            color: rgb(0, 0, 0);
-            border: 1px solid rgb(180, 180, 180);
-            border-radius: 6px;
-        }
-        QPushButton:hover {
-            background-color: rgb(245, 245, 245);
-        }
-        QPushButton:pressed {
-            background-color: rgb(235, 235, 235);
-        }
-        QPushButton:disabled {
-            background-color: rgb(230, 230, 230);
-            color: rgb(140, 140, 140);
+            background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #32FF32, stop:1 #229b12);
+            color: black;
         }
         """
 
-        # 2-1) 토글(밸브/동작) 버튼들
+        K_ALLSTOP_QSS = """
+        QPushButton {background: #A0A0A0; color: red; font-weight: bold; font-size: 18pt;
+                    border-radius: 8px; border: 2px solid #555555;}
+        QPushButton:pressed {background: #808080; border-color: #333333;}
+        """
+
+        # 네비(Process/HMI) = 챔버K의 밝은 버튼 느낌
+        K_NAV_QSS = """
+        QPushButton {background: #ebebe9; color: black; font-weight: bold; font-size: 14pt;
+                    border-radius: 8px; border: 2px solid #cccccc;}
+        QPushButton:pressed {background: #dcdcdc;}
+        """
+
+        # ===== 중앙 Chamber 위젯 =====
+        self.widget.setStyleSheet("background-color: rgb(220, 220, 220); border: none;")
+        self._ensure_chamber_label()
+
+        # ===== 버튼들: 챔버K 스타일로 =====
         toggle_buttons = [
-            self.vvBtn, self.doorBtn,
-            self.ftmBtn, self.mainshutterBtn,
-            self.ms1powerBtn, self.ms1shutterBtn,
-            self.ms2powerBtn, self.ms2shutterBtn,
+            self.vvBtn, self.ftmBtn, self.mainshutterBtn,
+            self.ms1powerBtn, self.ms1shutterBtn, self.ms2powerBtn, self.ms2shutterBtn,
             self.rvBtn, self.mvBtn, self.fvBtn, self.rpBtn,
             self.pushButton_13,  # TMP
         ]
         for b in toggle_buttons:
             b.setCheckable(True)
-            b.setChecked(False)
-            b.setStyleSheet(toggle_qss)
+            b.setStyleSheet(K_TOGGLE_QSS)
 
-        # 2-2) 일반 버튼(토글 X): Process, HMI
-        for b in (self.processBtn, self.hmiBtn):
-            b.setCheckable(False)
-            b.setStyleSheet(momentary_qss)
+        # Door는 챔버K처럼 둥근 그라데이션
+        self.doorBtn.setCheckable(True)
+        self.doorBtn.setStyleSheet(K_DOOR_QSS)
 
-        # 3) Frame(선) 스타일 + 뒤로 보내기
-        frame_qss = "background-color: rgb(150, 150, 150); border: none;"
-        frames = [
-            self.frame, self.frame_2, self.frame_3, self.frame_4, self.frame_5, self.frame_6,
-            self.frame_7, self.frame_8, self.frame_9, self.frame_10, self.frame_11, self.frame_12,
-            self.frame_13, self.frame_14, self.frame_15, self.frame_16, self.frame_17,
-            self.frame_18, self.frame_19, self.frame_20,
-        ]
-        for f in frames:
-            f.setFrameShape(QFrame.Shape.NoFrame)
-            f.setFrameShadow(QFrame.Shadow.Plain)
-            f.setStyleSheet(frame_qss)
-            f.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        # Process / HMI는 “일반 버튼” + 밝은 스타일
+        self.processBtn.setCheckable(False)
+        self.hmiBtn.setCheckable(False)
+        self.processBtn.setStyleSheet(K_NAV_QSS)
+        self.hmiBtn.setStyleSheet(K_NAV_QSS)
 
-        # 4) 선 정렬(끝점 딱 맞춤)
-        self._align_hmi_frames()
-        
-        # Process 버튼 높이를 F.T.M과 동일하게
-        self.processBtn.move(self.processBtn.x(), self.ftmBtn.y())
-        self._ensure_air_water_allstop()
+        # ===== 선(프레임) 스타일 & 굵기 =====
+        self._align_hmi_frames(line_thickness=24)   # ✅ 선 굵기 증가 (원하면 22/26으로 조절)
+        self._style_hmi_frames()
 
-        # 페이지 크기/레이아웃 확정 후 실행되게 (상단 잘림 방지)
-        QTimer.singleShot(0, self._normalize_hmi_vertical_margins)
+        # ===== Air/Water + ALL STOP (챔버K 스타일) =====
+        self._ensure_air_water_allstop_kstyle()
 
-        # 5) frame은 전부 뒤로
-        for f in frames:
-            f.lower()
+    def _ensure_air_water_allstop_kstyle(self):
+        # 배치 기준: FTM 높이(y), 우측은 R/P 라인이 닿는 우측선(frame_19) 기준
+        ftm_y = self.ftmBtn.geometry().y()
+        right_edge = self.frame_19.geometry().right()
 
-        # 버튼/위젯은 앞으로
-        for b in toggle_buttons:
-            b.raise_()
-        self.processBtn.raise_()
-        self.widget.raise_()
+        led_d = 36
+        gap_led = 18
+        gap_stop = 32
+        right_margin = 14
+
+        water_x = (right_edge - right_margin) - led_d
+        air_x = water_x - gap_led - led_d
+
+        all_w, all_h = 150, 71
+        all_x = air_x - gap_stop - all_w
+        all_y = ftm_y
+
+        led_y = ftm_y + 8
+
+        # 최초 생성
+        if not hasattr(self, "allStopBtn"):
+            self.allStopBtn = QPushButton(self.page)
+            self.allStopBtn.setText("ALL STOP")
+            self.allStopBtn.setCheckable(False)
+            self.allStopBtn.setStyleSheet("""
+                QPushButton {background: #A0A0A0; color: red; font-weight: bold; font-size: 18pt;
+                            border-radius: 8px; border: 2px solid #555555;}
+                QPushButton:pressed {background: #808080; border-color: #333333;}
+            """)
+
+            # 인디케이터는 QFrame으로(챔버K 방식)
+            self.airLed = QFrame(self.page)
+            self.waterLed = QFrame(self.page)
+
+            self.airText = QLabel(self.page); self.airText.setText("Air")
+            self.waterText = QLabel(self.page); self.waterText.setText("water")
+
+            for lbl in (self.airText, self.waterText):
+                lbl.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
+                lbl.setStyleSheet("font-weight: bold; font-size: 13pt; color: black;")
+
+            # 초기값 ON(초록)로 보이게(원하면 False로 바꿔서 빨강 초기화 가능)
+            self.airLed.setStyleSheet("background: #38d62f; border-radius: 18px; border: 2px solid #333;")
+            self.waterLed.setStyleSheet("background: #38d62f; border-radius: 18px; border: 2px solid #333;")
+
+        # 위치 갱신
+        self.allStopBtn.setGeometry(all_x, all_y, all_w, all_h)
+
+        self.airLed.setGeometry(air_x, led_y, led_d, led_d)
+        self.airText.setGeometry(air_x - 10, led_y + led_d + 4, led_d + 20, 20)
+
+        self.waterLed.setGeometry(water_x, led_y, led_d, led_d)
+        self.waterText.setGeometry(water_x - 10, led_y + led_d + 4, led_d + 20, 20)
+
+        # 앞으로
+        self.allStopBtn.raise_()
+        self.airLed.raise_(); self.airText.raise_()
+        self.waterLed.raise_(); self.waterText.raise_()
 
     def _ensure_air_water_allstop(self):
         """
@@ -591,56 +612,44 @@ class Ui_Form(object):
         self.waterLed.raise_()
         self.waterText.raise_()
 
-    def _ensure_chamber_label(self):
-        # 중복 생성 방지
-        if getattr(self, "_chamberLabel", None) is not None:
-            # 위젯 크기 변경에 대비해 geometry만 갱신
-            self._chamberLabel.setGeometry(QRect(0, 0, self.widget.width(), self.widget.height()))
-            return
+    def _style_hmi_frames(self):
+        # 챔버K 회색 라인 느낌 (#b2b2b2 계열)
+        frame_qss = "background-color: #b2b2b2; border: none;"
+        frames = [
+            self.frame, self.frame_2, self.frame_3, self.frame_4, self.frame_5, self.frame_6,
+            self.frame_7, self.frame_8, self.frame_9, self.frame_10, self.frame_11, self.frame_12,
+            self.frame_13, self.frame_14, self.frame_15, self.frame_16, self.frame_17,
+            self.frame_18, self.frame_19, self.frame_20,
+        ]
+        for f in frames:
+            f.setFrameShape(QFrame.Shape.NoFrame)
+            f.setFrameShadow(QFrame.Shadow.Plain)
+            f.setStyleSheet(frame_qss)
+            f.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+            f.lower()  # ✅ 항상 뒤로
 
-        self._chamberLabel = QLabel(self.widget)
-        self._chamberLabel.setObjectName("chamberLabel")
-        self._chamberLabel.setText("Chamber")
-        self._chamberLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._chamberLabel.setGeometry(QRect(0, 0, self.widget.width(), self.widget.height()))
 
-        font = QFont()
-        font.setPointSize(22)
-        font.setBold(True)
-        self._chamberLabel.setFont(font)
-
-        self._chamberLabel.setStyleSheet(
-            "background: transparent; color: rgb(90, 90, 90);"
-        )
-        self._chamberLabel.raise_()
-
-    def _align_hmi_frames(self):
+    def _align_hmi_frames(self, line_thickness: int = 24):
         """
-        프레임을 '선'처럼 쓰되, 교차/접점이 1px도 어긋나지 않게
-        (가로선/세로선이 thickness만큼 겹치도록) 재배치
+        선(프레임) 굵기 증가 + 연결 끝점 정렬 + F/V가 세로선(frame_16)과 겹치지 않게 보정
         """
-        t = 16
+        t = int(line_thickness)
         half = t // 2
 
-        def center_x(r: QRect) -> int:
-            return r.x() + r.width() // 2
+        def cx(r: QRect) -> int: return r.x() + r.width() // 2
+        def cy(r: QRect) -> int: return r.y() + r.height() // 2
 
-        def center_y(r: QRect) -> int:
-            return r.y() + r.height() // 2
-
-        # x_left/x_right는 "edge" 개념(좌/우 끝), y_center는 중심
         def set_hline(frame: QFrame, x_left: int, x_right: int, y_center: int):
             if x_right < x_left:
                 x_left, x_right = x_right, x_left
             frame.setGeometry(QRect(int(x_left), int(y_center - half), int(x_right - x_left), t))
 
-        # y_top/y_bottom은 "edge" 개념(상/하 끝), x_center는 중심
         def set_vline(frame: QFrame, x_center: int, y_top: int, y_bottom: int):
             if y_bottom < y_top:
                 y_top, y_bottom = y_bottom, y_top
             frame.setGeometry(QRect(int(x_center - half), int(y_top), t, int(y_bottom - y_top)))
 
-        # ---- 기준 지오메트리 ----
+        # --- 기준 지오메트리 ---
         ch = self.widget.geometry()
         ch_left = ch.left()
         ch_right = ch.right() + 1
@@ -660,82 +669,96 @@ class Ui_Form(object):
         rv = self.rvBtn.geometry()
         mv = self.mvBtn.geometry()
         rp = self.rpBtn.geometry()
+        fv = self.fvBtn.geometry()  # ✅ F/V (겹침 보정에 사용)
 
-        # ---- y 중심들 ----
-        y_vv = center_y(vv)
-        y_door = center_y(door)
-        y_main = center_y(main)
-        y_ms1p = center_y(ms1p)
-        y_ms1s = center_y(ms1s)
-        y_ms2p = center_y(ms2p)
-        y_ms2s = center_y(ms2s)
+        y_vv = cy(vv)
+        y_door = cy(door)
+        y_main = cy(main)
 
-        y_rv = center_y(rv)
-        y_mv = center_y(mv)
-        y_rp = center_y(rp)
+        y_ms1p = cy(ms1p)
+        y_ms1s = cy(ms1s)
+        y_ms2p = cy(ms2p)
+        y_ms2s = cy(ms2s)
 
-        # ---- 왼쪽/아래 4개 수직 바(Chamber 아래로 내려오는 라인) ----
-        # Chamber 폭 기준으로 4개를 균등 느낌으로 배치
+        y_rv = cy(rv)
+        y_mv = cy(mv)
+        y_rp = cy(rp)
+
+        # --- Chamber 아래 4개 수직 바 위치 ---
         w = ch.width()
-        bar1_xc = ch_left + int(w * 0.16)  # MS1 Power 쪽
-        bar2_xc = ch_left + int(w * 0.33)  # MS1 Shutter 쪽
-        bar3_xc = ch_left + int(w * 0.67)  # MS2 Shutter 쪽
-        bar4_xc = ch_left + int(w * 0.84)  # MS2 Power 쪽
+        bar1_xc = ch_left + int(w * 0.16)
+        bar2_xc = ch_left + int(w * 0.33)
+        bar3_xc = ch_left + int(w * 0.67)
+        bar4_xc = ch_left + int(w * 0.84)
 
-        # ---- 1) V/V, Door -> Chamber 좌측 ----
-        # 가로선은 버튼 오른쪽 edge에서 시작해서 Chamber 안쪽으로 half만큼 겹치게
+        # 1) V/V, Door -> Chamber 좌측
         set_hline(self.frame_10, vv.right() + 1, ch_left + half, y_vv)
         set_hline(self.frame_7,  door.right() + 1, ch_left + half, y_door)
 
-        # ---- 2) FTM -> Chamber 상단 ----
-        ftm_xc = center_x(ftm)
-        set_vline(self.frame_12, ftm_xc, ftm.bottom() + 1, ch_top + half)
+        # 2) FTM -> Chamber 상단
+        set_vline(self.frame_12, cx(ftm), ftm.bottom() + 1, ch_top + half)
 
-        # ---- 3) Chamber 우측 -> Main Shutter ----
+        # 3) Chamber 우측 -> Main shutter
         set_hline(self.frame_11, ch_right - half, main.left() + half, y_main)
 
-        # ---- 4) Chamber 아래 -> 4개 수직 바 ----
-        # 수직바는 Chamber 하단과 가로선이 "겹치게" (끝에 half 오버랩)
+        # 4) Chamber 아래 -> 수직 바
         set_vline(self.frame_9, bar1_xc, ch_bottom - half, y_ms1p + half)
         set_vline(self.frame_5, bar2_xc, ch_bottom - half, y_ms1s + half)
         set_vline(self.frame_6, bar3_xc, ch_bottom - half, y_ms2s + half)
         set_vline(self.frame_8, bar4_xc, ch_bottom - half, y_ms2p + half)
 
-        # ---- 5) MS1 Power/Shutter 가로선 ----
+        # 5) MS1 / MS2 가로 연결
         set_hline(self.frame,   ms1p.right() + 1, bar1_xc + half, y_ms1p)
         set_hline(self.frame_2, ms1s.right() + 1, bar2_xc + half, y_ms1s)
-
-        # ---- 6) MS2 Power/Shutter 가로선 ----
         set_hline(self.frame_3, bar4_xc - half, ms2p.left() + half, y_ms2p)
         set_hline(self.frame_4, bar3_xc - half, ms2s.left() + half, y_ms2s)
 
-        # ---- 7) Chamber -> 오른쪽 매니폴드(사각 라인) ----
-        # 기존 우측 프레임들의 x 위치를 anchor로 쓰면(디자이너 기반) 라인 조합이 더 안정적으로 딱 맞음
-        rect_left_xc = center_x(self.frame_15.geometry())   # 좌측 수직(내부)
-        rect_right_xc = center_x(self.frame_16.geometry())  # 우측 수직(내부)
-        outer_right_xc = center_x(self.frame_19.geometry()) # 외곽 수직(맨 오른쪽)
-
-        # 연결 y는 Door 라인 레벨이 스샷과 가장 비슷 (중간 펌핑 라인)
+        # 6) Chamber -> 오른쪽 루프 연결(y는 Door 라인 레벨 사용)
         y_conn = y_door
 
-        # Chamber 오른쪽에서 rect_left로 (겹침 포함)
+        rect_left_xc = cx(self.frame_15.geometry())
+        rect_right_xc = cx(self.frame_16.geometry())
+        outer_right_xc = cx(self.frame_19.geometry())
+
+        # ✅ 핵심: F/V 버튼이 frame_16(세로선)과 겹치지 않게 “세로선 x를 더 오른쪽”으로 보정
+        min_rect_right_xc = fv.right() + 1 + half + 10  # 10px 여유
+        rect_right_xc = max(rect_right_xc, min_rect_right_xc)
+
+        # 화면 밖으로 너무 나가면 클램프
+        page_w = self.page.width()
+        rect_right_xc = min(rect_right_xc, page_w - 20 - half)
+
+        # outer loop도 rect_right보다 오른쪽 유지
+        outer_right_xc = max(outer_right_xc, rect_right_xc + 40)
+        outer_right_xc = min(outer_right_xc, page_w - 10 - half)
+
+        # Chamber -> rect_left
         set_hline(self.frame_17, ch_right - half, rect_left_xc + half, y_conn)
 
-        # ---- 8) 내부 사각( RV 레벨 / MV 레벨 ) ----
-        # 좌/우 수직: RV~MV
-        set_vline(self.frame_15, rect_left_xc, y_rv - half, y_mv + half)
+        # 내부 사각 RV~MV
+        set_vline(self.frame_15, rect_left_xc,  y_rv - half, y_mv + half)
         set_vline(self.frame_16, rect_right_xc, y_rv - half, y_mv + half)
-
-        # 상단/중단 가로: 좌수직~우수직
         set_hline(self.frame_14, rect_left_xc - half, rect_right_xc + half, y_rv)
         set_hline(self.frame_13, rect_left_xc - half, rect_right_xc + half, y_mv)
 
-        # ---- 9) 외곽 루프: rect_right -> outer_right (y_conn), outer_right 내려가서 RP로 ----
+        # 외곽 루프 + RP 연결
         set_hline(self.frame_20, rect_right_xc - half, outer_right_xc + half, y_conn)
         set_vline(self.frame_19, outer_right_xc, y_conn - half, y_rp + half)
-
-        # RP는 버튼 오른쪽 edge에서 시작해서 outer_right로
         set_hline(self.frame_18, rp.right() + 1, outer_right_xc + half, y_rp)
+
+
+    def _ensure_chamber_label(self):
+        if getattr(self, "_chamberLabel", None) is None:
+            self._chamberLabel = QLabel(self.widget)
+            self._chamberLabel.setText("Chamber")
+            self._chamberLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            f = QFont()
+            f.setPointSize(22)
+            f.setBold(True)
+            self._chamberLabel.setFont(f)
+            self._chamberLabel.setStyleSheet("background: transparent; color: rgb(90, 90, 90);")
+        self._chamberLabel.setGeometry(QRect(0, 0, self.widget.width(), self.widget.height()))
+        self._chamberLabel.raise_()
 
     def _normalize_hmi_vertical_margins(self):
         """

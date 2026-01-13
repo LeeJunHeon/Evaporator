@@ -3,9 +3,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .serial_config import load_settings
-from .stm100 import STM100
-from .acs2000 import ACS2000
+from ..config.serial_config import load_settings
+from ..devices.stm100 import STM100
+from ..devices.acs2000 import ACS2000
 
 
 class DeviceManager:

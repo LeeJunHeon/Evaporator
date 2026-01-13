@@ -5,7 +5,7 @@ import time
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
-from .base_serial import BaseSerialDevice, SerialDeviceError
+from ..utils.base_serial import BaseSerialDevice, SerialDeviceError
 
 
 class STM100ProtocolError(SerialDeviceError):

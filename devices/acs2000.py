@@ -8,23 +8,39 @@ from .base_serial import BaseSerialDevice, SerialDeviceError
 
 
 class ACS2000ProtocolError(SerialDeviceError):
-    pass
+    """ACS-2000 RS-232 통신/파싱 오류"""
 
 
 def _eom_bytes(eom: Optional[str]) -> bytes:
-    # config: "CR" or "CRLF"
-    if not eom or eom.upper() == "CR":
+    """
+    config: "CR" or "CRLF" (권장: CR)
+    """
+    if not eom:
         return b"\r"
-    if eom.upper() == "CRLF":
+    e = eom.strip().upper()
+    if e == "CR":
+        return b"\r"
+    if e == "CRLF":
         return b"\r\n"
-    raise ValueError(f"invalid eom: {eom} (use CR or CRLF)")
+    raise ValueError(f"Unsupported EOM={eom!r} (use CR or CRLF)")
+
+
+# 매뉴얼의 List of commands (문서화 목적)
+ACS2000_COMMANDS = [
+    "BAU", "CON", "CPF", "DGS", "DGT", "ERR", "FDS", "FLT", "FSR", "GAS",
+    "LOC", "OFS", "PRD", "PRT", "RMS", "RTY", "SPS", "SP1", "SP2", "TAS",
+    "TID", "TPM", "TRS", "UNI", "VER",
+]
 
 
 class ACS2000(BaseSerialDevice):
     """
-    ACS2000 ASCII 프로토콜:
-      TX: b"$VER\\r" 또는 b"$PRD,1\\r"
-      RX: b"$...\\r" (+ optional LF)
+    Adixen/Alcatel ACS-2000 RS-232 드라이버.
+
+    - STX: '$'
+    - Command: <STX><COMMAND>[,PARAM1]...[EOM]
+    - Reply  : <STX><DATA><EOM>[LF]
+    - EOM: 기본 CR
     """
 
     def __init__(self, *, eom: str = "CR", **kwargs):
@@ -33,10 +49,8 @@ class ACS2000(BaseSerialDevice):
 
     def _read_until_cr(self, timeout_s: float) -> bytes:
         """
-        매뉴얼/테스트 코드 방식: CR까지 읽고, 직후 LF가 있으면 버린다:contentReference[oaicite:11]{index=11}.
+        CR까지 읽는다. (CR 뒤에 LF가 올 수 있음)
         """
-        import serial  # local import for type/attr
-
         with self._lock:
             ser = self._require()
             t0 = time.time()
@@ -51,103 +65,102 @@ class ACS2000(BaseSerialDevice):
                     # optional LF discard
                     old_to = ser.timeout
                     ser.timeout = 0.05
-                    nxt = ser.read(1)
-                    if nxt == b"\n":
-                        pass
-                    else:
-                        if nxt:
-                            buf += nxt
+                    _ = ser.read(1)
                     ser.timeout = old_to
                     break
 
             return bytes(buf)
 
     def _txrx(self, payload_no_eom: str, rx_timeout_s: float = 0.8) -> str:
-        payload_no_eom = payload_no_eom.strip()
+        """
+        payload_no_eom 예: "$VER", "$PRD,1"
+        """
         if not payload_no_eom.startswith("$"):
-            payload_no_eom = "$" + payload_no_eom
+            raise ValueError("ACS2000 payload must start with '$'")
 
         tx = payload_no_eom.encode("ascii", errors="replace") + self._eom
 
-        # reset_input=True로 “이전 찌꺼기” 제거
-        self._write(tx, flush=True, reset_input=True)
-        rx = self._read_until_cr(timeout_s=rx_timeout_s)
+        with self._lock:
+            ser = self._require()
+            ser.reset_input_buffer()
+            ser.reset_output_buffer()
+            ser.write(tx)
+            ser.flush()
+            rx = self._read_until_cr(timeout_s=rx_timeout_s)
 
         if not rx:
             raise ACS2000ProtocolError(f"no response for '{payload_no_eom}'")
 
-        s = rx.decode("ascii", errors="replace").strip()
-        return s
+        return rx.decode("ascii", errors="replace").strip()
 
-    @staticmethod
-    def _split_status_data(reply: str) -> Tuple[str, str]:
-        """
-        응답 해석은 장비 설정/펌웨어에 따라 달라질 수 있어, 최대한 보수적으로 파싱:
-        - ERR_XXXXX가 포함되면 에러로 간주:contentReference[oaicite:12]{index=12}
-        """
-        if "ERR_" in reply:
-            return "ERR", reply
-        if reply.startswith("OK"):
-            return "OK", reply
-        # 보통 '$'로 시작하는 ASCII 데이터
-        return "DATA", reply
+    # ✅ 매뉴얼의 "모든 명령"을 커버하는 범용 RAW
+    def raw(self, command: str, *params: str, rx_timeout_s: float = 0.8) -> str:
+        cmd = command.strip().upper()
+        if not cmd:
+            raise ValueError("command empty")
 
+        parts = ["$" + cmd]
+        if params:
+            parts.extend(str(p) for p in params)
+
+        payload = ",".join(parts)
+        reply = self._txrx(payload, rx_timeout_s=rx_timeout_s)
+
+        # reply도 '$'로 시작하므로 data만 반환
+        if reply.startswith("$"):
+            reply = reply[1:]
+        return reply.strip()
+
+    # 기존 스타일 유지(통합 프로그램에서 자주 쓰는 최소 셋)
     def query_version(self) -> str:
-        return self._txrx("$VER", rx_timeout_s=0.8)
+        return self.raw("VER")
 
     def query_pressure(self, channel: int = 1) -> float:
-        """
-        매뉴얼 command list에 PRD(채널 압력 값 조회) 존재:contentReference[oaicite:13]{index=13}.
-        테스트 코드 스타일에 맞춰 '$PRD,<ch>' 형태로 보냄(사용자가 이 형태로 통신 테스트를 통과했기 때문).
-        """
         if channel not in (1, 2):
             raise ValueError("ACS2000 channel must be 1 or 2")
 
-        reply = self._txrx(f"$PRD,{channel}", rx_timeout_s=0.8)
-        status, raw = self._split_status_data(reply)
+        raw = self._txrx(f"$PRD,{channel}", rx_timeout_s=0.8)
+        s = raw.replace("$", "").strip()
 
-        if status == "ERR":
-            raise ACS2000ProtocolError(raw)
+        tokens = [t.strip() for t in s.split(",") if t.strip()]
+        cand = tokens[-1] if tokens else s
 
-        # 숫자만 오는 경우 / '$PRD,...' 형태 / 'OK,...,<value>' 형태 등 변형 대비:
-        tokens = raw.replace("$", "").replace("OK", "").split(",")
-        tokens = [t.strip() for t in tokens if t.strip()]
-
-        # 뒤에서부터 float 변환 가능한 값을 찾음
-        for t in reversed(tokens):
-            try:
-                return float(t)
-            except ValueError:
-                continue
-
-        # 마지막 fallback: 공백 split
-        for t in reversed(raw.replace("$", "").split()):
-            try:
-                return float(t)
-            except ValueError:
-                continue
-
-        raise ACS2000ProtocolError(f"cannot parse pressure reply: {raw}")
+        try:
+            return float(cand)
+        except ValueError:
+            for t in reversed(s.split()):
+                try:
+                    return float(t)
+                except ValueError:
+                    continue
+            raise ACS2000ProtocolError(f"cannot parse pressure reply: {raw!r}")
 
     def start_pressure_stream(self, interval_a: int = 1) -> str:
-        """
-        CON: 연속 수신 요청. 테스트 코드에서도 '$CON,<interval>'로 실행:contentReference[oaicite:14]{index=14}.
-        interval_a 의미는 장비 설정에 따름(테스트 코드에서 사용자 입력으로 받는 구조).
-        """
         return self._txrx(f"$CON,{interval_a}", rx_timeout_s=0.8)
 
     def read_stream_line(self, timeout_s: float = 2.0) -> str:
-        """
-        CON 이후 장비가 계속 송신하는 라인 1개를 읽음.
-        """
         rx = self._read_until_cr(timeout_s=timeout_s)
         if not rx:
             raise ACS2000ProtocolError("stream timeout/no data")
         return rx.decode("ascii", errors="replace").strip()
 
     def stop_stream_safe(self) -> None:
-        """
-        매뉴얼/테스트 코드 코멘트: CON은 장비가 계속 송신할 수 있고, 장비에서 버튼으로 중지하는 방법도 고려:contentReference[oaicite:15]{index=15}.
-        “확실한” stop 명령이 환경마다 다를 수 있어, 안전한 stop은 포트를 닫아 스트림을 끊는 것.
-        """
         self.close()
+
+    # 자주 쓰는 추가 명령(필요할 때만 래핑)
+    def query_errors(self) -> str:
+        return self.raw("ERR")
+
+    def set_continuous(self, interval_a: int = 1) -> str:
+        return self.raw("CON", str(interval_a))
+
+    def set_baudrate(self, baud: int) -> str:
+        # 주의: 적용 즉시 통신 끊길 수 있음
+        return self.raw("BAU", str(baud))
+
+    # alias
+    def get_version(self) -> str:
+        return self.query_version()
+
+    def get_pressure(self, channel: int = 1) -> float:
+        return self.query_pressure(channel)

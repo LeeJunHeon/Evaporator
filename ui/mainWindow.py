@@ -10,7 +10,7 @@
 
 from PySide6.QtCore import (QCoreApplication, QDate, QDateTime, QLocale,
     QMetaObject, QObject, QPoint, QRect,
-    QSize, QTime, QUrl, Qt)
+    QSize, QTime, QUrl, Qt, QTimer)
 from PySide6.QtGui import (QBrush, QColor, QConicalGradient, QCursor,
     QFont, QFontDatabase, QGradient, QIcon,
     QImage, QKeySequence, QLinearGradient, QPainter,
@@ -484,6 +484,9 @@ class Ui_Form(object):
         self.processBtn.move(self.processBtn.x(), self.ftmBtn.y())
         self._ensure_air_water_allstop()
 
+        # 페이지 크기/레이아웃 확정 후 실행되게 (상단 잘림 방지)
+        QTimer.singleShot(0, self._normalize_hmi_vertical_margins)
+
         # 5) frame은 전부 뒤로
         for f in frames:
             f.lower()
@@ -501,26 +504,27 @@ class Ui_Form(object):
         - 위치: F.T.M과 같은 높이(y), 우측 F/V 버튼 영역 상단(x 기준)
         - All Stop 버튼은 인디케이터 '왼쪽'에 붙여서 배치
         """
-        # 이미 만들어져 있으면(재호출 대비) 위치만 갱신
-        ftm_y = self.ftmBtn.geometry().y()          # F.T.M과 같은 높이
-        fv_g = self.fvBtn.geometry()                # 우측 기준
-        x_anchor = fv_g.x()                         # F/V 버튼의 x를 기준으로 위에 배치
+        ftm_y = self.ftmBtn.geometry().y()  # y는 F.T.M과 동일
 
-        led_d = 34          # 원형 LED 지름
-        text_h = 18         # 라벨 높이
-        gap = 14            # Air-Water 간격
-        label_gap = 4       # LED-텍스트 간격
+        led_d = 34
+        gap_led = 16          # ✅ Air-Water 간격(조금 넓게)
+        gap_stop = 28         # ✅ AllStop과 Air 사이 간격(조금 넓게)
 
-        # 인디케이터 2개가 들어갈 전체 폭
-        indicators_w = led_d * 2 + gap
-        indicators_x = x_anchor + (fv_g.width() - indicators_w) // 2  # F/V 폭 중앙 정렬
-        led_y = ftm_y + 6  # 버튼과 시각적으로 맞추려고 약간 내려줌(원하면 0으로)
+        # ✅ 우측 기준: R/P 라인이 나가서 닿는 '우측 외곽선(frame_19)'의 오른쪽 edge
+        right_edge = self.frame_19.geometry().right()
+        right_margin = 14     # ✅ 기준선 대비 살짝 안쪽으로 (가로 마진)
 
-        # All Stop 버튼(인디케이터 왼쪽에 붙임)
-        all_w = 140
-        all_h = 71
-        all_x = indicators_x - 10 - all_w
+        # water가 가장 오른쪽
+        water_x = (right_edge - right_margin) - led_d
+        air_x = water_x - gap_led - led_d
+
+        # All Stop은 Air의 왼쪽에 붙여서
+        all_w, all_h = 140, 71
+        all_x = air_x - gap_stop - all_w
         all_y = ftm_y
+
+        # y(LED는 버튼 라인에서 살짝 내려서 보기 좋게)
+        led_y = ftm_y + 6
 
         # --- 생성(최초 1회) ---
         if not hasattr(self, "allStopBtn"):
@@ -574,14 +578,11 @@ class Ui_Form(object):
         # --- 위치 갱신(항상) ---
         self.allStopBtn.setGeometry(all_x, all_y, all_w, all_h)
 
-        air_x = indicators_x
-        water_x = indicators_x + led_d + gap
-
         self.airLed.setGeometry(air_x, led_y, led_d, led_d)
-        self.airText.setGeometry(air_x - 10, led_y + led_d + label_gap, led_d + 20, text_h)
+        self.airText.setGeometry(air_x - 10, led_y + led_d + 4, led_d + 20, 18)
 
         self.waterLed.setGeometry(water_x, led_y, led_d, led_d)
-        self.waterText.setGeometry(water_x - 10, led_y + led_d + label_gap, led_d + 20, text_h)
+        self.waterText.setGeometry(water_x - 10, led_y + led_d + 4, led_d + 20, 18)
 
         # 프레임이 뒤로 가더라도 얘네는 앞으로 보이게
         self.allStopBtn.raise_()
@@ -735,4 +736,69 @@ class Ui_Form(object):
 
         # RP는 버튼 오른쪽 edge에서 시작해서 outer_right로
         set_hline(self.frame_18, rp.right() + 1, outer_right_xc + half, y_rp)
+
+    def _normalize_hmi_vertical_margins(self):
+        """
+        HMI 페이지(page)에서 모든 요소를 동일한 delta로 이동시켜
+        상단 여백과 하단 여백을 같게 맞춘다.
+        """
+        # HMI 화면에서 같이 움직여야 하는 것들(버튼/챔버/프레임/상단 요소들)
+        frames = [
+            self.frame, self.frame_2, self.frame_3, self.frame_4, self.frame_5, self.frame_6,
+            self.frame_7, self.frame_8, self.frame_9, self.frame_10, self.frame_11, self.frame_12,
+            self.frame_13, self.frame_14, self.frame_15, self.frame_16, self.frame_17,
+            self.frame_18, self.frame_19, self.frame_20,
+        ]
+        widgets = [
+            self.processBtn, self.ftmBtn, self.vvBtn, self.doorBtn, self.mainshutterBtn,
+            self.ms1powerBtn, self.ms1shutterBtn, self.ms2powerBtn, self.ms2shutterBtn,
+            self.rvBtn, self.mvBtn, self.fvBtn, self.rpBtn, self.pushButton_13,
+            self.widget,
+        ]
+        # 상단 All Stop / Air / Water가 있으면 포함
+        for name in ("allStopBtn", "airLed", "airText", "waterLed", "waterText"):
+            if hasattr(self, name):
+                widgets.append(getattr(self, name))
+
+        items = frames + widgets
+
+        # 현재 top/bottom margin 계산
+        min_y = min(w.geometry().top() for w in items)
+        max_y = max(w.geometry().bottom() for w in items)
+        page_h = self.page.height()
+        # setupUi 시점에 page.height()가 0/작게 잡히는 경우가 있어 과이동 발생 → fallback
+        if page_h < 50:
+            page_h = self.stackedWidget.height()  # stackedWidget은 geometry를 이미 가지고 있음
+
+        top_margin = min_y
+        bottom_margin = page_h - (max_y + 1)
+
+        # 목표 이동량(기존과 동일한 계산)
+        d0 = (top_margin - bottom_margin) // 2
+        if d0 == 0:
+            return
+
+        # 최소 상/하 여백(원하는 값으로 조절 가능)
+        min_top = 20
+        min_bottom = 20
+
+        # d는 다음 조건을 만족해야 함:
+        # new_top = top_margin - d >= min_top  -> d <= top_margin - min_top
+        # new_bottom = bottom_margin + d >= min_bottom -> d >= min_bottom - bottom_margin
+        d_min = min_bottom - bottom_margin
+        d_max = top_margin - min_top
+
+        # 만족 불가능하면(이미 꽉 차있는 경우) 이동하지 않음
+        if d_max < d_min:
+            return
+
+        # d0를 안전 범위로 clamp
+        d = max(d_min, min(d0, d_max))
+        if d == 0:
+            return
+
+        for w in items:
+            g = w.geometry()
+            w.setGeometry(g.translated(0, -d))
+
 

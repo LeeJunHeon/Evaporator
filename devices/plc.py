@@ -528,6 +528,54 @@ class AsyncPLC:
                     raise
             self._ensure_ok(resp)
             return bool(resp.bits[0])
+        
+    async def read_coils_block(self, start_addr: int, count: int) -> list[bool]:
+        """연속된 코일을 한 번에 읽는다.
+
+        HMI처럼 여러 코일(ON/OFF)을 주기적으로 폴링해야 할 때
+        1개씩 read_coil()을 여러 번 호출하면 Modbus 요청 횟수가 커집니다.
+        이 함수는 `read_coils(start, count)`를 사용해서 한 번에 읽어,
+        UI 업데이트 지연과 네트워크 부하를 줄입니다.
+
+        Returns
+        -------
+        list[bool]
+            길이가 최소 count 이상인 bits 리스트의 앞 count개를 반환.
+        """
+        start_addr = int(start_addr)
+        count = max(1, int(count))
+
+        async with self._io_lock("read_coils_block", addr=start_addr, count=count):
+            await asyncio.to_thread(self._connect_sync)
+            await self._throttle_and_heartbeat()
+            try:
+                resp = await asyncio.to_thread(
+                    self._client.read_coils,
+                    start_addr,
+                    count=count,
+                    **self._uid_kwargs(),
+                )
+            except Exception as e:
+                if self._is_reset_err(e):
+                    await asyncio.to_thread(self._close_sync)
+                    await asyncio.to_thread(self._connect_sync)
+                    await self._throttle_and_heartbeat()
+                    resp = await asyncio.to_thread(
+                        self._client.read_coils,
+                        start_addr,
+                        count=count,
+                        **self._uid_kwargs(),
+                    )
+                else:
+                    raise
+
+            self._ensure_ok(resp)
+            bits = list(getattr(resp, "bits", []) or [])
+            # pymodbus는 word 정렬 때문에 bits가 count보다 길 수 있음 → 앞 count만 사용
+            if len(bits) < count:
+                # 방어: 부족하면 False로 채움
+                bits.extend([False] * (count - len(bits)))
+            return [bool(b) for b in bits[:count]]
 
     async def write_coil(self, addr: int, value: bool) -> None:
         async with self._io_lock("write_coil", addr=addr):

@@ -140,10 +140,20 @@ def main():
     hmi = HmiWindow()
     proc = ProcessWindow()
 
+    # ------------------------------
+    # PLC 바인딩 시작
+    # ------------------------------
+    ini_path = Path(__file__).resolve().parent / "config" / "devices.ini"
+    plc_settings = load_plc_settings(ini_path)
+    plc_binder = HmiPlcBinder(hmi.ui, plc_settings)
+    plc_binder.start()
+
+    # 프로그램 종료 시 워커 스레드 정리
+    app.aboutToQuit.connect(plc_binder.stop)
+
     hmi.set_process_window(proc)
     proc.set_hmi_window(hmi)
 
-    # 실행 시 두 창 동시에 표시
     hmi.show()
     proc.show()
 

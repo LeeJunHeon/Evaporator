@@ -131,6 +131,12 @@ class PlcWorker(QThread):
             unit=self._settings.unit,
             timeout_s=self._settings.timeout_s,
             pulse_ms=self._settings.pulse_ms,
+
+            # ✅ DAC(4~20mA)
+            dac_full_scale_code=self._settings.dac_full_scale_code,
+            dac_offset_code=self._settings.dac_offset_code,
+            dac_current_min_ma=self._settings.dac_current_min_ma,
+            dac_current_max_ma=self._settings.dac_current_max_ma,
         )
 
         async def connect_until_ok() -> None:

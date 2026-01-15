@@ -42,6 +42,12 @@ class PLCSettings:
     # momentary(pulse) 동작 시 펄스폭(ms) — 현재는 HMI를 래치로 쓰므로 기본값만 둠
     pulse_ms: int = 180
 
+    # ✅ DAC (4~20mA 전용)
+    dac_full_scale_code: int = 4000
+    dac_offset_code: int = 0
+    dac_current_min_ma: float = 4.0
+    dac_current_max_ma: float = 20.0
+
 
 def _get_str(cfg: ConfigParser, section: str, key: str, default: str) -> str:
     if cfg.has_option(section, key):
@@ -95,4 +101,11 @@ def load_plc_settings(ini_path: str | Path, section: str = "plc") -> PLCSettings
         reconnect_interval_s=_get_float(cfg, section, "reconnect_interval_s", PLCSettings.reconnect_interval_s),
         pulse_ms=_get_int(cfg, section, "pulse_ms", PLCSettings.pulse_ms),
         door_move_time_s=_get_float(cfg, section, "door_move_time_s", PLCSettings.door_move_time_s),
+
+        # ✅ DAC (4~20mA)
+        dac_full_scale_code=_get_int(cfg, section, "dac_full_scale_code", PLCSettings.dac_full_scale_code),
+        dac_offset_code=_get_int(cfg, section, "dac_offset_code", PLCSettings.dac_offset_code),
+        dac_current_min_ma=_get_float(cfg, section, "dac_current_min_ma", PLCSettings.dac_current_min_ma),
+        dac_current_max_ma=_get_float(cfg, section, "dac_current_max_ma", PLCSettings.dac_current_max_ma),
     )
+

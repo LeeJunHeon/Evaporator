@@ -90,9 +90,14 @@ class PLCConfig:
     lock_warn_ms: float = 800.0
     io_warn_ms: float = 1500.0
 
-    dac_full_scale_code: int = 4095
-    dac_full_scale_volt: float = 10.0
+    # ===== DAC (4~20mA 전용) =====
+    # full_scale_code: 4~20mA의 "span" 코드값 (예: 4000 또는 4095 등)
+    # offset_code    : 4mA에 해당하는 최소 코드값 (대부분 0이지만 장비/모듈에 따라 다를 수 있음)
+    dac_full_scale_code: int = 4000
     dac_offset_code: int = 0
+
+    dac_current_min_ma: float = 4.0
+    dac_current_max_ma: float = 20.0
 
 
 # ======================================================
@@ -112,6 +117,13 @@ class AsyncPLC:
         unit: int = 1,
         timeout_s: float = 2.0,
         pulse_ms: int = 180,
+
+        # ✅ DAC(4~20mA) 스케일 파라미터(ini에서 주입)
+        dac_full_scale_code: int = 4000,
+        dac_offset_code: int = 0,
+        dac_current_min_ma: float = 4.0,
+        dac_current_max_ma: float = 20.0,
+
         logger=None,
     ):
         self.cfg = PLCConfig(
@@ -124,6 +136,12 @@ class AsyncPLC:
             unit=unit,
             timeout_s=timeout_s,
             pulse_ms=pulse_ms,
+
+            # ✅ 주입
+            dac_full_scale_code=int(dac_full_scale_code),
+            dac_offset_code=int(dac_offset_code),
+            dac_current_min_ma=float(dac_current_min_ma),
+            dac_current_max_ma=float(dac_current_max_ma),
         )
 
         self._client: Optional[ModbusSerialClient] = None
@@ -550,18 +568,50 @@ class AsyncPLC:
     async def power2(self, on: bool = True, *, momentary: bool = False) -> None: await self.write_switch("POWER2", on, momentary=momentary)
     async def door(self, on: bool = True, *, momentary: bool = False) -> None: await self.write_switch("DOOR", on, momentary=momentary)
 
+    def _clamp_dac_code(self, code: int) -> int:
+        fs = int(self.cfg.dac_full_scale_code)
+        if fs <= 0:
+            raise ValueError(f"dac_full_scale_code must be > 0 (now={fs})")
+
+        offset = int(self.cfg.dac_offset_code)
+        lo, hi = offset, offset + fs  # ✅ offset 포함 범위
+
+        c = int(code)
+        if c < lo:
+            c = lo
+        elif c > hi:
+            c = hi
+        return c
+
     async def set_dac_power(self, ch: int, code: int) -> None:
         key = "DAC_POWER_1" if int(ch) == 1 else "DAC_POWER_2" if int(ch) == 2 else None
         if key is None:
             raise ValueError("DAC channel must be 1 or 2")
-        await self.write_reg_name(key, int(code))
 
-    async def set_dac_voltage(self, ch: int, volt: float) -> int:
-        v = max(0.0, min(self.cfg.dac_full_scale_volt, float(volt)))
-        fs_code = int(self.cfg.dac_full_scale_code)
-        fs_volt = float(self.cfg.dac_full_scale_volt)
+        # ✅ 안전: 범위 강제
+        await self.write_reg_name(key, self._clamp_dac_code(code))
+
+    async def set_dac_current(self, ch: int, ma: float) -> int:
+        """
+        4~20mA(Current) → DAC 코드로 변환해서 D00000/D00001에 기록
+        """
+        mn = float(self.cfg.dac_current_min_ma)
+        mx = float(self.cfg.dac_current_max_ma)
+        if mx <= mn:
+            raise ValueError(f"Invalid current range: {mn}..{mx}")
+
+        i = float(ma)
+        if i < mn:
+            i = mn
+        elif i > mx:
+            i = mx
+
+        x = (i - mn) / (mx - mn)  # 0..1
+        fs = int(self.cfg.dac_full_scale_code)
         offset = int(self.cfg.dac_offset_code)
-        code = int(round((v / fs_volt) * fs_code)) + offset
-        code = max(0, min(fs_code, code))
+
+        code = int(round(x * fs)) + offset
+        code = self._clamp_dac_code(code)
+
         await self.set_dac_power(ch, code)
         return code

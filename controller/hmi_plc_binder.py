@@ -122,8 +122,12 @@ class PlcWorker(QThread):
         # AsyncPLC는 내부에서 ModbusTcpClient를 사용
         # (이 프로젝트의 devices/plc.py는 cfg 인자를 받지 않고, 생성자 파라미터로 설정을 받는다)
         plc = AsyncPLC(
-            ip=self._settings.ip,
             port=self._settings.port,
+            method=self._settings.method,
+            baudrate=self._settings.baudrate,
+            bytesize=self._settings.bytesize,
+            parity=self._settings.parity,
+            stopbits=self._settings.stopbits,
             unit=self._settings.unit,
             timeout_s=self._settings.timeout_s,
             pulse_ms=self._settings.pulse_ms,

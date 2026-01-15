@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from contextlib import asynccontextmanager
 from typing import Any, Dict, Optional
 
-from pymodbus.client import ModbusTcpClient
+from pymodbus.client import ModbusSerialClient
 from pymodbus.exceptions import ModbusException
 from pymodbus.pdu import ExceptionResponse
 
@@ -77,9 +77,13 @@ PLC_REG_MAP: Dict[str, int] = {
 
 @dataclass
 class PLCConfig:
-    ip: str = "192.168.1.2"
-    port: int = 502
-    unit: int = 1                 # Modbus unit id (pymodbus 버전에 따라 unit/slave)
+    port: str = "COM5"
+    method: str = "rtu"
+    baudrate: int = 9600
+    bytesize: int = 8
+    parity: str = "N"
+    stopbits: int = 1
+    unit: int = 1
     timeout_s: float = 2.0
     inter_cmd_gap_s: float = 0.12  # 너무 빡세면 PLC가 버벅일 수 있음. 필요시 0.15~0.25로
     heartbeat_s: float = 15.0      # 오래 I/O 없으면 0번 코일 읽어서 keepalive
@@ -203,10 +207,18 @@ class AsyncPLC:
 
     def _connect_sync(self) -> None:
         if self._client is None:
-            self._client = ModbusTcpClient(self.cfg.ip, port=self.cfg.port, timeout=self.cfg.timeout_s)
+            self._client = ModbusSerialClient(
+                method=self.cfg.method,
+                port=self.cfg.port,
+                baudrate=self.cfg.baudrate,
+                bytesize=self.cfg.bytesize,
+                parity=self.cfg.parity,
+                stopbits=self.cfg.stopbits,
+                timeout=self.cfg.timeout_s,
+            )
 
         if not self._client.connect():
-            raise RuntimeError("Modbus TCP 연결 실패")
+            raise RuntimeError("Modbus RTU(RS-232) 연결 실패")
 
         # keepalive 옵션(가능하면)
         try:

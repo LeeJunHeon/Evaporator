@@ -22,9 +22,13 @@ from pathlib import Path
 
 @dataclass(frozen=True)
 class PLCSettings:
-    # Modbus-TCP
-    ip: str = "192.168.1.2"
-    port: int = 502
+    # Modbus-RTU (RS-232)
+    port: str = "COM5"
+    method: str = "rtu"
+    baudrate: int = 9600
+    bytesize: int = 8
+    parity: str = "N"
+    stopbits: int = 1
     unit: int = 1
 
     # Door 열림/닫힘(기구 이동) 시간(초) — UI 인터락 기준
@@ -74,10 +78,17 @@ def load_plc_settings(ini_path: str | Path, section: str = "plc") -> PLCSettings
     if not cfg.has_section(section):
         return PLCSettings()
 
-    ip = _get_str(cfg, section, "ip", PLCSettings.ip) or PLCSettings.ip
+    port = _get_str(cfg, section, "port", PLCSettings.port) or PLCSettings.port
+    method = (_get_str(cfg, section, "method", PLCSettings.method) or PLCSettings.method).lower()
+    parity = (_get_str(cfg, section, "parity", PLCSettings.parity) or PLCSettings.parity).upper()
+
     return PLCSettings(
-        ip=ip,
-        port=_get_int(cfg, section, "port", PLCSettings.port),
+        port=port,
+        method=method,
+        baudrate=_get_int(cfg, section, "baudrate", PLCSettings.baudrate),
+        bytesize=_get_int(cfg, section, "bytesize", PLCSettings.bytesize),
+        parity=parity,
+        stopbits=_get_int(cfg, section, "stopbits", PLCSettings.stopbits),
         unit=_get_int(cfg, section, "unit", PLCSettings.unit),
         timeout_s=_get_float(cfg, section, "timeout_s", PLCSettings.timeout_s),
         poll_interval_s=_get_float(cfg, section, "poll_interval_s", PLCSettings.poll_interval_s),

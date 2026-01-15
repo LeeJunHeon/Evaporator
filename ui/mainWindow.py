@@ -75,6 +75,11 @@ class Ui_Form(object):
         self.processBtn.setObjectName("processBtn")
         self.processBtn.setGeometry(QRect(10, 20, 101, 71))
 
+        # ✅ Config 버튼 (Process 아래, 동일 크기/스타일)
+        self.configBtn = QPushButton(self.page)
+        self.configBtn.setObjectName("configBtn")
+        self.configBtn.setGeometry(QRect(10, 110, 101, 71))
+
         self.vvBtn = QPushButton(self.page)
         self.vvBtn.setObjectName("vvBtn")
         self.vvBtn.setGeometry(QRect(10, 200, 101, 71))
@@ -411,6 +416,7 @@ class Ui_Form(object):
         self.mvBtn.setText(QCoreApplication.translate("Form", "M / V", None))
         self.fvBtn.setText(QCoreApplication.translate("Form", "F / V", None))
         self.processBtn.setText(QCoreApplication.translate("Form", "Process", None))
+        self.configBtn.setText(QCoreApplication.translate("Form", "Config", None))
         self.vvBtn.setText(QCoreApplication.translate("Form", "V / V", None))
         self.doorBtn.setText(QCoreApplication.translate("Form", "Door", None))
         self.ms2shutterBtn.setText(QCoreApplication.translate("Form", "M.S 2\nShutter", None))

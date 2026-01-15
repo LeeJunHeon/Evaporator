@@ -32,33 +32,39 @@ except Exception:
 # ======================================================
 # 1) 주소 맵
 # ======================================================
+# ⚠️ LS PLC(XG5000)에서 M 디바이스 주소는 16진 표기인 경우가 많습니다.
+#    예) M0000B = 0x0B = 11, M00020 = 0x20 = 32
+# 이 dict 값은 pymodbus에 전달되는 "Modbus coil address (0-based int)" 입니다.
 
 PLC_COIL_MAP: Dict[str, int] = {
-    "R_P_SW": 0x0000,
-    "R_V_SW": 0x0001,
-    "F_V_SW": 0x0002,
-    "M_V_SW": 0x0003,
-    "V_V_SW": 0x0004,
-    "TMP_SW": 0x0005,
+    # --- Rotary Pump / Valves / Turbo ---
+    "R_P_SW": 0,    # M00000 (RP)
+    "R_V_SW": 1,    # M00001 (RV)
+    "F_V_SW": 2,    # M00002 (FV)
+    "M_V_SW": 3,    # M00003 (MV)
+    "V_V_SW": 4,    # M00004 (V/V)
+    "TMP_SW": 5,    # M00005 (TMP)
 
-    "SHUTTER_1_SW": 0x0006,
-    "SHUTTER_2_SW": 0x0007,
-    "MAIN_SHUTTER_SW": 0x0008,
-    "FTM_SW": 0x000B,
+    # --- Shutters / Thickness Monitor ---
+    "SHUTTER_1_SW": 6,    # M00006 (Shutter1)
+    "SHUTTER_2_SW": 7,    # M00007 (Shutter2)
+    "MAIN_SHUTTER_SW": 8, # M00008 (Main Shutter)
+    "POWER_1_SW": 9,      # M00009 (POWER1)
+    "POWER_2_SW": 10,     # M0000A (POWER2)
+    "FTM_SW": 11,         # M0000B (FTM)
+    "DOOR_SW": 12,        # M0000C (DOOR)
 
-    "POWER_1_SW": 0x0009,
-    "POWER_2_SW": 0x000A,
-    "DOOR_SW": 0x000C,
-
-    "AIR_SW": 0x0020,
-    "WATER_SW": 0x0021,
-    "GAS_1_SW": 0x0022,
-    "GAS_2_SW": 0x0023,
+    # --- Utilities / Gas ---
+    "AIR_SW": 32,    # M00020 (Air)
+    "WATER_SW": 33,  # M00021 (Water)
+    "GAS_1_SW": 34,  # M00022 (G1)
+    "GAS_2_SW": 35,  # M00023 (G2)
 }
 
+# D영역(아날로그 출력)도 PLC 문서 기준 주석을 명확히 남깁니다.
 PLC_REG_MAP: Dict[str, int] = {
-    "DAC_POWER_1": 0,
-    "DAC_POWER_2": 1,
+    "DAC_POWER_1": 0,  # D00000
+    "DAC_POWER_2": 1,  # D00001
 }
 
 

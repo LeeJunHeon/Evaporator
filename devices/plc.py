@@ -208,14 +208,16 @@ class AsyncPLC:
 
         self._last_io_ts = time.monotonic()
 
-        # unit/slave 키워드 자동 판별(한 번만)
+        # device_id/slave/unit 키워드 자동 판별(한 번만)
         if self._uid_kw is None:
             try:
                 sig = inspect.signature(self._client.write_coil)
-                if "unit" in sig.parameters:
-                    self._uid_kw = "unit"
+                if "device_id" in sig.parameters:
+                    self._uid_kw = "device_id"
                 elif "slave" in sig.parameters:
                     self._uid_kw = "slave"
+                elif "unit" in sig.parameters:
+                    self._uid_kw = "unit"
                 else:
                     self._uid_kw = None
             except Exception:

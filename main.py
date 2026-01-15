@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 
 from PySide6.QtWidgets import QApplication, QWidget, QMessageBox
+from PySide6.QtCore import QTimer
 
 from ui.mainWindow import Ui_Form
 from config.plc_config import load_plc_settings
@@ -163,8 +164,16 @@ def main():
     hmi.set_process_window(proc)
     proc.set_hmi_window(hmi)
 
-    hmi.show()
+    # ✅ 두 창을 모두 띄우되, HMI가 항상 앞으로 오도록
     proc.show()
+    hmi.show()
+
+    def _focus_hmi():
+        hmi.raise_()
+        hmi.activateWindow()
+
+    # 이벤트 루프 시작 직후 포커싱(Windows에서도 잘 먹힘)
+    QTimer.singleShot(0, _focus_hmi)
 
     sys.exit(app.exec())
 

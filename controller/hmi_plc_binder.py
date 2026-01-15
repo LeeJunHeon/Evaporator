@@ -22,8 +22,8 @@ import threading
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple, List
 
-from PySide6.QtCore import QObject, QThread, Signal, QSignalBlocker, QTimer
 from PySide6.QtWidgets import QMessageBox
+from PySide6.QtCore import Qt, QObject, QThread, Signal, QSignalBlocker, QTimer
 
 from devices.plc import AsyncPLC
 from config.plc_config import PLCSettings
@@ -423,16 +423,6 @@ class HmiPlcBinder(QObject):
         self._connected = bool(ok)
         self._set_hmi_status("PLC CONNECTED" if ok else "PLC DISCONNECTED")
 
-        # 연결이 끊기면 버튼 조작 자체를 막는 것도 안전함
-        for b in self.BUTTONS:
-            w = getattr(self.ui, b.widget_name, None)
-            if w is None:
-                continue
-            try:
-                w.setEnabled(bool(ok))
-            except Exception:
-                pass
-
     def _on_error(self, msg: str) -> None:
         # 너무 길어지지 않게 마지막 한 줄로
         self._set_hmi_log(msg)
@@ -448,7 +438,9 @@ class HmiPlcBinder(QObject):
             parent = btn.window() if btn is not None else None
         except Exception:
             parent = None
-        QMessageBox.warning(parent, title, message)
+        box = QMessageBox(QMessageBox.Warning, title, message, QMessageBox.Ok, parent)
+        box.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+        box.exec()
 
     def _revert_button_to_plc(self, binding: ButtonBinding, fallback: Optional[bool] = None) -> None:
         """사용자 클릭으로 토글된 버튼을 마지막 PLC 상태로 되돌린다."""

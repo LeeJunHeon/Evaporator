@@ -325,7 +325,11 @@ class ConfigDialog(QDialog):
             QMessageBox.critical(self, "Save failed", f"저장 실패:\n{e}")
 
     def _save_serial(self, ed: IniLineEditor, section: str, form: _SerialForm) -> None:
-        ed.set(section, "port", form.port.text().strip())
+        port = form.port.text().strip()
+        if not port:
+            raise ValueError(f"[{section}] Port는 비울 수 없습니다.")
+
+        ed.set(section, "port", port)
         ed.set(section, "baudrate", str(form.baudrate.value()))
         ed.set(section, "bytesize", str(form.bytesize.value()))
         ed.set(section, "parity", form.parity.currentText())

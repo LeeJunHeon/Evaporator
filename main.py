@@ -1,4 +1,6 @@
 # main.py
+from __future__ import annotations
+
 import sys
 from pathlib import Path
 
@@ -7,13 +9,14 @@ _BASE_DIR = Path(__file__).resolve().parent
 if str(_BASE_DIR) not in sys.path:
     sys.path.insert(0, str(_BASE_DIR))
 
-from PySide6.QtWidgets import QApplication, QWidget, QMessageBox
+from PySide6.QtWidgets import QApplication, QWidget, QMessageBox, QDialog
 from PySide6.QtCore import QTimer
 
 from ui.mainWindow import Ui_Form
-from ui.config_dialog import ConfigDialog   # ✅ 추가
+from ui.config_dialog import ConfigDialog
 from config.plc_config import load_plc_settings
 from controller.hmi_plc_binder import HmiPlcBinder
+from utils.device_manager import DeviceManager
 
 
 # 하얀색 "일반 버튼" (초록/체크 상태 없음)
@@ -47,11 +50,12 @@ class HmiWindow(QWidget):
         self.ui.stackedWidget.setCurrentIndex(0)  # HMI page
 
         self.process_window = None
-        self._closing_all = False  # 두 창 동시 종료용 플래그
+        self._closing_all = False
 
-        # ✅ Config에서 사용할 ini 경로/PLC 바인더 참조
+        # ✅ Config / runtime objects
         self._ini_path = _BASE_DIR / "config" / "devices.ini"
         self._plc_binder: HmiPlcBinder | None = None
+        self._dev_mgr: DeviceManager | None = None
 
         # Process 버튼: Process 창 앞으로
         self.ui.processBtn.clicked.connect(self.goto_process_window)
@@ -70,56 +74,46 @@ class HmiWindow(QWidget):
         self.process_window.raise_()
         self.process_window.activateWindow()
 
-    def set_plc_binder(self, binder: HmiPlcBinder, ini_path: Path) -> None:
-        """main()에서 생성한 PLC 바인더/ini 경로를 HMI에 주입"""
-        self._plc_binder = binder
+    def set_runtime_objects(self, plc_binder: HmiPlcBinder, dev_mgr: DeviceManager, ini_path: Path) -> None:
+        """main()에서 만든 런타임 객체 주입(PLC/STM/ACS 재연결에 사용)"""
+        self._plc_binder = plc_binder
+        self._dev_mgr = dev_mgr
         self._ini_path = Path(ini_path)
 
     def open_config_dialog(self) -> None:
-        """Config 팝업 열기 (3개 장비 파라미터 수정/저장)"""
-        dlg = ConfigDialog(
-            ini_path=self._ini_path,
-            parent=self,
-            on_saved=self._on_config_saved,  # 저장 후 콜백(PLC 재적용)
-        )
-        dlg.exec()
+        """Config 팝업 → Save(=Accepted)면 즉시 3개 장비 재연결"""
+        dlg = ConfigDialog(ini_path=self._ini_path, parent=self)
+        ret = dlg.exec()
 
-    def _on_config_saved(self) -> None:
-        """devices.ini 저장 후 즉시 PLC 설정 재적용(선택)"""
-        if not self._plc_binder:
-            return
-        new_settings = load_plc_settings(self._ini_path)
-        self._plc_binder.reload_settings(new_settings)
+        # ✅ ConfigDialog는 Save에서 accept(), Cancel은 reject()이므로
+        #    Accepted만 확인하면 "저장했을 때"가 정확히 걸린다.
+        if ret == QDialog.Accepted:
+            self._apply_config_and_reconnect()
 
+    def _apply_config_and_reconnect(self) -> None:
+        errors: list[str] = []
 
-    def _confirm_exit(self) -> bool:
-        """종료 확인: Yes면 종료, No면 취소"""
-        ret = QMessageBox.question(
-            self,
-            "종료 확인",
-            "정말 종료하시겠습니까?",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
-        )
-        return ret == QMessageBox.Yes
+        # 1) PLC 재연결(워커 재시작)
+        try:
+            if self._plc_binder:
+                new_plc_settings = load_plc_settings(self._ini_path)
+                self._plc_binder.reload_settings(new_plc_settings)
+        except Exception as e:
+            errors.append(f"PLC reconnect failed: {e}")
 
-    def closeEvent(self, event):
-        # 이미 "둘 다 닫는 중"이면 그냥 닫히게
-        if self._closing_all:
-            event.accept()
-            return
+        # 2) STM/ACS 재연결(ini 재로딩 + connect)
+        try:
+            if self._dev_mgr:
+                dev_errs = self._dev_mgr.reload_from_ini(self._ini_path, connect=True)
+                for k, v in dev_errs.items():
+                    errors.append(f"{k}: {v}")
+        except Exception as e:
+            errors.append(f"STM/ACS reconnect failed: {e}")
 
-        # 사용자 X 클릭 -> 종료 확인
-        if not self._confirm_exit():
-            event.ignore()
-            return
-
-        # Yes -> 둘 다 같이 종료
-        self._closing_all = True
-        if self.process_window:
-            self.process_window._closing_all = True
-            self.process_window.close()
-        event.accept()
+        if errors:
+            QMessageBox.warning(self, "Reconnect", "일부 장비 재연결 실패:\n" + "\n".join(errors))
+        else:
+            QMessageBox.information(self, "Reconnect", "저장 완료 + 3개 장비 재연결 성공")
 
 
 class ProcessWindow(QWidget):
@@ -186,20 +180,28 @@ def main():
     # ------------------------------
     ini_path = _BASE_DIR / "config" / "devices.ini"
     plc_settings = load_plc_settings(ini_path)
+
+    # ✅ STM/ACS 매니저 생성 및 최초 연결(실패해도 프로그램은 유지)
+    dev_mgr = DeviceManager.from_ini(ini_path)
+    dev_errors = dev_mgr.connect_all()  # 실패한 것만 dict로 옴
+    if dev_errors:
+        # 필요하면 여기서 QMessageBox로 알려도 됨(원하면)
+        pass
+
     plc_binder = HmiPlcBinder(hmi.ui, plc_settings)
     plc_binder.start()
 
-    # 프로그램 종료 시 워커 스레드 정리
     app.aboutToQuit.connect(plc_binder.stop)
+    app.aboutToQuit.connect(dev_mgr.close_all)  # ✅ 추가
 
-    # ✅ Config 팝업에서 저장 후 즉시 PLC 재적용하려면 바인더 참조를 HMI에 넘겨야 함
-    hmi.set_plc_binder(plc_binder, ini_path)
+    # ✅ HMI가 Config 저장 후 재연결할 수 있도록 주입
+    hmi.set_runtime_objects(plc_binder, dev_mgr, ini_path)
 
     hmi.set_process_window(proc)
     proc.set_hmi_window(hmi)
 
     # ✅ 두 창을 모두 띄우되, HMI가 항상 앞으로 오도록
-    proc.show()
+    #proc.show()
     hmi.show()
 
     def _focus_hmi():

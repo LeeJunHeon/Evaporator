@@ -207,19 +207,49 @@ class AsyncPLC:
     # --------------------------
     def _connect_sync(self) -> None:
         if self._client is None:
-            kwargs = dict(
-                port=self.cfg.port,
-                baudrate=self.cfg.baudrate,
-                bytesize=self.cfg.bytesize,
-                parity=self.cfg.parity,
-                stopbits=self.cfg.stopbits,
-                timeout=self.cfg.timeout_s,
-            )
-            # ✅ pymodbus 3.x: framer, 구버전: method
+            sig = inspect.signature(ModbusSerialClient)
+            params = sig.parameters
+
+            args = []
+            kwargs = {}
+
+            # port: 어떤 버전은 positional만 받는 경우도 있으니 서명 보고 결정
+            if "port" in params:
+                kwargs["port"] = self.cfg.port
+            else:
+                args.append(self.cfg.port)
+
+            # framer / method: 버전에 따라 존재하는 키만 사용
+            if "framer" in params:
+                # 최신 계열: framer 사용(기본이 RTU인 경우도 많지만 명시해도 안전)
+                kwargs["framer"] = RTU_FRAMER
+            elif "method" in params:
+                # 구버전 계열: method 사용
+                kwargs["method"] = self.cfg.method
+
+            # serial params도 "받는 것만" 넣기 (unexpected kwarg 원천 차단)
+            if "baudrate" in params:
+                kwargs["baudrate"] = self.cfg.baudrate
+            if "bytesize" in params:
+                kwargs["bytesize"] = self.cfg.bytesize
+            if "parity" in params:
+                kwargs["parity"] = self.cfg.parity
+            if "stopbits" in params:
+                kwargs["stopbits"] = self.cfg.stopbits
+
+            # timeout 키 이름도 버전에 따라 다를 수 있으니 둘 다 대비
+            if "timeout" in params:
+                kwargs["timeout"] = self.cfg.timeout_s
+            elif "timeout_s" in params:
+                kwargs["timeout_s"] = self.cfg.timeout_s
+
+            # 1차 시도
             try:
-                self._client = ModbusSerialClient(**kwargs, framer=RTU_FRAMER)
+                self._client = ModbusSerialClient(*args, **kwargs)
             except TypeError:
-                self._client = ModbusSerialClient(**kwargs, method=self.cfg.method)
+                # 혹시 framer 타입 이슈 등으로 TypeError가 나면 framer 제거 후 재시도
+                kwargs.pop("framer", None)
+                self._client = ModbusSerialClient(*args, **kwargs)
 
         if not self._client.connect():
             raise RuntimeError("Modbus RTU(RS-232) 연결 실패")

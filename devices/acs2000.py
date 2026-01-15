@@ -4,7 +4,7 @@ from __future__ import annotations
 import time
 from typing import Optional, Tuple
 
-from ..utils.base_serial import BaseSerialDevice, SerialDeviceError
+from utils.base_serial import BaseSerialDevice, SerialDeviceError
 
 
 class ACS2000ProtocolError(SerialDeviceError):

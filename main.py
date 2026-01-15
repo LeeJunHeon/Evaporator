@@ -1,8 +1,17 @@
 # main.py
 import sys
+from pathlib import Path
+
 from PySide6.QtWidgets import QApplication, QWidget, QMessageBox
 
 from ui.mainWindow import Ui_Form
+from config.plc_config import load_plc_settings
+from controller.hmi_plc_binder import HmiPlcBinder
+
+# 어디서 실행하든(작업폴더가 Program이 아니어도) import가 깨지지 않게 보정
+_BASE_DIR = Path(__file__).resolve().parent
+if str(_BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(_BASE_DIR))
 
 
 # 하얀색 "일반 버튼" (초록/체크 상태 없음)
@@ -143,7 +152,7 @@ def main():
     # ------------------------------
     # PLC 바인딩 시작
     # ------------------------------
-    ini_path = Path(__file__).resolve().parent / "config" / "devices.ini"
+    ini_path = _BASE_DIR / "config" / "devices.ini"
     plc_settings = load_plc_settings(ini_path)
     plc_binder = HmiPlcBinder(hmi.ui, plc_settings)
     plc_binder.start()

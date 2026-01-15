@@ -16,12 +16,14 @@ HMI 페이지(UI)와 PLC(Modbus-TCP)를 연결하는 "바인더".
 
 from __future__ import annotations
 
+import time
 import asyncio
 import threading
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple, List
 
-from PySide6.QtCore import QObject, QThread, Signal, QSignalBlocker
+from PySide6.QtCore import QObject, QThread, Signal, QSignalBlocker, QTimer
+from PySide6.QtWidgets import QMessageBox
 
 from devices.plc import AsyncPLC
 from config.plc_config import PLCSettings
@@ -270,6 +272,15 @@ class HmiPlcBinder(QObject):
 
         self._last_states: Dict[str, bool] = {}
 
+        # 연결 상태(인터락 메시지용)
+        self._connected: bool = False
+
+        # Door 이동(열림/닫힘) 중 인터락용 busy window
+        self._door_busy_until: float = 0.0
+        self._door_busy_timer = QTimer(self)
+        self._door_busy_timer.setSingleShot(True)
+        self._door_busy_timer.timeout.connect(self._end_door_busy)
+
         # PLC worker
         self._worker = PlcWorker(settings=settings)
         self._worker.sig_connected.connect(self._on_connected)
@@ -312,10 +323,59 @@ class HmiPlcBinder(QObject):
             all_stop.clicked.connect(self._on_all_stop_clicked)
 
     def _on_button_toggled(self, binding: ButtonBinding, on: bool) -> None:
-        """사용자 클릭으로 토글되면 PLC로 래치 출력."""
-        self._worker.enqueue_write(binding.coil_name, bool(on), momentary=binding.momentary)
+        """사용자 클릭으로 토글되면 PLC로 래치 출력.
 
-        # 로그/상태 표시(한 줄)
+        요구사항(근본 해결: '경고 + PLC 전송 차단')
+        1) Door ON/OFF(열기/닫기) 시도 시, Main Shutter가 OFF면:
+            - 경고창 표시
+            - Door 명령은 PLC에 전송하지 않음
+        2) Door가 열리거나 닫히는 중(설정 시간)에는 Main Shutter를 닫을 수 없음:
+            - 경고창 표시
+            - Main Shutter OFF 명령은 PLC에 전송하지 않음
+        """
+
+        # PLC 미연결 상태에서 조작이 들어오면 → 전송 금지 + UI 원복
+        if not self._connected:
+            self._popup_warn("PLC 미연결", "PLC가 연결되지 않아 명령을 전송할 수 없습니다.")
+            self._revert_button_to_plc(binding, fallback=not bool(on))
+            return
+
+        # 1) DOOR 특수 처리
+        if binding.coil_name == "DOOR_SW":
+            # Door 이동 중에는 중복 조작 금지
+            if self._is_door_busy():
+                self._popup_warn("인터락", "Door가 열리거나 닫히는 중입니다.\n완료 후 다시 시도하세요.")
+                self._revert_button_to_plc(binding, fallback=not bool(on))
+                return
+
+            # PLC 상태를 아직 못 읽은 경우(초기 폴링 전) → 안전하게 막음
+            if "MAIN_SHUTTER_SW" not in self._last_states:
+                self._popup_warn("인터락", "PLC 상태를 아직 읽지 못했습니다.\n잠시 후 다시 시도하세요.")
+                self._revert_button_to_plc(binding, fallback=not bool(on))
+                return
+
+            # Main Shutter 닫힘이면 Door 조작 금지(자동으로 열어주지 않음)
+            if not bool(self._last_states.get("MAIN_SHUTTER_SW", False)):
+                self._popup_warn("인터락", "Main Shutter가 닫혀 있습니다.\nMain Shutter를 먼저 열어주세요.")
+                self._revert_button_to_plc(binding, fallback=not bool(on))
+                return
+
+            # 조건 만족 → Door만 PLC에 전송 + busy window 시작
+            self._worker.enqueue_write("DOOR_SW", bool(on), momentary=False)
+            self._begin_door_busy()
+            self._set_hmi_status(f"DOOR_SW <- {int(bool(on))} (moving)")
+            return
+
+        # 2) MAIN SHUTTER 특수 처리
+        if binding.coil_name == "MAIN_SHUTTER_SW":
+            # Door 이동 중에는 Main Shutter OFF 금지
+            if self._is_door_busy() and (not bool(on)):
+                self._popup_warn("인터락", "Door가 열리거나 닫히는 중에는\nMain Shutter를 닫을 수 없습니다.")
+                self._revert_button_to_plc(binding, fallback=True)
+                return
+
+        # 3) 일반 버튼: 기존 동작 유지
+        self._worker.enqueue_write(binding.coil_name, bool(on), momentary=binding.momentary)
         self._set_hmi_status(f"{binding.coil_name} <- {int(bool(on))}")
 
     def _on_all_stop_clicked(self) -> None:
@@ -356,6 +416,7 @@ class HmiPlcBinder(QObject):
                 pass
 
     def _on_connected(self, ok: bool) -> None:
+        self._connected = bool(ok)
         self._set_hmi_status("PLC CONNECTED" if ok else "PLC DISCONNECTED")
 
         # 연결이 끊기면 버튼 조작 자체를 막는 것도 안전함
@@ -375,6 +436,52 @@ class HmiPlcBinder(QObject):
     # --------------------------------------------------
     # UI helper
     # --------------------------------------------------
+    def _popup_warn(self, title: str, message: str) -> None:
+        """경고창 표시 (요구사항: 경고 후 PLC 전송은 하지 않음)."""
+        parent = None
+        try:
+            btn = getattr(self.ui, "processBtn", None)
+            parent = btn.window() if btn is not None else None
+        except Exception:
+            parent = None
+        QMessageBox.warning(parent, title, message)
+
+    def _revert_button_to_plc(self, binding: ButtonBinding, fallback: Optional[bool] = None) -> None:
+        """사용자 클릭으로 토글된 버튼을 마지막 PLC 상태로 되돌린다."""
+        w = getattr(self.ui, binding.widget_name, None)
+        if w is None:
+            return
+
+        if binding.coil_name in self._last_states:
+            target = bool(self._last_states.get(binding.coil_name, False))
+        else:
+            target = bool(fallback) if fallback is not None else False
+
+        try:
+            with QSignalBlocker(w):
+                w.setChecked(target)
+        except Exception:
+            pass
+
+    def _is_door_busy(self) -> bool:
+        return time.monotonic() < float(self._door_busy_until or 0.0)
+
+    def _begin_door_busy(self) -> None:
+        """Door 명령 전송 시점부터 door_move_time_s 동안 busy로 간주."""
+        move_s = float(getattr(self.settings, "door_move_time_s", 10.0) or 10.0)
+        move_s = max(0.1, move_s)
+
+        self._door_busy_until = time.monotonic() + move_s
+        try:
+            self._door_busy_timer.stop()
+            self._door_busy_timer.start(int(move_s * 1000))
+        except Exception:
+            pass
+
+    def _end_door_busy(self) -> None:
+        self._door_busy_until = 0.0
+        self._set_hmi_status("DOOR: move done")
+
     def _set_hmi_status(self, text: str) -> None:
         w = getattr(self.ui, "processMonitor_HMI", None)
         if w is not None:

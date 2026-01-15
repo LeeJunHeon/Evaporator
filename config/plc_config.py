@@ -27,6 +27,9 @@ class PLCSettings:
     port: int = 502
     unit: int = 1
 
+    # Door 열림/닫힘(기구 이동) 시간(초) — UI 인터락 기준
+    door_move_time_s: float = 10.0
+
     # 타임아웃/주기
     timeout_s: float = 2.0
     poll_interval_s: float = 0.25
@@ -80,4 +83,5 @@ def load_plc_settings(ini_path: str | Path, section: str = "plc") -> PLCSettings
         poll_interval_s=_get_float(cfg, section, "poll_interval_s", PLCSettings.poll_interval_s),
         reconnect_interval_s=_get_float(cfg, section, "reconnect_interval_s", PLCSettings.reconnect_interval_s),
         pulse_ms=_get_int(cfg, section, "pulse_ms", PLCSettings.pulse_ms),
+        door_move_time_s=_get_float(cfg, section, "door_move_time_s", PLCSettings.door_move_time_s),
     )

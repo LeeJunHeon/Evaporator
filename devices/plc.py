@@ -114,28 +114,32 @@ class AsyncPLC:
 
     def __init__(
         self,
-        ip: str = "192.168.1.2",
-        port: int = 502,
-        unit: int = 1,
+        port: str = "COM5",
         *,
+        method: str = "rtu",
+        baudrate: int = 9600,
+        bytesize: int = 8,
+        parity: str = "N",
+        stopbits: int = 1,
+        unit: int = 1,
         timeout_s: float = 2.0,
-        inter_cmd_gap_s: float = 0.12,
-        heartbeat_s: float = 15.0,
         pulse_ms: int = 180,
         logger=None,
     ):
         self.cfg = PLCConfig(
-            ip=ip,
             port=port,
+            method=method,
+            baudrate=baudrate,
+            bytesize=bytesize,
+            parity=parity,
+            stopbits=stopbits,
             unit=unit,
             timeout_s=timeout_s,
-            inter_cmd_gap_s=inter_cmd_gap_s,
-            heartbeat_s=heartbeat_s,
             pulse_ms=pulse_ms,
         )
 
         # pymodbus 동기 클라이언트(Async에서 to_thread로 호출)
-        self._client: Optional[ModbusTcpClient] = None
+        self._client: Optional[ModbusSerialClient] = None
 
         # pymodbus 2.x는 slave=, 3.x는 unit= 를 주로 씀 → 자동 판별
         self._uid_kw: Optional[str] = None  # 'unit' or 'slave'

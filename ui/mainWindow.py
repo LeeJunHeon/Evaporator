@@ -14,7 +14,7 @@ from PySide6.QtCore import QCoreApplication, QMetaObject, QRect, Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QFrame, QLabel, QLineEdit,
-    QPushButton, QStackedWidget, QWidget
+    QPushButton, QStackedWidget, QWidget, QRadioButton,
 )
 
 
@@ -295,7 +295,10 @@ class Ui_Form(object):
 
         self.materialEdit = QLineEdit(self.page_2)
         self.materialEdit.setObjectName("materialEdit")
-        self.materialEdit.setGeometry(QRect(0, 170, 191, 26))
+        self.materialEdit.setGeometry(QRect(0, 170, 91, 26))
+        self.materialEdit2 = QLineEdit(self.page_2)
+        self.materialEdit2.setObjectName("materialEdit2")
+        self.materialEdit2.setGeometry(QRect(100, 170, 91, 26))
 
         self.graphWidget = QWidget(self.page_2)
         self.graphWidget.setObjectName("graphWidget")
@@ -304,11 +307,17 @@ class Ui_Form(object):
 
         self.deprateEdit = QLineEdit(self.page_2)
         self.deprateEdit.setObjectName("deprateEdit")
-        self.deprateEdit.setGeometry(QRect(0, 220, 191, 26))
+        self.deprateEdit.setGeometry(QRect(0, 220, 91, 26))
+        self.deprateEdit2 = QLineEdit(self.page_2)
+        self.deprateEdit2.setObjectName("deprateEdit2")
+        self.deprateEdit2.setGeometry(QRect(100, 220, 91, 26))
 
         self.powerEdit = QLineEdit(self.page_2)
         self.powerEdit.setObjectName("powerEdit")
-        self.powerEdit.setGeometry(QRect(0, 270, 191, 26))
+        self.powerEdit.setGeometry(QRect(0, 270, 91, 26))
+        self.powerEdit2 = QLineEdit(self.page_2)
+        self.powerEdit2.setObjectName("powerEdit2")
+        self.powerEdit2.setGeometry(QRect(100, 270, 91, 26))
 
         self.thicknessEdit = QLineEdit(self.page_2)
         self.thicknessEdit.setObjectName("thicknessEdit")
@@ -368,13 +377,16 @@ class Ui_Form(object):
         self.hmiBtn.setObjectName("hmiBtn")
         self.hmiBtn.setGeometry(QRect(0, 50, 191, 61))
 
-        self.sourcePower1 = QCheckBox(self.page_2)
+        self.sourcePower1 = QRadioButton(self.page_2)
         self.sourcePower1.setObjectName("sourcePower1")
         self.sourcePower1.setGeometry(QRect(0, 120, 81, 24))
 
-        self.sourcePower2 = QCheckBox(self.page_2)
+        self.sourcePower2 = QRadioButton(self.page_2)
         self.sourcePower2.setObjectName("sourcePower2")
         self.sourcePower2.setGeometry(QRect(110, 120, 81, 24))
+
+        # 기본 선택(무조건 하나 선택되게)
+        self.sourcePower1.setChecked(True)
 
         self.processMonitor_Process = QLineEdit(self.page_2)
         self.processMonitor_Process.setObjectName("processMonitor_Process")

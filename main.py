@@ -2,17 +2,18 @@
 import sys
 from pathlib import Path
 
+# ✅ 어디서 실행하든(import 깨짐 방지) 가장 먼저 보정
+_BASE_DIR = Path(__file__).resolve().parent
+if str(_BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(_BASE_DIR))
+
 from PySide6.QtWidgets import QApplication, QWidget, QMessageBox
 from PySide6.QtCore import QTimer
 
 from ui.mainWindow import Ui_Form
+from ui.config_dialog import ConfigDialog   # ✅ 추가
 from config.plc_config import load_plc_settings
 from controller.hmi_plc_binder import HmiPlcBinder
-
-# 어디서 실행하든(작업폴더가 Program이 아니어도) import가 깨지지 않게 보정
-_BASE_DIR = Path(__file__).resolve().parent
-if str(_BASE_DIR) not in sys.path:
-    sys.path.insert(0, str(_BASE_DIR))
 
 
 # 하얀색 "일반 버튼" (초록/체크 상태 없음)
@@ -48,8 +49,16 @@ class HmiWindow(QWidget):
         self.process_window = None
         self._closing_all = False  # 두 창 동시 종료용 플래그
 
+        # ✅ Config에서 사용할 ini 경로/PLC 바인더 참조
+        self._ini_path = _BASE_DIR / "config" / "devices.ini"
+        self._plc_binder: HmiPlcBinder | None = None
+
         # Process 버튼: Process 창 앞으로
         self.ui.processBtn.clicked.connect(self.goto_process_window)
+
+        # ✅ Config 버튼: 팝업 열기
+        if hasattr(self.ui, "configBtn"):
+            self.ui.configBtn.clicked.connect(self.open_config_dialog)
 
     def set_process_window(self, process_window: "ProcessWindow"):
         self.process_window = process_window
@@ -60,6 +69,28 @@ class HmiWindow(QWidget):
         self.process_window.show()
         self.process_window.raise_()
         self.process_window.activateWindow()
+
+    def set_plc_binder(self, binder: HmiPlcBinder, ini_path: Path) -> None:
+        """main()에서 생성한 PLC 바인더/ini 경로를 HMI에 주입"""
+        self._plc_binder = binder
+        self._ini_path = Path(ini_path)
+
+    def open_config_dialog(self) -> None:
+        """Config 팝업 열기 (3개 장비 파라미터 수정/저장)"""
+        dlg = ConfigDialog(
+            ini_path=self._ini_path,
+            parent=self,
+            on_saved=self._on_config_saved,  # 저장 후 콜백(PLC 재적용)
+        )
+        dlg.exec()
+
+    def _on_config_saved(self) -> None:
+        """devices.ini 저장 후 즉시 PLC 설정 재적용(선택)"""
+        if not self._plc_binder:
+            return
+        new_settings = load_plc_settings(self._ini_path)
+        self._plc_binder.reload_settings(new_settings)
+
 
     def _confirm_exit(self) -> bool:
         """종료 확인: Yes면 종료, No면 취소"""
@@ -160,6 +191,9 @@ def main():
 
     # 프로그램 종료 시 워커 스레드 정리
     app.aboutToQuit.connect(plc_binder.stop)
+
+    # ✅ Config 팝업에서 저장 후 즉시 PLC 재적용하려면 바인더 참조를 HMI에 넘겨야 함
+    hmi.set_plc_binder(plc_binder, ini_path)
 
     hmi.set_process_window(proc)
     proc.set_hmi_window(hmi)

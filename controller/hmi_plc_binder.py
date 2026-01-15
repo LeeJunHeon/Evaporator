@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """hmi_plc_binder.py
 
-HMI 페이지(UI)와 PLC(Modbus-TCP)를 연결하는 "바인더".
+HMI 페이지(UI)와 PLC(Modbus-RTU / RS-232)를 연결하는 "바인더".
 
 요구사항 정리(사용자 요청)
  - HMI 페이지의 Indicator(램프)와 버튼을 PLC 주소맵에 맞게 연결
@@ -119,7 +119,7 @@ class PlcWorker(QThread):
     # internal async logic
     # -------------------------------
     async def _main(self, loop: asyncio.AbstractEventLoop) -> None:
-        # AsyncPLC는 내부에서 ModbusTcpClient를 사용
+        # AsyncPLC는 내부에서 ModbusSerialClient(Modbus-RTU / RS-232)를 사용
         # (이 프로젝트의 devices/plc.py는 cfg 인자를 받지 않고, 생성자 파라미터로 설정을 받는다)
         plc = AsyncPLC(
             port=self._settings.port,
@@ -285,21 +285,47 @@ class HmiPlcBinder(QObject):
         self._door_busy_timer.setSingleShot(True)
         self._door_busy_timer.timeout.connect(self._end_door_busy)
 
-        # PLC worker
+        # PLC worker (Config 저장 후 재적용을 위해 reset 가능)
+        self._worker: PlcWorker | None = None
+        self._reset_worker(settings)
+
+        self._wire_ui()
+
+    def _reset_worker(self, settings: PLCSettings) -> None:
+        """기존 워커를 정리하고 새 설정으로 워커를 다시 만든다."""
+        if self._worker is not None:
+            # 기존 시그널/스레드 정리
+            try:
+                self._worker.sig_connected.disconnect(self._on_connected)
+                self._worker.sig_error.disconnect(self._on_error)
+                self._worker.sig_states.disconnect(self._apply_states)
+            except Exception:
+                pass
+            try:
+                self._worker.stop()
+                self._worker.wait(1000)
+            except Exception:
+                pass
+
         self._worker = PlcWorker(settings=settings)
         self._worker.sig_connected.connect(self._on_connected)
         self._worker.sig_error.connect(self._on_error)
         self._worker.sig_states.connect(self._apply_states)
 
-        self._wire_ui()
+    def reload_settings(self, new_settings: PLCSettings) -> None:
+        """✅ devices.ini 저장 후 즉시 재적용(재시작 없이)."""
+        self.settings = new_settings
+        self._reset_worker(new_settings)
+        self.start()
 
     def start(self) -> None:
-        if not self._worker.isRunning():
+        if self._worker and (not self._worker.isRunning()):
             self._worker.start()
 
     def stop(self) -> None:
+        if not self._worker:
+            return
         self._worker.stop()
-        # 너무 오래 기다리면 UI 종료가 느려지니 2초 정도만
         self._worker.wait(2000)
 
     # --------------------------------------------------

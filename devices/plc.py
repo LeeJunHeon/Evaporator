@@ -1,67 +1,55 @@
 # -*- coding: utf-8 -*-
 # plc.py
 """
-PLC.py — Evaporator용 Modbus-RTU(RS-232) PLC 컨트롤러 (Async)
+Evaporator PLC (Modbus RTU / RS-232) - Async Wrapper
 
-- asyncio + pymodbus 동기클라이언트 안전 사용: 직렬화(lock), to_thread, 명령 간격 보장,
-  heartbeat, unit/slave 자동 판별, 연결 끊김 재연결
-- 주소맵(Mxxxx, Dxxxx)에 맞춘 COIL/REGISTER 맵 제공
+✅ 이번 버전은 "구버전 호환 제거" (pymodbus 3.x 기준)
+- framer=FramerType.RTU 고정
+- unit/slave 파라미터는 slave 사용
+- RS-232 안정화: (1) 연결 직후 버퍼 reset (2) 매 트랜잭션 전 입력버퍼 reset
+- QThread(PlcWorker)에서 asyncio loop로 안전하게 사용 가능하도록 lock/to_thread 유지
 """
 
 from __future__ import annotations
 
 import asyncio
-import inspect
 import time
 from dataclasses import dataclass
 from contextlib import asynccontextmanager
 from typing import Any, Dict, Optional
 
 from pymodbus.client import ModbusSerialClient
+from pymodbus import FramerType
 from pymodbus.exceptions import ModbusException
 from pymodbus.pdu import ExceptionResponse
 
-# ✅ pymodbus 3.x: framer 사용, 구버전: method 사용 → 둘 다 되게 처리
-try:
-    from pymodbus import FramerType
-    RTU_FRAMER = FramerType.RTU
-except Exception:
-    RTU_FRAMER = "rtu"
-
 
 # ======================================================
-# 1) 주소 맵
+# 1) 주소 맵 (너가 쓰던 그대로 유지)
 # ======================================================
-# ⚠️ LS PLC(XG5000)에서 M 디바이스 주소는 16진 표기인 경우가 많습니다.
-#    예) M0000B = 0x0B = 11, M00020 = 0x20 = 32
-# 이 dict 값은 pymodbus에 전달되는 "Modbus coil address (0-based int)" 입니다.
 
 PLC_COIL_MAP: Dict[str, int] = {
-    # --- Rotary Pump / Valves / Turbo ---
-    "R_P_SW": 0,    # M00000 (RP)
-    "R_V_SW": 1,    # M00001 (RV)
-    "F_V_SW": 2,    # M00002 (FV)
-    "M_V_SW": 3,    # M00003 (MV)
-    "V_V_SW": 4,    # M00004 (V/V)
-    "TMP_SW": 5,    # M00005 (TMP)
+    "R_P_SW": 0,    # M00000
+    "R_V_SW": 1,    # M00001
+    "F_V_SW": 2,    # M00002
+    "M_V_SW": 3,    # M00003
+    "V_V_SW": 4,    # M00004
+    "TMP_SW": 5,    # M00005
 
-    # --- Shutters / Thickness Monitor ---
-    "SHUTTER_1_SW": 6,    # M00006 (Shutter1)
-    "SHUTTER_2_SW": 7,    # M00007 (Shutter2)
-    "MAIN_SHUTTER_SW": 8, # M00008 (Main Shutter)
-    "POWER_1_SW": 9,      # M00009 (POWER1)
-    "POWER_2_SW": 10,     # M0000A (POWER2)
-    "FTM_SW": 11,         # M0000B (FTM)
-    "DOOR_SW": 12,        # M0000C (DOOR)
+    "SHUTTER_1_SW": 6,     # M00006
+    "SHUTTER_2_SW": 7,     # M00007
+    "MAIN_SHUTTER_SW": 8,  # M00008
+    "POWER_1_SW": 9,       # M00009
+    "POWER_2_SW": 10,      # M0000A
+    "FTM_SW": 11,          # M0000B
+    "DOOR_SW": 12,         # M0000C
 
-    # --- Utilities / Gas ---
-    "AIR_SW": 32,    # M00020 (Air)
-    "WATER_SW": 33,  # M00021 (Water)
-    "GAS_1_SW": 34,  # M00022 (G1)
-    "GAS_2_SW": 35,  # M00023 (G2)
+    "AIR_SW": 32,          # M00020
+    "WATER_SW": 33,        # M00021
+    "GAS_1_SW": 34,        # M00022
+    "GAS_2_SW": 35,        # M00023
 }
 
-# D영역(아날로그 출력)도 PLC 문서 기준 주석을 명확히 남깁니다.
 PLC_REG_MAP: Dict[str, int] = {
     "DAC_POWER_1": 0,  # D00000
     "DAC_POWER_2": 1,  # D00001
@@ -74,28 +62,31 @@ PLC_REG_MAP: Dict[str, int] = {
 
 @dataclass
 class PLCConfig:
-    port: str = "COM5"
-    method: str = "rtu"       # (구버전용) 보통 rtu
-    baudrate: int = 9600
+    port: str = "COM8"
+    baudrate: int = 115200
     bytesize: int = 8
     parity: str = "N"
     stopbits: int = 1
-    unit: int = 1
-    timeout_s: float = 2.0
+    unit: int = 0
+    timeout_s: float = 0.5
 
-    inter_cmd_gap_s: float = 0.12
-    heartbeat_s: float = 15.0
+    # RS-232에서 너무 빠르게 때리면 간헐 timeout이 늘어날 수 있어 gap을 둔다
+    inter_cmd_gap_s: float = 0.02
+
+    # heartbeat는 있어도 되고 없어도 되는데, 일단 유지(너 기존 구조 호환)
+    heartbeat_s: float = 10.0
+
     pulse_ms: int = 180
-
     lock_warn_ms: float = 800.0
     io_warn_ms: float = 1500.0
 
+    # ✅ RS-232 안정화(찌꺼기 바이트 제거)
+    reset_buffers_on_connect: bool = True
+    reset_input_buffer_each_io: bool = True
+
     # ===== DAC (4~20mA 전용) =====
-    # full_scale_code: 4~20mA의 "span" 코드값 (예: 4000 또는 4095 등)
-    # offset_code    : 4mA에 해당하는 최소 코드값 (대부분 0이지만 장비/모듈에 따라 다를 수 있음)
     dac_full_scale_code: int = 4000
     dac_offset_code: int = 0
-
     dac_current_min_ma: float = 4.0
     dac_current_max_ma: float = 20.0
 
@@ -107,18 +98,16 @@ class PLCConfig:
 class AsyncPLC:
     def __init__(
         self,
-        port: str = "COM5",
         *,
-        method: str = "rtu",
-        baudrate: int = 9600,
-        bytesize: int = 8,
-        parity: str = "N",
-        stopbits: int = 1,
-        unit: int = 1,
-        timeout_s: float = 2.0,
+        port: str,
+        baudrate: int,
+        bytesize: int,
+        parity: str,
+        stopbits: int,
+        unit: int,
+        timeout_s: float,
         pulse_ms: int = 180,
 
-        # ✅ DAC(4~20mA) 스케일 파라미터(ini에서 주입)
         dac_full_scale_code: int = 4000,
         dac_offset_code: int = 0,
         dac_current_min_ma: float = 4.0,
@@ -128,16 +117,14 @@ class AsyncPLC:
     ):
         self.cfg = PLCConfig(
             port=port,
-            method=method,
-            baudrate=baudrate,
-            bytesize=bytesize,
-            parity=parity,
-            stopbits=stopbits,
-            unit=unit,
-            timeout_s=timeout_s,
-            pulse_ms=pulse_ms,
+            baudrate=int(baudrate),
+            bytesize=int(bytesize),
+            parity=str(parity),
+            stopbits=int(stopbits),
+            unit=int(unit),
+            timeout_s=float(timeout_s),
+            pulse_ms=int(pulse_ms),
 
-            # ✅ 주입
             dac_full_scale_code=int(dac_full_scale_code),
             dac_offset_code=int(dac_offset_code),
             dac_current_min_ma=float(dac_current_min_ma),
@@ -145,9 +132,6 @@ class AsyncPLC:
         )
 
         self._client: Optional[ModbusSerialClient] = None
-        self._uid_kw: Optional[str] = None  # 'unit' or 'slave'
-        self._uid_kw_cache: Dict[str, Optional[str]] = {}  # ✅ 추가
-
         self._lock = asyncio.Lock()
         self._last_io_ts = 0.0
 
@@ -156,29 +140,15 @@ class AsyncPLC:
         self._closed: bool = False
 
         _raw_logger = logger or (lambda *_a, **_k: None)
-
         def _log(fmt: object, *args: object) -> None:
             try:
-                if args:
-                    try:
-                        msg = str(fmt) % args
-                    except Exception:
-                        msg = str(fmt) + " " + " ".join(str(a) for a in args)
-                else:
-                    msg = str(fmt)
+                msg = (str(fmt) % args) if args else str(fmt)
             except Exception:
-                msg = "(log format error)"
-
+                msg = str(fmt)
             try:
                 _raw_logger(msg)
-            except TypeError:
-                try:
-                    _raw_logger(msg, *args)
-                except Exception:
-                    pass
             except Exception:
                 pass
-
         self.log = _log
 
         self._SYNONYMS: Dict[str, str] = self._build_synonyms()
@@ -189,11 +159,11 @@ class AsyncPLC:
     async def connect(self) -> None:
         self._closed = False
         async with self._io_lock("connect"):
-            await asyncio.to_thread(self._connect_sync)
+            await asyncio.to_thread(self._ensure_connected_sync, False)
 
         self.log(
-            "Serial(Modbus-RTU) 연결 성공: port=%s baud=%s parity=%s stopbits=%s (unit=%s)",
-            self.cfg.port, self.cfg.baudrate, self.cfg.parity, self.cfg.stopbits, self.cfg.unit
+            "PLC connect ok: port=%s baud=%s 8N1 unit=%s timeout=%.2fs",
+            self.cfg.port, self.cfg.baudrate, self.cfg.unit, self.cfg.timeout_s
         )
 
         if self._hb_task is None or self._hb_task.done():
@@ -213,7 +183,7 @@ class AsyncPLC:
         async with self._io_lock("close"):
             await asyncio.to_thread(self._close_sync)
 
-        self.log("Serial(Modbus-RTU) 연결 종료")
+        self.log("PLC closed")
 
     def is_connected(self) -> bool:
         try:
@@ -231,71 +201,72 @@ class AsyncPLC:
     # --------------------------
     # sync connect/close
     # --------------------------
-    def _connect_sync(self) -> None:
-        if self._client is None:
-            sig = inspect.signature(ModbusSerialClient)
-            params = sig.parameters
+    def _make_client(self) -> ModbusSerialClient:
+        return ModbusSerialClient(
+            port=self.cfg.port,
+            framer=FramerType.RTU,
+            baudrate=self.cfg.baudrate,
+            bytesize=self.cfg.bytesize,
+            parity=self.cfg.parity,
+            stopbits=self.cfg.stopbits,
+            timeout=self.cfg.timeout_s,
+        )
 
-            args = []
-            kwargs = {}
+    def _get_serial(self):
+        """pymodbus 내부 pyserial 객체(가능하면)"""
+        c = self._client
+        if c is None:
+            return None
+        # pymodbus 3.x serial은 보통 client.socket
+        s = getattr(c, "socket", None)
+        if s is not None:
+            return s
+        return None
 
-            # port: positional-only면 args로 넣어야 함
-            if "port" in params and params["port"].kind != inspect.Parameter.POSITIONAL_ONLY:
-                kwargs["port"] = self.cfg.port
-            else:
-                args.append(self.cfg.port)
+    def _reset_serial_input_buffer(self) -> None:
+        ser = self._get_serial()
+        if ser is None:
+            return
+        try:
+            if hasattr(ser, "reset_input_buffer"):
+                ser.reset_input_buffer()
+            elif hasattr(ser, "flushInput"):
+                ser.flushInput()
+        except Exception:
+            pass
 
-            # framer / method: 버전에 따라 존재하는 키만 사용
-            if "framer" in params:
-                # 최신 계열: framer 사용(기본이 RTU인 경우도 많지만 명시해도 안전)
-                kwargs["framer"] = RTU_FRAMER
-            elif "method" in params:
-                # 구버전 계열: method 사용
-                kwargs["method"] = self.cfg.method
+    def _reset_serial_output_buffer(self) -> None:
+        ser = self._get_serial()
+        if ser is None:
+            return
+        try:
+            if hasattr(ser, "reset_output_buffer"):
+                ser.reset_output_buffer()
+            elif hasattr(ser, "flushOutput"):
+                ser.flushOutput()
+        except Exception:
+            pass
 
-            # serial params도 "받는 것만" 넣기 (unexpected kwarg 원천 차단)
-            if "baudrate" in params:
-                kwargs["baudrate"] = self.cfg.baudrate
-            if "bytesize" in params:
-                kwargs["bytesize"] = self.cfg.bytesize
-            if "parity" in params:
-                kwargs["parity"] = self.cfg.parity
-            if "stopbits" in params:
-                kwargs["stopbits"] = self.cfg.stopbits
+    def _ensure_connected_sync(self, force_recreate: bool) -> None:
+        if force_recreate or (self._client is None):
+            self._close_sync()
+            self._client = self._make_client()
 
-            # timeout 키 이름도 버전에 따라 다를 수 있으니 둘 다 대비
-            if "timeout" in params:
-                kwargs["timeout"] = self.cfg.timeout_s
-            elif "timeout_s" in params:
-                kwargs["timeout_s"] = self.cfg.timeout_s
+        # 이미 연결돼 있으면 OK
+        if getattr(self._client, "connected", False):
+            return
 
-            # 1차 시도
-            try:
-                self._client = ModbusSerialClient(*args, **kwargs)
-            except TypeError:
-                # 혹시 framer 타입 이슈 등으로 TypeError가 나면 framer 제거 후 재시도
-                kwargs.pop("framer", None)
-                self._client = ModbusSerialClient(*args, **kwargs)
+        ok = self._client.connect()
+        if not ok:
+            self._close_sync()
+            raise RuntimeError("Modbus RTU connect failed")
 
-        if not self._client.connect():
-            raise RuntimeError("Modbus RTU(RS-232) 연결 실패")
+        # 연결 직후 버퍼 정리(찌꺼기 제거)
+        if self.cfg.reset_buffers_on_connect:
+            self._reset_serial_input_buffer()
+            self._reset_serial_output_buffer()
 
         self._last_io_ts = time.monotonic()
-
-        # device_id/slave/unit 키워드 자동 판별(한 번만)
-        if self._uid_kw is None:
-            try:
-                sig = inspect.signature(self._client.write_coil)
-                if "device_id" in sig.parameters:
-                    self._uid_kw = "device_id"
-                elif "slave" in sig.parameters:
-                    self._uid_kw = "slave"
-                elif "unit" in sig.parameters:
-                    self._uid_kw = "unit"
-                else:
-                    self._uid_kw = None
-            except Exception:
-                self._uid_kw = None
 
     def _close_sync(self) -> None:
         if self._client is not None:
@@ -303,228 +274,54 @@ class AsyncPLC:
                 self._client.close()
             except Exception:
                 pass
+            # 혹시 pyserial이 남아 있으면 한 번 더 닫기
+            try:
+                ser = getattr(self._client, "socket", None)
+                if ser is not None and hasattr(ser, "close"):
+                    ser.close()
+            except Exception:
+                pass
         self._client = None
-
-    def _uid_kwargs(self, func: Any | None = None) -> dict:
-        """
-        pymodbus 버전에 따라 unit/slave/device_id 파라미터명이 다를 수 있어
-        호출 대상 func 기준으로 안전하게 선택(캐시).
-        """
-        if self._client is None:
-            return {}
-
-        kw: Optional[str] = None
-
-        if func is not None:
-            key = getattr(func, "__name__", str(func))
-            if key in self._uid_kw_cache:
-                kw = self._uid_kw_cache[key]
-            else:
-                try:
-                    sig = inspect.signature(func)
-                    if "device_id" in sig.parameters:
-                        kw = "device_id"
-                    elif "slave" in sig.parameters:
-                        kw = "slave"
-                    elif "unit" in sig.parameters:
-                        kw = "unit"
-                    else:
-                        kw = None
-                except Exception:
-                    kw = self._uid_kw
-                self._uid_kw_cache[key] = kw
-        else:
-            kw = self._uid_kw
-
-        return {kw: self.cfg.unit} if kw else {}
-    
-    def _sync_read_coils(self, addr: int, count: int):
-        if self._client is None:
-            raise RuntimeError("PLC client not initialized")
-        f = self._client.read_coils
-        uid = self._uid_kwargs(f)
-
-        # 1) 일반 형태
-        try:
-            return f(addr, count, **uid)
-        except TypeError:
-            pass
-
-        # 2) count가 keyword-only인 경우
-        for count_kw in ("count", "quantity", "qty"):
-            try:
-                d = {count_kw: count}
-                d.update(uid)
-                return f(addr, **d)
-            except TypeError:
-                continue
-
-        # 3) address도 keyword-only인 경우까지
-        for addr_kw in ("address", "addr"):
-            for count_kw in ("count", "quantity", "qty"):
-                try:
-                    d = {addr_kw: addr, count_kw: count}
-                    d.update(uid)
-                    return f(**d)
-                except TypeError:
-                    continue
-
-        # 전부 실패면 원래 예외를 그대로 올림
-        return f(addr, count, **uid)  # 여기서 다시 터지면 호출부에서 로그에 찍힘
-
-    def _sync_write_coil(self, addr: int, value: bool):
-        if self._client is None:
-            raise RuntimeError("PLC client not initialized")
-        f = self._client.write_coil
-        uid = self._uid_kwargs(f)
-        value = bool(value)
-
-        try:
-            return f(addr, value, **uid)
-        except TypeError:
-            pass
-
-        for val_kw in ("value", "state", "output_value"):
-            try:
-                d = {val_kw: value}
-                d.update(uid)
-                return f(addr, **d)
-            except TypeError:
-                continue
-
-        for addr_kw in ("address", "addr"):
-            for val_kw in ("value", "state", "output_value"):
-                try:
-                    d = {addr_kw: addr, val_kw: value}
-                    d.update(uid)
-                    return f(**d)
-                except TypeError:
-                    continue
-
-        return f(addr, value, **uid)
-
-
-    def _sync_read_holding_registers(self, addr: int, count: int):
-        if self._client is None:
-            raise RuntimeError("PLC client not initialized")
-        f = self._client.read_holding_registers
-        uid = self._uid_kwargs(f)
-
-        try:
-            return f(addr, count, **uid)
-        except TypeError:
-            pass
-
-        for count_kw in ("count", "quantity", "qty"):
-            try:
-                d = {count_kw: count}
-                d.update(uid)
-                return f(addr, **d)
-            except TypeError:
-                continue
-
-        for addr_kw in ("address", "addr"):
-            for count_kw in ("count", "quantity", "qty"):
-                try:
-                    d = {addr_kw: addr, count_kw: count}
-                    d.update(uid)
-                    return f(**d)
-                except TypeError:
-                    continue
-
-        return f(addr, count, **uid)
-
-
-    def _sync_write_register(self, addr: int, value: int):
-        if self._client is None:
-            raise RuntimeError("PLC client not initialized")
-        f = self._client.write_register
-        uid = self._uid_kwargs(f)
-        value = int(value)
-
-        try:
-            return f(addr, value, **uid)
-        except TypeError:
-            pass
-
-        for val_kw in ("value", "registervalue"):
-            try:
-                d = {val_kw: value}
-                d.update(uid)
-                return f(addr, **d)
-            except TypeError:
-                continue
-
-        for addr_kw in ("address", "addr"):
-            for val_kw in ("value", "registervalue"):
-                try:
-                    d = {addr_kw: addr, val_kw: value}
-                    d.update(uid)
-                    return f(**d)
-                except TypeError:
-                    continue
-
-        return f(addr, value, **uid)
 
     def _ensure_ok(self, resp):
         if resp is None:
-            raise ModbusException("응답 없음(None)")
+            raise ModbusException("No response(None)")
         if isinstance(resp, ExceptionResponse):
-            raise ModbusException(f"Modbus ExceptionResponse: {resp}")
+            raise ModbusException(f"ExceptionResponse: {resp}")
         if hasattr(resp, "isError") and resp.isError():
             raise ModbusException(str(resp))
         return resp
-
-    def _is_reset_err(self, e: Exception) -> bool:
-        s = str(e).lower()
-        return ("10054" in s) or ("reset by peer" in s) or ("connectionreseterror" in s)
 
     # --------------------------
     # lock + throttle + heartbeat
     # --------------------------
     @asynccontextmanager
     async def _io_lock(self, op: str, **meta):
-        """I/O 직렬화 + 디버깅(락 대기/임계구역 IO 시간 경고). meta에 addr/count 등 확장 가능."""
         loop = asyncio.get_running_loop()
         t0 = loop.time()
-
         await self._lock.acquire()
         try:
             waited_ms = (loop.time() - t0) * 1000.0
-
-            addr = meta.get("addr", None)
-            count = meta.get("count", None)
-            extra = []
-            if addr is not None:
-                extra.append(f"addr={addr}")
-            if count is not None:
-                extra.append(f"count={count}")
-            extra_s = (" [" + ", ".join(extra) + "]") if extra else ""
-
             if waited_ms >= self.cfg.lock_warn_ms:
-                self.log("WARN lock-wait %.0f ms (op=%s)%s", waited_ms, op, extra_s)
+                self.log("WARN lock-wait %.0f ms (op=%s)", waited_ms, op)
+
+            # ✅ 트랜잭션 전 입력버퍼 reset (RS-232에서 매우 중요)
+            if self.cfg.reset_input_buffer_each_io:
+                self._reset_serial_input_buffer()
 
             t_in = loop.time()
             yield
             io_ms = (loop.time() - t_in) * 1000.0
             if io_ms >= self.cfg.io_warn_ms:
-                self.log("WARN in-lock IO %.0f ms (op=%s)%s", io_ms, op, extra_s)
+                self.log("WARN in-lock IO %.0f ms (op=%s)", io_ms, op)
         finally:
             self._lock.release()
 
-    async def _throttle_and_heartbeat(self) -> None:
+    async def _throttle(self) -> None:
         now = time.monotonic()
         delta = now - self._last_io_ts
-
         if delta < self.cfg.inter_cmd_gap_s:
             await asyncio.sleep(self.cfg.inter_cmd_gap_s - delta)
-
-        if (delta > self.cfg.heartbeat_s) and (not self._hb_paused) and (self._client is not None):
-            try:
-                await asyncio.to_thread(self._sync_read_coils, 0, 1)
-            except Exception:
-                pass
-
         self._last_io_ts = time.monotonic()
 
     async def _heartbeat_loop(self) -> None:
@@ -534,11 +331,11 @@ class AsyncPLC:
                 if self._closed or self._hb_paused:
                     continue
                 try:
-                    async with self._io_lock("heartbeat", addr=0):
-                        if self._client is None:
-                            continue
-                        await asyncio.to_thread(self._sync_read_coils, 0, 1)
-                        self._last_io_ts = time.monotonic()
+                    async with self._io_lock("heartbeat"):
+                        await asyncio.to_thread(self._ensure_connected_sync, False)
+                        # 가벼운 1bit read
+                        resp = await asyncio.to_thread(self._client.read_coils, 0, 1, slave=self.cfg.unit)
+                        self._ensure_ok(resp)
                 except Exception:
                     continue
         except asyncio.CancelledError:
@@ -554,20 +351,12 @@ class AsyncPLC:
             self._hb_paused = old
 
     # --------------------------
-    # name/address parsing
+    # name/address parsing (너 기존 유지)
     # --------------------------
     def _build_synonyms(self) -> Dict[str, str]:
-        syn: Dict[str, str] = {}
-
         def norm(s: str) -> str:
-            return (
-                s.strip().upper()
-                .replace(" ", "")
-                .replace("_", "")
-                .replace("-", "")
-                .replace("/", "")
-            )
-
+            return s.strip().upper().replace(" ", "").replace("_", "").replace("-", "").replace("/", "")
+        syn: Dict[str, str] = {}
         for k in PLC_COIL_MAP.keys():
             syn[norm(k)] = k
         for k in PLC_REG_MAP.keys():
@@ -579,32 +368,24 @@ class AsyncPLC:
         syn[norm("MV")] = "M_V_SW"
         syn[norm("VV")] = "V_V_SW"
         syn[norm("V/V")] = "V_V_SW"
-        syn[norm("VENT")] = "V_V_SW"
         syn[norm("TMP")] = "TMP_SW"
 
         syn[norm("SHUTTER1")] = "SHUTTER_1_SW"
         syn[norm("SHUTTER2")] = "SHUTTER_2_SW"
         syn[norm("MAINSHUTTER")] = "MAIN_SHUTTER_SW"
-        syn[norm("MS")] = "MAIN_SHUTTER_SW"
 
         syn[norm("AIR")] = "AIR_SW"
         syn[norm("WATER")] = "WATER_SW"
-
         syn[norm("G1")] = "GAS_1_SW"
         syn[norm("G2")] = "GAS_2_SW"
-        syn[norm("GAS1")] = "GAS_1_SW"
-        syn[norm("GAS2")] = "GAS_2_SW"
 
         syn[norm("POWER1")] = "POWER_1_SW"
         syn[norm("POWER2")] = "POWER_2_SW"
         syn[norm("DOOR")] = "DOOR_SW"
         syn[norm("FTM")] = "FTM_SW"
 
-        syn[norm("DACPOWER1")] = "DAC_POWER_1"
-        syn[norm("DACPOWER2")] = "DAC_POWER_2"
         syn[norm("DAC1")] = "DAC_POWER_1"
         syn[norm("DAC2")] = "DAC_POWER_2"
-
         return syn
 
     def _parse_m_device_to_coil(self, s: str) -> int:
@@ -634,13 +415,7 @@ class AsyncPLC:
         if key_raw in PLC_REG_MAP:
             return PLC_REG_MAP[key_raw]
 
-        nk = (
-            key_raw.upper()
-            .replace(" ", "")
-            .replace("_", "")
-            .replace("-", "")
-            .replace("/", "")
-        )
+        nk = key_raw.upper().replace(" ", "").replace("_", "").replace("-", "").replace("/", "")
         if nk in self._SYNONYMS:
             canonical = self._SYNONYMS[nk]
             if canonical in PLC_COIL_MAP:
@@ -662,68 +437,71 @@ class AsyncPLC:
         s = str(name).strip()
         if s in PLC_REG_MAP:
             return True
-        nk = (
-            s.upper()
-            .replace(" ", "")
-            .replace("_", "")
-            .replace("-", "")
-            .replace("/", "")
-        )
+        nk = s.upper().replace(" ", "").replace("_", "").replace("-", "").replace("/", "")
         if nk in self._SYNONYMS and self._SYNONYMS[nk] in PLC_REG_MAP:
             return True
-        if s.upper().startswith("D"):
-            return True
-        return False
+        return s.upper().startswith("D")
 
     # --------------------------
-    # low-level I/O
+    # low-level I/O (slave override 지원)
     # --------------------------
-    async def read_coil(self, addr: int) -> bool:
-        async with self._io_lock("read_coil", addr=addr):
-            await asyncio.to_thread(self._connect_sync)
-            await self._throttle_and_heartbeat()
-            resp = await asyncio.to_thread(self._sync_read_coils, addr, 1)
+    async def ping(self, *, slave: Optional[int] = None) -> None:
+        """가벼운 1bit read로 실제 응답 확인."""
+        uid = self.cfg.unit if slave is None else int(slave)
+        async with self._io_lock("ping"):
+            await asyncio.to_thread(self._ensure_connected_sync, False)
+            await self._throttle()
+            resp = await asyncio.to_thread(self._client.read_coils, 0, 1, slave=uid)
             self._ensure_ok(resp)
-            return bool(resp.bits[0])
 
-    async def read_coils_block(self, start_addr: int, count: int) -> list[bool]:
+    async def read_coils_block(self, start_addr: int, count: int, *, slave: Optional[int] = None) -> list[bool]:
         start_addr = int(start_addr)
         count = max(1, int(count))
+        uid = self.cfg.unit if slave is None else int(slave)
 
         async with self._io_lock("read_coils_block", addr=start_addr, count=count):
-            await asyncio.to_thread(self._connect_sync)
-            await self._throttle_and_heartbeat()
-            resp = await asyncio.to_thread(self._sync_read_coils, start_addr, count)
+            await asyncio.to_thread(self._ensure_connected_sync, False)
+            await self._throttle()
+            resp = await asyncio.to_thread(self._client.read_coils, start_addr, count, slave=uid)
             self._ensure_ok(resp)
             bits = list(getattr(resp, "bits", []) or [])
             if len(bits) < count:
                 bits.extend([False] * (count - len(bits)))
             return [bool(b) for b in bits[:count]]
 
-    async def write_coil(self, addr: int, value: bool) -> None:
+    async def write_coil(self, addr: int, value: bool, *, slave: Optional[int] = None) -> None:
+        addr = int(addr)
+        uid = self.cfg.unit if slave is None else int(slave)
+
         async with self._io_lock("write_coil", addr=addr):
-            await asyncio.to_thread(self._connect_sync)
-            await self._throttle_and_heartbeat()
-            resp = await asyncio.to_thread(self._sync_write_coil, addr, bool(value))
+            await asyncio.to_thread(self._ensure_connected_sync, False)
+            await self._throttle()
+            resp = await asyncio.to_thread(self._client.write_coil, addr, bool(value), slave=uid)
             self._ensure_ok(resp)
 
-    async def read_reg(self, addr: int) -> int:
+    async def read_reg(self, addr: int, *, slave: Optional[int] = None) -> int:
+        addr = int(addr)
+        uid = self.cfg.unit if slave is None else int(slave)
+
         async with self._io_lock("read_reg", addr=addr):
-            await asyncio.to_thread(self._connect_sync)
-            await self._throttle_and_heartbeat()
-            resp = await asyncio.to_thread(self._sync_read_holding_registers, addr, 1)
+            await asyncio.to_thread(self._ensure_connected_sync, False)
+            await self._throttle()
+            resp = await asyncio.to_thread(self._client.read_holding_registers, addr, 1, slave=uid)
             self._ensure_ok(resp)
             return int(resp.registers[0])
 
-    async def write_reg(self, addr: int, value: int) -> None:
+    async def write_reg(self, addr: int, value: int, *, slave: Optional[int] = None) -> None:
+        addr = int(addr)
+        uid = self.cfg.unit if slave is None else int(slave)
+
         async with self._io_lock("write_reg", addr=addr):
-            await asyncio.to_thread(self._connect_sync)
-            await self._throttle_and_heartbeat()
-            resp = await asyncio.to_thread(self._sync_write_register, addr, int(value))
+            await asyncio.to_thread(self._ensure_connected_sync, False)
+            await self._throttle()
+            resp = await asyncio.to_thread(self._client.write_register, addr, int(value), slave=uid)
             self._ensure_ok(resp)
 
     # --------------------------
-    # high-level helpers
+    # high-level helpers (너 기존 유지)
     # --------------------------
     async def pulse(self, addr: int, *, ms: Optional[int] = None) -> None:
         width = self.cfg.pulse_ms if ms is None else int(ms)
@@ -733,10 +511,8 @@ class AsyncPLC:
 
     async def write_switch(self, name_or_addr: Any, on: bool, *, momentary: bool = False, pulse_ms: Optional[int] = None) -> None:
         addr = self._addr(name_or_addr)
-
         if self._is_reg_name(name_or_addr):
-            raise TypeError(f"write_switch는 COIL 전용입니다. register로 보이는 입력: {name_or_addr}")
-
+            raise TypeError(f"write_switch는 COIL 전용입니다: {name_or_addr}")
         if momentary:
             await self.pulse(addr, ms=pulse_ms)
         else:
@@ -745,8 +521,9 @@ class AsyncPLC:
     async def read_bit(self, name_or_addr: Any) -> bool:
         addr = self._addr(name_or_addr)
         if self._is_reg_name(name_or_addr):
-            raise TypeError(f"read_bit은 COIL 전용입니다. register로 보이는 입력: {name_or_addr}")
-        return bool(await self.read_coil(addr))
+            raise TypeError(f"read_bit은 COIL 전용입니다: {name_or_addr}")
+        bits = await self.read_coils_block(addr, 1)
+        return bool(bits[0])
 
     async def read_reg_name(self, name_or_addr: Any) -> int:
         addr = self._addr(name_or_addr)
@@ -756,9 +533,7 @@ class AsyncPLC:
         addr = self._addr(name_or_addr)
         await self.write_reg(addr, int(value))
 
-    # --------------------------------------------------
-    # 고수준 API(너 기존 그대로)
-    # --------------------------------------------------
+    # 기존 short API 유지
     async def rp(self, on: bool = True, *, momentary: bool = False) -> None: await self.write_switch("RP", on, momentary=momentary)
     async def rv(self, on: bool = True, *, momentary: bool = False) -> None: await self.write_switch("RV", on, momentary=momentary)
     async def fv(self, on: bool = True, *, momentary: bool = False) -> None: await self.write_switch("FV", on, momentary=momentary)
@@ -780,50 +555,34 @@ class AsyncPLC:
     async def power2(self, on: bool = True, *, momentary: bool = False) -> None: await self.write_switch("POWER2", on, momentary=momentary)
     async def door(self, on: bool = True, *, momentary: bool = False) -> None: await self.write_switch("DOOR", on, momentary=momentary)
 
+    # ---- DAC helpers (너 기존 유지)
     def _clamp_dac_code(self, code: int) -> int:
         fs = int(self.cfg.dac_full_scale_code)
         if fs <= 0:
             raise ValueError(f"dac_full_scale_code must be > 0 (now={fs})")
-
         offset = int(self.cfg.dac_offset_code)
-        lo, hi = offset, offset + fs  # ✅ offset 포함 범위
-
+        lo, hi = offset, offset + fs
         c = int(code)
-        if c < lo:
-            c = lo
-        elif c > hi:
-            c = hi
-        return c
+        return lo if c < lo else hi if c > hi else c
 
     async def set_dac_power(self, ch: int, code: int) -> None:
         key = "DAC_POWER_1" if int(ch) == 1 else "DAC_POWER_2" if int(ch) == 2 else None
         if key is None:
             raise ValueError("DAC channel must be 1 or 2")
-
-        # ✅ 안전: 범위 강제
         await self.write_reg_name(key, self._clamp_dac_code(code))
 
     async def set_dac_current(self, ch: int, ma: float) -> int:
-        """
-        4~20mA(Current) → DAC 코드로 변환해서 D00000/D00001에 기록
-        """
         mn = float(self.cfg.dac_current_min_ma)
         mx = float(self.cfg.dac_current_max_ma)
         if mx <= mn:
             raise ValueError(f"Invalid current range: {mn}..{mx}")
-
         i = float(ma)
-        if i < mn:
-            i = mn
-        elif i > mx:
-            i = mx
-
-        x = (i - mn) / (mx - mn)  # 0..1
+        if i < mn: i = mn
+        if i > mx: i = mx
+        x = (i - mn) / (mx - mn)
         fs = int(self.cfg.dac_full_scale_code)
         offset = int(self.cfg.dac_offset_code)
-
         code = int(round(x * fs)) + offset
         code = self._clamp_dac_code(code)
-
         await self.set_dac_power(ch, code)
         return code

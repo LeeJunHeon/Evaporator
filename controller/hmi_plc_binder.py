@@ -72,11 +72,22 @@ class PlcWorker(QThread):
         """워커 중지 요청."""
         self._stop_evt.set()
         if self._loop:
-            # sleep 중이어도 빨리 깨어나도록 빈 콜백 한 번
             try:
                 self._loop.call_soon_threadsafe(lambda: None)
             except Exception:
                 pass
+
+            # ✅ sleep/queue wait 중이면 깨우기
+            if self._cmd_q:
+                def _wakeup():
+                    try:
+                        self._cmd_q.put_nowait(("__WAKEUP__", False, False))
+                    except Exception:
+                        pass
+                try:
+                    self._loop.call_soon_threadsafe(_wakeup)
+                except Exception:
+                    pass
 
     def enqueue_write(self, coil_name: str, on: bool, momentary: bool = False) -> None:
         """PLC에 coil write 요청을 큐에 넣는다."""
@@ -218,6 +229,8 @@ class PlcWorker(QThread):
         # 큐가 비면 빠르게 빠져나옴
         while not self._cmd_q.empty():
             coil_name, on, momentary = self._cmd_q.get_nowait()
+            if coil_name == "__WAKEUP__":
+                continue
             await plc.write_switch(coil_name, on, momentary=momentary)
 
     async def _sleep_with_command_break(self, plc: AsyncPLC, seconds: float) -> None:
@@ -227,10 +240,9 @@ class PlcWorker(QThread):
             return
 
         try:
-            # 커맨드 하나가 오거나, timeout이 되거나
             coil_name, on, momentary = await asyncio.wait_for(self._cmd_q.get(), timeout=seconds)
-            await plc.write_switch(coil_name, on, momentary=momentary)
-            # 추가로 쌓인 커맨드도 같이 처리
+            if coil_name != "__WAKEUP__":
+                await plc.write_switch(coil_name, on, momentary=momentary)
             await self._drain_commands(plc)
         except asyncio.TimeoutError:
             return
@@ -338,7 +350,21 @@ class HmiPlcBinder(QObject):
                 pass
             try:
                 self._worker.stop()
-                self._worker.wait(1000)
+
+                # ✅ RS-232 read는 timeout 동안 블로킹될 수 있음 → 1초로는 포트가 안 풀릴 수 있다.
+                timeout_s = float(getattr(self.settings, "timeout_s", 0.5))
+                wait_ms = int(max(5000, (timeout_s + 0.5) * 2000))
+
+                if not self._worker.wait(wait_ms):
+                    # 최후수단: 포트 점유로 영구 미연결 되는 것 방지
+                    try:
+                        self._worker.terminate()
+                    except Exception:
+                        pass
+                    try:
+                        self._worker.wait(1000)
+                    except Exception:
+                        pass
             except Exception:
                 pass
 

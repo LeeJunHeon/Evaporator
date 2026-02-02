@@ -146,6 +146,7 @@ class AsyncPLC:
 
         self._client: Optional[ModbusSerialClient] = None
         self._uid_kw: Optional[str] = None  # 'unit' or 'slave'
+        self._uid_kw_cache: Dict[str, Optional[str]] = {}  # ✅ 추가
 
         self._lock = asyncio.Lock()
         self._last_io_ts = 0.0
@@ -279,10 +280,166 @@ class AsyncPLC:
                 pass
         self._client = None
 
-    def _uid_kwargs(self) -> dict:
-        if self._uid_kw:
-            return {self._uid_kw: self.cfg.unit}
-        return {}
+    def _uid_kwargs(self, func: Any | None = None) -> dict:
+        """
+        pymodbus 버전에 따라 unit/slave/device_id 파라미터명이 다를 수 있어
+        호출 대상 func 기준으로 안전하게 선택(캐시).
+        """
+        if self._client is None:
+            return {}
+
+        kw: Optional[str] = None
+
+        if func is not None:
+            key = getattr(func, "__name__", str(func))
+            if key in self._uid_kw_cache:
+                kw = self._uid_kw_cache[key]
+            else:
+                try:
+                    sig = inspect.signature(func)
+                    if "device_id" in sig.parameters:
+                        kw = "device_id"
+                    elif "slave" in sig.parameters:
+                        kw = "slave"
+                    elif "unit" in sig.parameters:
+                        kw = "unit"
+                    else:
+                        kw = None
+                except Exception:
+                    kw = self._uid_kw
+                self._uid_kw_cache[key] = kw
+        else:
+            kw = self._uid_kw
+
+        return {kw: self.cfg.unit} if kw else {}
+    
+    def _sync_read_coils(self, addr: int, count: int):
+        if self._client is None:
+            raise RuntimeError("PLC client not initialized")
+        f = self._client.read_coils
+        uid = self._uid_kwargs(f)
+
+        # 1) 일반 형태
+        try:
+            return f(addr, count, **uid)
+        except TypeError:
+            pass
+
+        # 2) count가 keyword-only인 경우
+        for count_kw in ("count", "quantity", "qty"):
+            try:
+                d = {count_kw: count}
+                d.update(uid)
+                return f(addr, **d)
+            except TypeError:
+                continue
+
+        # 3) address도 keyword-only인 경우까지
+        for addr_kw in ("address", "addr"):
+            for count_kw in ("count", "quantity", "qty"):
+                try:
+                    d = {addr_kw: addr, count_kw: count}
+                    d.update(uid)
+                    return f(**d)
+                except TypeError:
+                    continue
+
+        # 전부 실패면 원래 예외를 그대로 올림
+        return f(addr, count, **uid)  # 여기서 다시 터지면 호출부에서 로그에 찍힘
+
+    def _sync_write_coil(self, addr: int, value: bool):
+        if self._client is None:
+            raise RuntimeError("PLC client not initialized")
+        f = self._client.write_coil
+        uid = self._uid_kwargs(f)
+        value = bool(value)
+
+        try:
+            return f(addr, value, **uid)
+        except TypeError:
+            pass
+
+        for val_kw in ("value", "state", "output_value"):
+            try:
+                d = {val_kw: value}
+                d.update(uid)
+                return f(addr, **d)
+            except TypeError:
+                continue
+
+        for addr_kw in ("address", "addr"):
+            for val_kw in ("value", "state", "output_value"):
+                try:
+                    d = {addr_kw: addr, val_kw: value}
+                    d.update(uid)
+                    return f(**d)
+                except TypeError:
+                    continue
+
+        return f(addr, value, **uid)
+
+
+    def _sync_read_holding_registers(self, addr: int, count: int):
+        if self._client is None:
+            raise RuntimeError("PLC client not initialized")
+        f = self._client.read_holding_registers
+        uid = self._uid_kwargs(f)
+
+        try:
+            return f(addr, count, **uid)
+        except TypeError:
+            pass
+
+        for count_kw in ("count", "quantity", "qty"):
+            try:
+                d = {count_kw: count}
+                d.update(uid)
+                return f(addr, **d)
+            except TypeError:
+                continue
+
+        for addr_kw in ("address", "addr"):
+            for count_kw in ("count", "quantity", "qty"):
+                try:
+                    d = {addr_kw: addr, count_kw: count}
+                    d.update(uid)
+                    return f(**d)
+                except TypeError:
+                    continue
+
+        return f(addr, count, **uid)
+
+
+    def _sync_write_register(self, addr: int, value: int):
+        if self._client is None:
+            raise RuntimeError("PLC client not initialized")
+        f = self._client.write_register
+        uid = self._uid_kwargs(f)
+        value = int(value)
+
+        try:
+            return f(addr, value, **uid)
+        except TypeError:
+            pass
+
+        for val_kw in ("value", "registervalue"):
+            try:
+                d = {val_kw: value}
+                d.update(uid)
+                return f(addr, **d)
+            except TypeError:
+                continue
+
+        for addr_kw in ("address", "addr"):
+            for val_kw in ("value", "registervalue"):
+                try:
+                    d = {addr_kw: addr, val_kw: value}
+                    d.update(uid)
+                    return f(**d)
+                except TypeError:
+                    continue
+
+        return f(addr, value, **uid)
 
     def _ensure_ok(self, resp):
         if resp is None:
@@ -339,7 +496,7 @@ class AsyncPLC:
 
         if (delta > self.cfg.heartbeat_s) and (not self._hb_paused) and (self._client is not None):
             try:
-                await asyncio.to_thread(self._client.read_coils, 0, 1, **self._uid_kwargs())
+                await asyncio.to_thread(self._sync_read_coils, 0, 1)
             except Exception:
                 pass
 
@@ -355,7 +512,7 @@ class AsyncPLC:
                     async with self._io_lock("heartbeat", addr=0):
                         if self._client is None:
                             continue
-                        await asyncio.to_thread(self._client.read_coils, 0, 1, **self._uid_kwargs())
+                        await asyncio.to_thread(self._sync_read_coils, 0, 1)
                         self._last_io_ts = time.monotonic()
                 except Exception:
                     continue
@@ -500,7 +657,7 @@ class AsyncPLC:
         async with self._io_lock("read_coil", addr=addr):
             await asyncio.to_thread(self._connect_sync)
             await self._throttle_and_heartbeat()
-            resp = await asyncio.to_thread(self._client.read_coils, addr, 1, **self._uid_kwargs())
+            resp = await asyncio.to_thread(self._sync_read_coils, addr, 1)
             self._ensure_ok(resp)
             return bool(resp.bits[0])
 
@@ -511,7 +668,7 @@ class AsyncPLC:
         async with self._io_lock("read_coils_block", addr=start_addr, count=count):
             await asyncio.to_thread(self._connect_sync)
             await self._throttle_and_heartbeat()
-            resp = await asyncio.to_thread(self._client.read_coils, start_addr, count, **self._uid_kwargs())
+            resp = await asyncio.to_thread(self._sync_read_coils, start_addr, count)
             self._ensure_ok(resp)
             bits = list(getattr(resp, "bits", []) or [])
             if len(bits) < count:
@@ -529,7 +686,7 @@ class AsyncPLC:
         async with self._io_lock("read_reg", addr=addr):
             await asyncio.to_thread(self._connect_sync)
             await self._throttle_and_heartbeat()
-            resp = await asyncio.to_thread(self._client.read_holding_registers, addr, 1, **self._uid_kwargs())
+            resp = await asyncio.to_thread(self._sync_read_holding_registers, addr, 1)
             self._ensure_ok(resp)
             return int(resp.registers[0])
 
@@ -537,7 +694,7 @@ class AsyncPLC:
         async with self._io_lock("write_reg", addr=addr):
             await asyncio.to_thread(self._connect_sync)
             await self._throttle_and_heartbeat()
-            resp = await asyncio.to_thread(self._client.write_register, addr, int(value), **self._uid_kwargs())
+            resp = await asyncio.to_thread(self._sync_write_register, addr, int(value))
             self._ensure_ok(resp)
 
     # --------------------------

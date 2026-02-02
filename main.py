@@ -10,7 +10,7 @@ if str(_BASE_DIR) not in sys.path:
     sys.path.insert(0, str(_BASE_DIR))
 
 from PySide6.QtWidgets import QApplication, QWidget, QMessageBox, QDialog
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import Qt, QTimer
 
 from ui.mainWindow import Ui_Form
 from ui.config_dialog import ConfigDialog
@@ -68,11 +68,23 @@ class HmiWindow(QWidget):
         self.process_window = process_window
 
     def goto_process_window(self):
-        if not self.process_window:
-            return
+        # ✅ 닫혀있거나 아직 없으면 새로 생성
+        if self.process_window is None:
+            self.process_window = ProcessWindow()
+            self.process_window.set_hmi_window(self)
+
+            # ✅ 진짜 close 시 Qt 객체도 깔끔히 정리되게
+            self.process_window.setAttribute(Qt.WA_DeleteOnClose, True)
+
+            # ✅ 예외 케이스까지 대비: destroyed 되면 참조 해제
+            self.process_window.destroyed.connect(self._on_process_destroyed)
+
         self.process_window.show()
         self.process_window.raise_()
         self.process_window.activateWindow()
+
+    def _on_process_destroyed(self, *args):
+        self.process_window = None
 
     def set_runtime_objects(self, plc_binder: HmiPlcBinder, dev_mgr: DeviceManager, ini_path: Path) -> None:
         """main()에서 만든 런타임 객체 주입(PLC/STM/ACS 재연결에 사용)"""
@@ -115,6 +127,38 @@ class HmiWindow(QWidget):
         else:
             QMessageBox.information(self, "Reconnect", "저장 완료 + 3개 장비 재연결 성공")
 
+    def _confirm_exit(self) -> bool:
+        ret = QMessageBox.question(
+            self,
+            "종료 확인",
+            "정말 종료하시겠습니까?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        return ret == QMessageBox.Yes
+
+    def closeEvent(self, event):
+        if getattr(self, "_closing_all", False):
+            event.accept()
+            return
+
+        if not self._confirm_exit():
+            event.ignore()
+            return
+
+        self._closing_all = True
+
+        # ✅ Process가 열려있으면 같이 닫기
+        if self.process_window is not None:
+            try:
+                self.process_window._closing_all = True
+                self.process_window.close()
+            except Exception:
+                pass
+            self.process_window = None
+
+        event.accept()
+
 
 class ProcessWindow(QWidget):
     def __init__(self):
@@ -151,29 +195,19 @@ class ProcessWindow(QWidget):
         return ret == QMessageBox.Yes
 
     def closeEvent(self, event):
-        # 이미 "둘 다 닫는 중"이면 그냥 닫히게
-        if self._closing_all:
+        if getattr(self, "_closing_all", False):
             event.accept()
             return
 
-        # 사용자 X 클릭 -> 종료 확인
-        if not self._confirm_exit():
-            event.ignore()
-            return
+        if self.hmi_window is not None:
+            self.hmi_window.process_window = None
 
-        # Yes -> 둘 다 같이 종료
-        self._closing_all = True
-        if self.hmi_window:
-            self.hmi_window._closing_all = True
-            self.hmi_window.close()
         event.accept()
-
 
 def main():
     app = QApplication(sys.argv)
 
     hmi = HmiWindow()
-    proc = ProcessWindow()
 
     # ------------------------------
     # PLC 바인딩 시작
@@ -196,9 +230,6 @@ def main():
 
     # ✅ HMI가 Config 저장 후 재연결할 수 있도록 주입
     hmi.set_runtime_objects(plc_binder, dev_mgr, ini_path)
-
-    hmi.set_process_window(proc)
-    proc.set_hmi_window(hmi)
 
     # ✅ 두 창을 모두 띄우되, HMI가 항상 앞으로 오도록
     #proc.show()

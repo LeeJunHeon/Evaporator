@@ -452,11 +452,18 @@ class HmiPlcBinder(QObject):
                 pass
 
     def _on_connected(self, ok: bool) -> None:
+        prev = bool(getattr(self, "_connected", False))
         self._connected = bool(ok)
-        self._set_hmi_status("PLC CONNECTED" if ok else "PLC DISCONNECTED")
+
+        status = "PLC CONNECTED" if ok else "PLC DISCONNECTED"
+        self._set_hmi_status(status)
+
+        # ✅ 상태 변화가 있을 때만 로그에 append
+        if prev != self._connected:
+            self._set_hmi_log(status)
 
     def _on_error(self, msg: str) -> None:
-        # 너무 길어지지 않게 마지막 한 줄로
+        # ✅ 에러도 append
         self._set_hmi_log(msg)
 
     # --------------------------------------------------
@@ -519,9 +526,43 @@ class HmiPlcBinder(QObject):
                 pass
 
     def _set_hmi_log(self, text: str) -> None:
+        """
+        ✅ HMI 로그창에 append
+        - 사용자가 최하단을 보고 있을 때만 자동 스크롤 유지
+        - QPlainTextEdit / QTextEdit / (fallback) QLineEdit 모두 대응
+        """
         w = getattr(self.ui, "hmiLogWindow", None)
-        if w is not None:
+        if w is None:
+            return
+
+        line = f"[{time.strftime('%H:%M:%S')}] {text}"
+
+        try:
+            # 사용자가 이미 최하단을 보고 있을 때만 stick-to-bottom
+            stick_to_bottom = True
             try:
-                w.setText(text)
+                sb = w.verticalScrollBar()
+                stick_to_bottom = (sb.value() >= (sb.maximum() - 2))
             except Exception:
-                pass
+                stick_to_bottom = True
+
+            if hasattr(w, "appendPlainText"):
+                w.appendPlainText(line)      # QPlainTextEdit
+            elif hasattr(w, "append"):
+                w.append(line)               # QTextEdit
+            else:
+                # fallback (혹시라도 QLineEdit일 때)
+                prev = w.text() if hasattr(w, "text") else ""
+                joined = (prev + "\n" + line).strip()
+                if hasattr(w, "setText"):
+                    w.setText(joined)
+
+            if stick_to_bottom:
+                try:
+                    sb = w.verticalScrollBar()
+                    sb.setValue(sb.maximum())
+                except Exception:
+                    pass
+
+        except Exception:
+            pass

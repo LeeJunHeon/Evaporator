@@ -13,7 +13,7 @@
 from PySide6.QtCore import QCoreApplication, QMetaObject, QRect, Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QFrame, QLabel, QLineEdit,
+    QApplication, QCheckBox, QFrame, QLabel, QLineEdit, QPlainTextEdit,
     QPushButton, QStackedWidget, QWidget, QRadioButton,
 )
 
@@ -112,12 +112,18 @@ class Ui_Form(object):
         self.ms1powerBtn.setObjectName("ms1powerBtn")
         self.ms1powerBtn.setGeometry(QRect(10, 450, 101, 71))
 
-        self.hmiLogWindow = QLineEdit(self.page)
+        self.hmiLogWindow = QPlainTextEdit(self.page)
         self.hmiLogWindow.setObjectName("hmiLogWindow")
         self.hmiLogWindow.setGeometry(QRect(570, 450, 511, 171))
         font = QFont()
         font.setPointSize(11)
         self.hmiLogWindow.setFont(font)
+
+        # ✅ 로그 전용 세팅
+        self.hmiLogWindow.setReadOnly(True)
+        self.hmiLogWindow.setUndoRedoEnabled(False)
+        self.hmiLogWindow.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)  # 안 잘리고 자동 줄바꿈
+        self.hmiLogWindow.document().setMaximumBlockCount(2000)  # 너무 커지지 않게
 
         self.allstopBtn = QPushButton(self.page)
         self.allstopBtn.setObjectName("allstopBtn")
@@ -345,9 +351,14 @@ class Ui_Form(object):
         self.startProcess.setObjectName("startProcess")
         self.startProcess.setGeometry(QRect(100, 550, 91, 71))
 
-        self.logWindow = QLineEdit(self.page_2)
+        self.logWindow = QPlainTextEdit(self.page_2)
         self.logWindow.setObjectName("logWindow")
         self.logWindow.setGeometry(QRect(210, 490, 891, 131))
+
+        self.logWindow.setReadOnly(True)
+        self.logWindow.setUndoRedoEnabled(False)
+        self.logWindow.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        self.logWindow.document().setMaximumBlockCount(2000)
 
         self.thicknessLabel = QLabel(self.page_2)
         self.thicknessLabel.setObjectName("thicknessLabel")
@@ -535,6 +546,7 @@ class Ui_Form(object):
 
         # ---- log windows (optional: 살짝 깔끔하게) ----
         self.hmiLogWindow.setStyleSheet("background: white; border: 1px solid #d0d0d0;")
+        self.logWindow.setStyleSheet("background: white; border: 1px solid #d0d0d0;")
         self.processMonitor_HMI.setStyleSheet("background: white; border: 1px solid #d0d0d0;")
 
     def _style_indicator(self, w: QWidget, on: bool):

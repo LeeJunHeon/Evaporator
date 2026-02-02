@@ -139,48 +139,77 @@ class PlcWorker(QThread):
             dac_current_max_ma=self._settings.dac_current_max_ma,
         )
 
+        _connected = False
+
+        def _emit_connected(v: bool) -> None:
+            nonlocal _connected
+            v = bool(v)
+            if _connected != v:
+                _connected = v
+                self.sig_connected.emit(v)
+
         async def connect_until_ok() -> None:
             while not self._stop_evt.is_set():
                 try:
+                    # 1) 포트 open
                     await plc.connect()
-                    self.sig_connected.emit(True)
+
+                    # 2) ✅ 실제 응답이 오는지 "가벼운 ping"으로 검증
+                    #    (포트만 열리고 슬레이브가 응답 안 하는데 CONNECTED로 뜨는 문제 방지)
+                    await plc.read_coils_block(0, 1)
+
+                    _emit_connected(True)
                     return
                 except Exception as e:
-                    self.sig_connected.emit(False)
+                    _emit_connected(False)
                     self.sig_error.emit(f"PLC connect failed: {e!r}")
-                    await asyncio.sleep(max(0.2, self._settings.reconnect_interval_s))
+                    try:
+                        await plc.close()
+                    except Exception:
+                        pass
+                    await asyncio.sleep(max(0.2, float(self._settings.reconnect_interval_s)))
 
         await connect_until_ok()
 
-        # 폴링 루프
+        consecutive_fail = 0
+        max_consecutive_fail = 3  # 2~5 사이 추천
+
         while not self._stop_evt.is_set():
             try:
-                # 1) 명령 처리 (큐에 있으면 즉시 처리)
                 await self._drain_commands(plc)
 
-                # 2) 상태 읽기
                 states = await self._read_hmi_states(plc)
                 self.sig_states.emit(states)
 
-                # 3) 다음 폴링까지 대기(대기 중에도 커맨드가 오면 빨리 처리)
+                consecutive_fail = 0
                 await self._sleep_with_command_break(plc, self._settings.poll_interval_s)
 
             except Exception as e:
-                # 통신 오류 → 연결 재시도
-                self.sig_connected.emit(False)
+                consecutive_fail += 1
                 self.sig_error.emit(f"PLC polling error: {e!r}")
+
+                # ✅ 1~(N-1)회 실패는 '일시 지연'으로 보고 연결 상태는 유지
+                if consecutive_fail < max_consecutive_fail:
+                    await asyncio.sleep(0.05)
+                    continue
+
+                # ✅ N회 연속 실패 시에만 disconnect + close + reconnect
+                _emit_connected(False)
                 try:
                     await plc.close()
                 except Exception:
                     pass
+
                 await connect_until_ok()
+                consecutive_fail = 0
 
         # 종료
         try:
             await plc.close()
         except Exception:
             pass
-        self.sig_connected.emit(False)
+        _emit_connected(False)
+
 
     async def _drain_commands(self, plc: AsyncPLC) -> None:
         if not self._cmd_q:

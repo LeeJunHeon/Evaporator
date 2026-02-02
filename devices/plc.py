@@ -155,7 +155,32 @@ class AsyncPLC:
         self._hb_paused: bool = False
         self._closed: bool = False
 
-        self.log = logger or (lambda *a, **k: None)
+        _raw_logger = logger or (lambda *_a, **_k: None)
+
+        def _log(fmt: object, *args: object) -> None:
+            try:
+                if args:
+                    try:
+                        msg = str(fmt) % args
+                    except Exception:
+                        msg = str(fmt) + " " + " ".join(str(a) for a in args)
+                else:
+                    msg = str(fmt)
+            except Exception:
+                msg = "(log format error)"
+
+            try:
+                _raw_logger(msg)
+            except TypeError:
+                try:
+                    _raw_logger(msg, *args)
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+        self.log = _log
+
         self._SYNONYMS: Dict[str, str] = self._build_synonyms()
 
     # --------------------------
@@ -214,8 +239,8 @@ class AsyncPLC:
             args = []
             kwargs = {}
 
-            # port: 어떤 버전은 positional만 받는 경우도 있으니 서명 보고 결정
-            if "port" in params:
+            # port: positional-only면 args로 넣어야 함
+            if "port" in params and params["port"].kind != inspect.Parameter.POSITIONAL_ONLY:
                 kwargs["port"] = self.cfg.port
             else:
                 args.append(self.cfg.port)
@@ -679,7 +704,7 @@ class AsyncPLC:
         async with self._io_lock("write_coil", addr=addr):
             await asyncio.to_thread(self._connect_sync)
             await self._throttle_and_heartbeat()
-            resp = await asyncio.to_thread(self._client.write_coil, addr, bool(value), **self._uid_kwargs())
+            resp = await asyncio.to_thread(self._sync_write_coil, addr, bool(value))
             self._ensure_ok(resp)
 
     async def read_reg(self, addr: int) -> int:

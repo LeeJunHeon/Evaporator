@@ -134,7 +134,6 @@ class PlcWorker(QThread):
         # (이 프로젝트의 devices/plc.py는 cfg 인자를 받지 않고, 생성자 파라미터로 설정을 받는다)
         plc = AsyncPLC(
             port=self._settings.port,
-            method=self._settings.method,
             baudrate=self._settings.baudrate,
             bytesize=self._settings.bytesize,
             parity=self._settings.parity,

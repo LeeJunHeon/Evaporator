@@ -162,14 +162,10 @@ class PlcWorker(QThread):
         async def connect_until_ok() -> None:
             while not self._stop_evt.is_set():
                 try:
-                    # 1) 포트 open
                     await plc.connect()
-
-                    # 2) ✅ 실제 응답이 오는지 "가벼운 ping"으로 검증
-                    #    (포트만 열리고 슬레이브가 응답 안 하는데 CONNECTED로 뜨는 문제 방지)
-                    await plc.read_coils_block(0, 1)
-
+                    await plc.ping()   # ✅ 0/32/5 등 다중 주소로 응답 확인
                     _emit_connected(True)
+
                     return
                 except Exception as e:
                     _emit_connected(False)

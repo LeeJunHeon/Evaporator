@@ -262,3 +262,71 @@ class STMServiceWorker(QThread):
                 next_poll = now + self._poll_s
 
             time.sleep(0.01)
+
+
+# ============================================================
+# Public Service Wrapper
+# ============================================================
+
+class STMService(QObject):
+    """
+    앱에서 사용하는 STM100 서비스 Wrapper.
+
+    - start/stop
+    - reload_from_ini()
+    - 최신 스냅샷 조회
+    """
+
+    sig_error = Signal(str)
+    sig_connected = Signal(bool)
+    sig_thickness = Signal(object)
+    sig_rate = Signal(object)
+    sig_snapshot = Signal(object)
+
+    def __init__(
+        self,
+        ini_path: str | Path,
+        *,
+        poll_s: float = 0.25,
+        reconnect_interval_s: float = 1.0,
+        max_fail_before_close: int = 2,
+        parent: Optional[QObject] = None,
+    ):
+        super().__init__(parent)
+
+        self._worker = STMServiceWorker(
+            ini_path=ini_path,
+            poll_s=poll_s,
+            reconnect_interval_s=reconnect_interval_s,
+            max_fail_before_close=max_fail_before_close,
+        )
+
+        self._worker.sig_error.connect(self.sig_error)
+        self._worker.sig_connected.connect(self.sig_connected)
+        self._worker.sig_thickness.connect(self.sig_thickness)
+        self._worker.sig_rate.connect(self.sig_rate)
+        self._worker.sig_snapshot.connect(self.sig_snapshot)
+
+    def start(self) -> None:
+        if not self._worker.isRunning():
+            self._worker.start()
+
+    def stop(self, wait_ms: int = 3000) -> None:
+        try:
+            self._worker.stop()
+        except Exception:
+            pass
+        try:
+            self._worker.wait(int(wait_ms))
+        except Exception:
+            pass
+
+    def is_running(self) -> bool:
+        return bool(self._worker.isRunning())
+
+    def get_last_snapshot(self) -> Optional[STMSnapshot]:
+        return self._worker.get_last_snapshot()
+
+    def reload_from_ini(self, ini_path: str | Path) -> None:
+        self._worker.request_reload(ini_path)
+

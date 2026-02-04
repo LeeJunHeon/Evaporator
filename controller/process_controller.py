@@ -4,7 +4,7 @@ controller/process_controller.py
 
 ProcessController
 - UI에서 공정 시작/정지/일시정지/재개/레시피 로드/저장을 담당하는 상위 컨트롤러
-- ProcessEngine은 QThread에서 돌린다(Worker 내부에서 engine.run 호출)
+- ProcessEngine은 QThread(=ProcessWorker)에서 실행
 
 주의
 - UI 위젯을 직접 접근하지 않는다(=signals로만 상태 전달)
@@ -13,11 +13,10 @@ ProcessController
 
 from __future__ import annotations
 
-from dataclasses import asdict
 from pathlib import Path
-from typing import Optional, Union, Any, Dict
+from typing import Optional, Union, Any
 
-from PySide6.QtCore import QObject, QThread, Signal
+from PySide6.QtCore import QObject, Signal
 
 
 # ------------------------------------------------------------
@@ -27,94 +26,53 @@ try:
     # 패키지 실행: python -m Evaporator_Program.main 형태
     from ..process.models import (
         ProcessRecipe,
-        ProcessStatus,
-        StepStatus,
         ProcessError,
         StopMode,
-        ProcessPhase,
     )
-    from ..process.recipe_io import load_recipe, save_recipe, write_recipe_csv_template, make_sample_recipe
-    from ..process.engine import ProcessEngine, EngineCallbacks, EngineResult
+    from ..process.recipe_io import (
+        load_recipe,
+        save_recipe,
+        write_recipe_csv_template,
+        make_sample_recipe,
+    )
+    from ..process.engine import ProcessEngine, EngineResult
     from ..services.plc_service import PLCService
     from ..services.log_service import LogService
-    # STM/ACS는 옵션일 수 있음
-    from ..services.stm_service import STMSnapshot  # type: ignore
-    from ..services.acs_service import ACSSnapshot  # type: ignore
-except Exception:
+
+    from .process_worker import ProcessWorker
+
+except ImportError:
     # 단일 실행/경로 설정이 다른 경우 fallback
     from process.models import (
         ProcessRecipe,
-        ProcessStatus,
-        StepStatus,
         ProcessError,
         StopMode,
-        ProcessPhase,
     )
-    from process.recipe_io import load_recipe, save_recipe, write_recipe_csv_template, make_sample_recipe
-    from process.engine import ProcessEngine, EngineCallbacks, EngineResult
+    from process.recipe_io import (
+        load_recipe,
+        save_recipe,
+        write_recipe_csv_template,
+        make_sample_recipe,
+    )
+    from process.engine import ProcessEngine, EngineResult
     from services.plc_service import PLCService
     from services.log_service import LogService
-    from services.stm_service import STMSnapshot  # type: ignore
-    from services.acs_service import ACSSnapshot  # type: ignore
 
+    # 실행 방식에 따라 controller.process_worker 또는 process_worker로 접근될 수 있음
+    try:
+        from controller.process_worker import ProcessWorker
+    except ImportError:
+        from process_worker import ProcessWorker
 
-# ============================================================
-# Engine Worker (QThread)
-# ============================================================
-
-class _EngineWorker(QThread):
-    """
-    엔진을 별도 스레드에서 실행하는 워커.
-    - engine callbacks -> worker signals로 브릿지
-    """
-
-    sig_status = Signal(object)   # ProcessStatus
-    sig_step = Signal(object)     # StepStatus
-    sig_error = Signal(object)    # ProcessError
-    sig_result = Signal(object)   # EngineResult
-
-    def __init__(
-        self,
-        engine: ProcessEngine,
-        recipe: ProcessRecipe,
-        *,
-        run_id: Optional[str] = None,
-        parent: Optional[QObject] = None,
-    ):
-        super().__init__(parent)
-        self._engine = engine
-        self._recipe = recipe
-        self._run_id = run_id
-
-        # callbacks를 worker 시그널로 연결
-        self._engine.callbacks = EngineCallbacks(
-            on_status=lambda st: self.sig_status.emit(st),
-            on_step=lambda st: self.sig_step.emit(st),
-            on_error=lambda err: self.sig_error.emit(err),
-        )
-
-    @property
-    def engine(self) -> ProcessEngine:
-        return self._engine
-
-    def run(self) -> None:
-        # 엔진은 블로킹 실행
-        result = self._engine.run(self._recipe, run_id=self._run_id)
-        self.sig_result.emit(result)
-
-
-# ============================================================
-# Process Controller
-# ============================================================
 
 class ProcessController(QObject):
     """
     UI가 직접 사용하는 컨트롤러.
 
     Signals:
-    - sig_ui_log(str)            : UI 로그창에 append 할 문자열(가공된 한 줄)
+    - sig_ui_log(str)            : UI 로그창에 append 할 문자열
     - sig_status(ProcessStatus)  : 공정 상태(현재 step, phase, 센서값 포함)
-    - sig_step(StepStatus)       : step 시작/종료 이벤트(진행표/히스토리용)
+    - sig_step(StepStatus)       : step 시작/종료 이벤트
     - sig_error(ProcessError)    : 공정 에러 이벤트
     - sig_finished(EngineResult) : 공정 종료(성공/실패/정지 포함)
     - sig_recipe_loaded(ProcessRecipe)
@@ -146,7 +104,7 @@ class ProcessController(QObject):
         self._recipe: Optional[ProcessRecipe] = None
         self._recipe_path: Optional[Path] = None
 
-        self._worker: Optional[_EngineWorker] = None
+        self._worker: Optional[ProcessWorker] = None
 
         # log_service -> controller -> UI
         try:
@@ -223,11 +181,11 @@ class ProcessController(QObject):
             stm=self.stm,
             acs=self.acs,
             log=self.log,
-            callbacks=None,  # worker에서 교체
+            callbacks=None,  # worker에서 콜백 브릿지로 교체됨
         )
 
-        # 워커 생성
-        w = _EngineWorker(engine=engine, recipe=r, run_id=run_id)
+        # 워커 생성 (✅ 여기서 ProcessWorker 사용)
+        w = ProcessWorker(engine=engine, recipe=r, run_id=run_id)
         self._worker = w
 
         # 워커 -> 컨트롤러 시그널 연결
@@ -236,8 +194,9 @@ class ProcessController(QObject):
         w.sig_error.connect(self.sig_error)
         w.sig_result.connect(self._on_worker_result)
 
-        # 워커 종료 처리
+        # 워커 종료 처리 / 메모리 정리
         w.finished.connect(self._on_worker_finished)
+        w.finished.connect(w.deleteLater)
 
         self._ui_info("공정 시작 요청")
         w.start()
@@ -258,7 +217,7 @@ class ProcessController(QObject):
         if not self.is_running():
             return
         try:
-            self._worker.engine.request_pause()
+            self._worker.request_pause()
             self._ui_info("일시정지 요청")
         except Exception as e:
             self._ui_warn(f"pause 실패: {e!r}")
@@ -267,7 +226,7 @@ class ProcessController(QObject):
         if not self.is_running():
             return
         try:
-            self._worker.engine.request_resume()
+            self._worker.request_resume()
             self._ui_info("재개 요청")
         except Exception as e:
             self._ui_warn(f"resume 실패: {e!r}")
@@ -280,7 +239,7 @@ class ProcessController(QObject):
             self._ui_warn("실행 중인 공정이 없습니다.")
             return
         try:
-            self._worker.engine.request_stop(mode)
+            self._worker.request_stop(mode)
             self._ui_warn(f"정지 요청: {mode.value}")
         except Exception as e:
             self._ui_warn(f"stop 요청 실패: {e!r}")
@@ -291,14 +250,19 @@ class ProcessController(QObject):
         - 각 서비스는 start()가 중복 호출되어도 안전해야 함(우리가 만든 구조 기준)
         """
         try:
-            if hasattr(self.log, "start") and not self.log.is_running():
+            if hasattr(self.log, "start") and hasattr(self.log, "is_running"):
+                if not self.log.is_running():
+                    self.log.start()
+            elif hasattr(self.log, "start"):
                 self.log.start()
         except Exception:
-            # log가 죽으면 UI 로그로만이라도 남김
             pass
 
         try:
-            if hasattr(self.plc, "start") and not self.plc.is_running():
+            if hasattr(self.plc, "start") and hasattr(self.plc, "is_running"):
+                if not self.plc.is_running():
+                    self.plc.start()
+            elif hasattr(self.plc, "start"):
                 self.plc.start()
         except Exception as e:
             self._ui_warn(f"PLC 서비스 start 실패: {e!r}")
@@ -333,7 +297,6 @@ class ProcessController(QObject):
         if result.ok:
             self._ui_info(f"공정 완료: run_id={result.run_id}")
         else:
-            # STOP/ABORT/ERROR 모두 ok=False일 수 있음
             if result.error:
                 self._ui_warn(f"공정 종료(실패/중단): {result.error.where} | {result.error.message}")
             else:

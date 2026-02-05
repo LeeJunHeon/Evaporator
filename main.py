@@ -307,6 +307,9 @@ class ProcessWindow(QWidget):
 
         self.ui.hmiBtn.clicked.connect(self.goto_hmi_window)
 
+        self.ui.startProcess.clicked.connect(self._on_start_clicked)   
+        self.ui.stopProcess.clicked.connect(self._on_stop_clicked)   
+
         # ✅ UI에 버튼이 있는 경우에만 연결 (없으면 기존처럼 “아무 것도 안 함”)
         if hasattr(self.ui, "startProcess"):
             self.ui.startProcess.clicked.connect(self._on_start_clicked)
@@ -316,6 +319,27 @@ class ProcessWindow(QWidget):
             self.ui.pauseProcess.clicked.connect(self._on_pause_clicked)
         if hasattr(self.ui, "resumeProcess"):
             self.ui.resumeProcess.clicked.connect(self._on_resume_clicked)
+
+    def _on_start_clicked(self):
+        if not self.hmi_window or not getattr(self.hmi_window, "_dev_mgr", None):
+            return
+
+        dev_mgr = self.hmi_window._dev_mgr
+        ini_path = self.hmi_window._ini_path
+
+        # 최신 ini 기준으로 reload + connect
+        dev_errs = dev_mgr.reload_from_ini(ini_path, connect=True)
+
+        if dev_errs:
+            QMessageBox.warning(self, "Device Connect", "STM/ACS 연결 실패:\n" + "\n".join([f"{k}: {v}" for k, v in dev_errs.items()]))
+        else:
+            QMessageBox.information(self, "Device Connect", "STM/ACS 연결 성공")
+
+    def _on_stop_clicked(self):
+        if not self.hmi_window or not getattr(self.hmi_window, "_dev_mgr", None):
+            return
+        self.hmi_window._dev_mgr.close_all()
+        QMessageBox.information(self, "Device Disconnect", "STM/ACS 연결 종료")
 
     def set_hmi_window(self, hmi_window: HmiWindow):
         self.hmi_window = hmi_window

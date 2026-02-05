@@ -18,17 +18,19 @@ import platform
 import traceback
 from pathlib import Path
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union, TYPE_CHECKING
 
 import minimalmodbus
 
 
-# PLC settings loader (single source: config/devices.ini)
-# ✅ config/devices.ini -> PLCSettings 로드 (단일 소스)
+# ✅ 타입힌트는 TYPE_CHECKING에서만 import (Pylance/IDE용)
+if TYPE_CHECKING:
+    from config.plc_config import PLCSettings
+
+# ✅ 런타임은 loader만 필요
 try:
-    from config.plc_config import PLCSettings, load_plc_settings
+    from config.plc_config import load_plc_settings
 except Exception:
-    PLCSettings = None  # type: ignore
     load_plc_settings = None  # type: ignore
 
 
@@ -125,6 +127,8 @@ class PLCConfig:
 # 3) Async PLC
 # ======================================================
 
+
+class AsyncPLC:
     def __init__(
         self,
         port: Optional[str] = None,
@@ -147,7 +151,7 @@ class PLCConfig:
 
         # ✅ 단일 소스(ini/settings)
         settings: Optional["PLCSettings"] = None,
-        ini_path: Optional[str | Path] = None,
+        ini_path: Optional[Union[str, Path]] = None,
 
         # debug
         debug: bool = True,
@@ -164,19 +168,21 @@ class PLCConfig:
 
         # 1) settings 결정: 인자로 들어오면 그걸 쓰고, 아니면 devices.ini에서 로드
         base = settings
-        if base is None and load_plc_settings is not None:
+        if base is None:
+            if load_plc_settings is None:
+                raise RuntimeError("PLC settings loader import failed: config.plc_config.load_plc_settings")
+
             p = Path(ini_path) if ini_path is not None else _default_devices_ini_path()
             if p is None:
-                base = PLCSettings() if PLCSettings is not None else None  # ini 못 찾으면 plc_config의 기본값 사용
-            else:
+                raise RuntimeError("devices.ini not found (ini_path not provided and default path not found)")
+            try:
+                # plc_config.py가 ini_path를 필수로 받는 구조라서 Path/str 둘 다 대응
                 try:
-                    # plc_config.py가 ini_path를 필수로 받는 버전/선택인자 버전 둘 다 대응
-                    try:
-                        base = load_plc_settings(p)  # (개선된 버전이면 동작)
-                    except TypeError:
-                        base = load_plc_settings(str(p))  # (현재 업로드된 plc_config.py는 이 케이스)
-                except Exception:
-                    base = PLCSettings() if PLCSettings is not None else None
+                    base = load_plc_settings(p)          # 타입이 Path 허용하면 OK
+                except TypeError:
+                    base = load_plc_settings(str(p))     # 대부분 이 케이스
+            except Exception as e:
+                raise RuntimeError(f"load_plc_settings failed: {e!r}") from e
 
         if base is None:
             # 최후 fallback (이 경우는 프로젝트 구조가 깨진 경우라, 가능한 한 안 오게 해야 함)

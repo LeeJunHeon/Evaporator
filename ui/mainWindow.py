@@ -549,6 +549,13 @@ class Ui_Form(object):
         self.logWindow.setStyleSheet("background: white; border: 1px solid #d0d0d0;")
         self.processMonitor_HMI.setStyleSheet("background: white; border: 1px solid #d0d0d0;")
 
+        # ✅ 상태 표시용 라인에딧: 입력 불가(표시 전용)
+        for le in (self.processMonitor_HMI, self.processMonitor_Process):
+            le.setStyleSheet("background: white; border: 1px solid #d0d0d0;")
+            le.setReadOnly(True)
+            le.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            le.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
+
     def _style_indicator(self, w: QWidget, on: bool):
         bg = "#38d62f" if on else "#d82c2c"
         # 61x61 기준 radius 30

@@ -445,8 +445,8 @@ class Ui_Form(object):
         self.chamberLabel.setText(QCoreApplication.translate("Form", "Chamber", None))
 
         self.materialLabel.setText(QCoreApplication.translate("Form", "Material Name", None))
-        self.stopProcess.setText(QCoreApplication.translate("Form", "Start", None))
-        self.startProcess.setText(QCoreApplication.translate("Form", "Stop", None))
+        self.stopProcess.setText(QCoreApplication.translate("Form", "Stop", None))
+        self.startProcess.setText(QCoreApplication.translate("Form", "Start", None))
         self.thicknessLabel.setText(QCoreApplication.translate("Form", "Thickness", None))
         self.delayLabel.setText(QCoreApplication.translate("Form", "Delay", None))
         self.pwoerLabel.setText(QCoreApplication.translate("Form", "Power Ramp", None))

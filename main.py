@@ -241,7 +241,7 @@ class HmiWindow(QWidget):
                 self._acs_service.reload_from_ini(self._ini_path)
 
             if (self._stm_service is None or self._acs_service is None) and self._dev_mgr:
-                dev_errs = self._dev_mgr.reload_from_ini(self._ini_path, connect=True)
+                dev_errs = self._dev_mgr.reload_from_ini(self._ini_path, connect=False)
                 for k, v in dev_errs.items():
                     errors.append(f"{k}: {v}")
         except Exception as e:
@@ -250,7 +250,7 @@ class HmiWindow(QWidget):
         if errors:
             QMessageBox.warning(self, "Reconnect", "일부 장비 재연결 실패:\n" + "\n".join(errors))
         else:
-            QMessageBox.information(self, "Reconnect", "저장 완료 + 장비 재연결 성공")
+            QMessageBox.information(self, "Reconnect", "저장 완료 (PLC만 즉시 적용). STM/ACS는 Start에서 연결됩니다.")
 
     def _confirm_exit(self) -> bool:
         ret = QMessageBox.question(
@@ -494,11 +494,10 @@ def main():
 
     # fallback: 기존 DeviceManager 유지(현재 main.py의 흐름 그대로)
     if stm_service is None or acs_service is None:
+        # ✅ STM/ACS 매니저는 만들되, HMI 시작 시에는 연결하지 않음
+        #    (Start 버튼 눌렀을 때 연결)
         dev_mgr = DeviceManager.from_ini(ini_path)
-        dev_errors = dev_mgr.connect_all()
-        if dev_errors:
-            # 필요하면 QMessageBox로 알리도록 확장 가능
-            pass
+
         app.aboutToQuit.connect(dev_mgr.close_all)
 
     # ------------------------------

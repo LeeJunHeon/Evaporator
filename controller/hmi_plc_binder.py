@@ -18,6 +18,11 @@ HMI(UI) ↔ PLC(Modbus RTU / RS-232) 연결 바인더
   - 버튼이 눌리면 enqueue_write로 들어온 명령을 큐에서 꺼내 PLC에 write
 
 버튼은 "래치(toggle)"로 동작(ON/OFF 유지).
+
+[추가(중요)]
+- 공정(ProcessEngine)에서도 이 binder를 PLC 게이트웨이처럼 쓰기 위해
+  public API(is_connected/get_states/read_coil/enqueue_write/pulse_coil)를 추가했다.
+- 단, "팝업"은 UI 버튼 클릭 시에만 띄운다(공정 중 팝업 금지).
 """
 
 from __future__ import annotations
@@ -79,6 +84,7 @@ class PlcWorker(QThread):
                     self._cmd_q.put_nowait(("__STOP__", False, False))
                 except Exception:
                     pass
+
             try:
                 self._loop.call_soon_threadsafe(_poke)
             except Exception:
@@ -87,11 +93,16 @@ class PlcWorker(QThread):
     def enqueue_write(self, coil_name: str, on: bool, momentary: bool = False) -> None:
         """PLC에 write 요청(스레드 안전)."""
         if self._loop and self._cmd_q:
-            asyncio.run_coroutine_threadsafe(
-                self._cmd_q.put((coil_name, bool(on), bool(momentary))),
-                self._loop,
-            )
-            return
+            try:
+                # (기존 방식 유지) asyncio queue put을 loop에 안전하게 전달
+                asyncio.run_coroutine_threadsafe(
+                    self._cmd_q.put((coil_name, bool(on), bool(momentary))),
+                    self._loop,
+                )
+                return
+            except Exception:
+                # 아래 pending에 저장으로 fallback
+                pass
 
         # 워커가 아직 run()에 들어가기 전이면 보관
         with self._pending_lock:
@@ -107,9 +118,13 @@ class PlcWorker(QThread):
         self._cmd_q = asyncio.Queue()
 
         # start 전에 들어온 명령 flush
+        # - 여기(run)는 워커 스레드이므로, call_soon_threadsafe 대신 직접 put_nowait가 더 안전
         with self._pending_lock:
             for item in self._pending:
-                loop.call_soon_threadsafe(self._cmd_q.put_nowait, item)
+                try:
+                    self._cmd_q.put_nowait(item)
+                except Exception:
+                    pass
             self._pending.clear()
 
         try:
@@ -293,6 +308,8 @@ class HmiPlcBinder(QObject):
         self.ui = ui
         self.settings = settings
 
+        # thread-safe state (공정/다른 스레드에서 읽을 수 있음)
+        self._state_lock = threading.Lock()
         self._last_states: Dict[str, bool] = {}
         self._connected: bool = False
 
@@ -308,6 +325,39 @@ class HmiPlcBinder(QObject):
 
         self._wire_ui()
 
+    # ============================================================
+    # Public API (공정에서도 사용 가능)
+    # - 팝업은 절대 띄우지 않는다(공정 중 팝업 금지)
+    # ============================================================
+    def is_connected(self) -> bool:
+        with self._state_lock:
+            return bool(self._connected)
+
+    def get_states(self) -> Dict[str, bool]:
+        with self._state_lock:
+            return dict(self._last_states)
+
+    def read_coil(self, coil_name: str, default: bool = False) -> bool:
+        with self._state_lock:
+            return bool(self._last_states.get(str(coil_name), bool(default)))
+
+    def enqueue_write(self, coil_name: str, on: bool, momentary: bool = False) -> None:
+        """
+        공정/외부 코드에서 쓰는 write API.
+        - 연결이 안 되어 있으면 예외로 처리(공정 엔진이 판단하도록)
+        """
+        if not self.is_connected():
+            raise RuntimeError("PLC not connected")
+        if not self._worker:
+            raise RuntimeError("PLC worker not initialized")
+        self._worker.enqueue_write(str(coil_name), bool(on), momentary=bool(momentary))
+
+    def pulse_coil(self, coil_name: str) -> None:
+        self.enqueue_write(str(coil_name), True, momentary=True)
+
+    # ============================================================
+    # internal
+    # ============================================================
     def _reset_worker(self, settings: PLCSettings) -> None:
         if self._worker is not None:
             try:
@@ -340,7 +390,9 @@ class HmiPlcBinder(QObject):
         if not self._worker:
             return
         self._worker.stop()
-        self._worker.wait(2000)
+        # settings.timeout_s 반영해서 종료 대기(기존 기능 유지 + 안정성 개선)
+        wait_ms = int(max(2000, (float(self.settings.timeout_s) + 0.5) * 2000))
+        self._worker.wait(wait_ms)
 
     def _wire_ui(self) -> None:
         for b in self.BUTTONS:
@@ -357,45 +409,55 @@ class HmiPlcBinder(QObject):
         if all_stop is not None:
             all_stop.clicked.connect(self._on_all_stop_clicked)
 
+    def _get_state_locked(self, coil: str, default: bool = False) -> bool:
+        with self._state_lock:
+            return bool(self._last_states.get(coil, default))
+
     def _on_button_toggled(self, binding: ButtonBinding, on: bool) -> None:
-        if not self._connected:
+        # ✅ 기존 기능 유지: 미연결이면 팝업 + 버튼 원복
+        if not self.is_connected():
             self._popup_warn("PLC 미연결", "PLC가 연결되지 않아 명령을 전송할 수 없습니다.")
             self._revert_button_to_plc(binding, fallback=not bool(on))
             return
 
-        # Door 인터락
+        # Door 인터락(기존 유지)
         if binding.coil_name == "DOOR_SW":
             if self._is_door_busy():
                 self._popup_warn("인터락", "Door가 열리거나 닫히는 중입니다.\n완료 후 다시 시도하세요.")
                 self._revert_button_to_plc(binding, fallback=not bool(on))
                 return
 
-            if "MAIN_SHUTTER_SW" not in self._last_states:
+            # PLC 상태가 아직 없으면 차단(기존 유지)
+            if not self.get_states():
                 self._popup_warn("인터락", "PLC 상태를 아직 읽지 못했습니다.\n잠시 후 다시 시도하세요.")
                 self._revert_button_to_plc(binding, fallback=not bool(on))
                 return
 
-            if not bool(self._last_states.get("MAIN_SHUTTER_SW", False)):
+            # Main shutter가 닫혀있으면 door 금지(기존 유지)
+            if not self._get_state_locked("MAIN_SHUTTER_SW", False):
                 self._popup_warn("인터락", "Main Shutter가 닫혀 있습니다.\nMain Shutter를 먼저 열어주세요.")
                 self._revert_button_to_plc(binding, fallback=not bool(on))
                 return
 
+            # ✅ write는 worker로 (기존과 동일하게 래치)
             self._worker.enqueue_write("DOOR_SW", bool(on), momentary=False)
             self._begin_door_busy()
             self._set_hmi_status(f"DOOR_SW <- {int(bool(on))} (moving)")
             return
 
-        # Main shutter 인터락(door 이동중 닫기 금지)
+        # Main shutter 인터락(door 이동중 닫기 금지) - 기존 유지
         if binding.coil_name == "MAIN_SHUTTER_SW":
             if self._is_door_busy() and (not bool(on)):
                 self._popup_warn("인터락", "Door가 열리거나 닫히는 중에는\nMain Shutter를 닫을 수 없습니다.")
                 self._revert_button_to_plc(binding, fallback=True)
                 return
 
+        # ✅ 기존 기능 유지: 일반 토글은 바로 write
         self._worker.enqueue_write(binding.coil_name, bool(on), momentary=binding.momentary)
         self._set_hmi_status(f"{binding.coil_name} <- {int(bool(on))}")
 
     def _on_all_stop_clicked(self) -> None:
+        # 기존 동작 유지(연결 체크/팝업 추가하지 않음)
         self._set_hmi_status("ALL STOP: set all HMI coils OFF")
         if not self._worker:
             return
@@ -404,7 +466,10 @@ class HmiPlcBinder(QObject):
 
     def _apply_states(self, states_obj: object) -> None:
         states: Dict[str, bool] = dict(states_obj or {})
-        self._last_states = states
+
+        # thread-safe 저장
+        with self._state_lock:
+            self._last_states = states
 
         # indicators
         try:
@@ -414,7 +479,7 @@ class HmiPlcBinder(QObject):
         except Exception:
             pass
 
-        # buttons
+        # buttons (PLC 상태로 UI를 "정답"으로 동기화)
         for b in self.BUTTONS:
             w = getattr(self.ui, b.widget_name, None)
             if w is None:
@@ -427,13 +492,14 @@ class HmiPlcBinder(QObject):
                 pass
 
     def _on_connected(self, ok: bool) -> None:
-        prev = self._connected
-        self._connected = bool(ok)
+        with self._state_lock:
+            prev = self._connected
+            self._connected = bool(ok)
 
-        status = "PLC CONNECTED" if self._connected else "PLC DISCONNECTED"
+        status = "PLC CONNECTED" if self.is_connected() else "PLC DISCONNECTED"
         self._set_hmi_status(status)
 
-        if prev != self._connected:
+        if prev != self.is_connected():
             self._set_hmi_log(status)
 
     def _on_error(self, msg: str) -> None:
@@ -459,10 +525,12 @@ class HmiPlcBinder(QObject):
         if w is None:
             return
 
-        if binding.coil_name in self._last_states:
-            target = bool(self._last_states.get(binding.coil_name, False))
-        else:
-            target = bool(fallback) if fallback is not None else False
+        # PLC에 이미 상태가 있으면 그 상태로, 없으면 fallback로 원복
+        with self._state_lock:
+            if binding.coil_name in self._last_states:
+                target = bool(self._last_states.get(binding.coil_name, False))
+            else:
+                target = bool(fallback) if fallback is not None else False
 
         try:
             with QSignalBlocker(w):

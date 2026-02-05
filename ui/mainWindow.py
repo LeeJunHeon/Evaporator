@@ -345,11 +345,11 @@ class Ui_Form(object):
 
         self.stopProcess = QPushButton(self.page_2)
         self.stopProcess.setObjectName("stopProcess")
-        self.stopProcess.setGeometry(QRect(0, 550, 91, 71))
+        self.stopProcess.setGeometry(QRect(100, 550, 91, 71))  # ✅ 오른쪽으로 이동
 
         self.startProcess = QPushButton(self.page_2)
         self.startProcess.setObjectName("startProcess")
-        self.startProcess.setGeometry(QRect(100, 550, 91, 71))
+        self.startProcess.setGeometry(QRect(0, 550, 91, 71))    # ✅ 왼쪽으로 이동
 
         self.logWindow = QPlainTextEdit(self.page_2)
         self.logWindow.setObjectName("logWindow")

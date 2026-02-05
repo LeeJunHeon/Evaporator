@@ -16,10 +16,38 @@ import time
 import sys
 import platform
 import traceback
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 import minimalmodbus
+
+
+# PLC settings loader (single source: config/devices.ini)
+# ✅ config/devices.ini -> PLCSettings 로드 (단일 소스)
+try:
+    from config.plc_config import PLCSettings, load_plc_settings
+except Exception:
+    PLCSettings = None  # type: ignore
+    load_plc_settings = None  # type: ignore
+
+
+def _default_devices_ini_path() -> Optional[Path]:
+    """
+    devices/plc.py 기준으로 project_root/config/devices.ini 를 찾는다.
+    (실행 위치가 달라도 최대한 찾도록 후보를 여러 개 둠)
+    """
+    here = Path(__file__).resolve()
+    candidates = [
+        here.parents[1] / "config" / "devices.ini",  # project_root/config/devices.ini (권장)
+        here.parent / "devices.ini",
+        Path.cwd() / "config" / "devices.ini",
+        Path.cwd() / "devices.ini",
+    ]
+    for p in candidates:
+        if p.exists():
+            return p
+    return None
 
 
 # ======================================================
@@ -61,70 +89,65 @@ PLC_REG_MAP: Dict[str, int] = {
 # 2) 설정
 # ======================================================
 
+
 @dataclass
 class PLCConfig:
-    # Serial / Modbus-RTU
-    port: str = "COM5"
-    method: str = "rtu"        # (ini 호환용) minimalmodbus는 RTU만 사용
-    baudrate: int = 9600
-    bytesize: int = 8
-    parity: str = "N"
-    stopbits: int = 1
-    unit: int = 1
-    timeout_s: float = 2.0
+    # ✅ Serial / Modbus-RTU (기본값 없음: settings/ini에서 반드시 주입)
+    port: str
+    method: str
+    baudrate: int
+    bytesize: int
+    parity: str
+    stopbits: int
+    unit: int
+    timeout_s: float
 
     # 요청 간격
-    inter_cmd_gap_s: float = 0.05
+    inter_cmd_gap_s: float
+    pulse_ms: int
 
-    # momentary(pulse) 사용 시 펄스폭(ms)
-    pulse_ms: int = 180
+    # DAC
+    dac_full_scale_code: int
+    dac_offset_code: int
+    dac_current_min_ma: float
+    dac_current_max_ma: float
 
-    # ===== DAC (4~20mA 전용) =====
-    dac_full_scale_code: int = 4000
-    dac_offset_code: int = 0
-    dac_current_min_ma: float = 4.0
-    dac_current_max_ma: float = 20.0
-
-    # ===== DEBUG =====
-    debug: bool = True                 # 전체 디버그 로그 ON/OFF
-    debug_stacktrace: bool = True      # 예외 시 traceback까지 출력
-    debug_io_timing: bool = True       # I/O 수행시간(ms) 출력
-    debug_config_dump: bool = True     # connect 시 config dump
-    debug_ping_detail: bool = True     # ping 내부 시도 상세
-    debug_unit_candidates: Tuple[int, ...] = ()  # 비우면 (cfg.unit, 1)만 사용. 채우면 추가로 시도
+    # ===== DEBUG ===== (디버그는 코드 기본값 유지해도 됨)
+    debug: bool = True
+    debug_stacktrace: bool = True
+    debug_io_timing: bool = True
+    debug_config_dump: bool = True
+    debug_ping_detail: bool = True
+    debug_unit_candidates: Tuple[int, ...] = ()
 
 
 # ======================================================
 # 3) Async PLC
 # ======================================================
 
-class AsyncPLC:
-    """
-    minimalmodbus.Instrument 를 asyncio에서 안전하게 쓰기 위한 래퍼.
-    - 모든 I/O는 단일 asyncio.Lock으로 직렬화
-    - 실제 serial I/O는 asyncio.to_thread(...) 로 실행
-    - 예외가 나면 포트를 닫고 다음 호출에서 재연결
-    """
-
     def __init__(
         self,
-        port: str = "COM5",
+        port: Optional[str] = None,
         *,
-        method: str = "rtu",
-        baudrate: int = 9600,
-        bytesize: int = 8,
-        parity: Any = "N",
-        stopbits: int = 1,
-        unit: int = 1,
-        timeout_s: float = 2.0,
-        pulse_ms: int = 180,
-        inter_cmd_gap_s: float = 0.05,
+        method: Optional[str] = None,
+        baudrate: Optional[int] = None,
+        bytesize: Optional[int] = None,
+        parity: Any = None,
+        stopbits: Optional[int] = None,
+        unit: Optional[int] = None,
+        timeout_s: Optional[float] = None,
+        pulse_ms: Optional[int] = None,
+        inter_cmd_gap_s: Optional[float] = None,
 
         # DAC
-        dac_full_scale_code: int = 4000,
-        dac_offset_code: int = 0,
-        dac_current_min_ma: float = 4.0,
-        dac_current_max_ma: float = 20.0,
+        dac_full_scale_code: Optional[int] = None,
+        dac_offset_code: Optional[int] = None,
+        dac_current_min_ma: Optional[float] = None,
+        dac_current_max_ma: Optional[float] = None,
+
+        # ✅ 단일 소스(ini/settings)
+        settings: Optional["PLCSettings"] = None,
+        ini_path: Optional[str | Path] = None,
 
         # debug
         debug: bool = True,
@@ -136,27 +159,71 @@ class AsyncPLC:
 
         logger=None,
     ) -> None:
+        
         self.log = logger or (lambda *a, **k: None)
 
-        p_norm = self._normalize_parity(parity)
+        # 1) settings 결정: 인자로 들어오면 그걸 쓰고, 아니면 devices.ini에서 로드
+        base = settings
+        if base is None and load_plc_settings is not None:
+            p = Path(ini_path) if ini_path is not None else _default_devices_ini_path()
+            if p is None:
+                base = PLCSettings() if PLCSettings is not None else None  # ini 못 찾으면 plc_config의 기본값 사용
+            else:
+                try:
+                    # plc_config.py가 ini_path를 필수로 받는 버전/선택인자 버전 둘 다 대응
+                    try:
+                        base = load_plc_settings(p)  # (개선된 버전이면 동작)
+                    except TypeError:
+                        base = load_plc_settings(str(p))  # (현재 업로드된 plc_config.py는 이 케이스)
+                except Exception:
+                    base = PLCSettings() if PLCSettings is not None else None
+
+        if base is None:
+            # 최후 fallback (이 경우는 프로젝트 구조가 깨진 경우라, 가능한 한 안 오게 해야 함)
+            raise RuntimeError("PLC settings load failed: plc_config.py import/load_plc_settings unavailable")
+
+        # 2) merge: 명시 인자 > settings(ini) 우선순위
+        port_v = str(port if port is not None else base.port)
+        method_v = str(method if method is not None else getattr(base, "method", "rtu")).lower()
+
+        baud_v = int(baudrate if baudrate is not None else base.baudrate)
+        bytesize_v = int(bytesize if bytesize is not None else base.bytesize)
+
+        parity_raw = parity if parity is not None else getattr(base, "parity", "N")
+        parity_v = self._normalize_parity(parity_raw)
+
+        stop_v = int(stopbits if stopbits is not None else base.stopbits)
+
+        unit_v = int(unit if unit is not None else getattr(base, "unit", 1))
+        if unit_v <= 0:
+            unit_v = 1  # ✅ 브로드캐스트 방지
+
+        timeout_v = float(timeout_s if timeout_s is not None else base.timeout_s)
+        pulse_v = int(pulse_ms if pulse_ms is not None else getattr(base, "pulse_ms", 180))
+
+        # inter_cmd_gap_s는 plc_config.py에 추가했을 수도/아직 없을 수도 → getattr fallback
+        gap_v = float(inter_cmd_gap_s if inter_cmd_gap_s is not None else getattr(base, "inter_cmd_gap_s", 0.05))
+
+        dac_fs_v = int(dac_full_scale_code if dac_full_scale_code is not None else getattr(base, "dac_full_scale_code", 4000))
+        dac_off_v = int(dac_offset_code if dac_offset_code is not None else getattr(base, "dac_offset_code", 0))
+        dac_min_v = float(dac_current_min_ma if dac_current_min_ma is not None else getattr(base, "dac_current_min_ma", 4.0))
+        dac_max_v = float(dac_current_max_ma if dac_current_max_ma is not None else getattr(base, "dac_current_max_ma", 20.0))
 
         self.cfg = PLCConfig(
-            port=str(port),
-            method=str(method),
-            baudrate=int(baudrate),
-            bytesize=int(bytesize),
-            parity=p_norm,
-            stopbits=int(stopbits),
-            unit=int(unit),
-            timeout_s=float(timeout_s),
-            pulse_ms=int(pulse_ms),
-            inter_cmd_gap_s=float(inter_cmd_gap_s),
-
-            dac_full_scale_code=int(dac_full_scale_code),
-            dac_offset_code=int(dac_offset_code),
-            dac_current_min_ma=float(dac_current_min_ma),
-            dac_current_max_ma=float(dac_current_max_ma),
-
+            port=port_v,
+            method=method_v,
+            baudrate=baud_v,
+            bytesize=bytesize_v,
+            parity=parity_v,
+            stopbits=stop_v,
+            unit=unit_v,
+            timeout_s=timeout_v,
+            inter_cmd_gap_s=gap_v,
+            pulse_ms=pulse_v,
+            dac_full_scale_code=dac_fs_v,
+            dac_offset_code=dac_off_v,
+            dac_current_min_ma=dac_min_v,
+            dac_current_max_ma=dac_max_v,
             debug=bool(debug),
             debug_stacktrace=bool(debug_stacktrace),
             debug_io_timing=bool(debug_io_timing),
@@ -169,8 +236,8 @@ class AsyncPLC:
         self._lock = asyncio.Lock()
         self._closed = False
         self._last_io_ts = 0.0
-
         self._SYNONYMS: Dict[str, str] = self._build_synonyms()
+
 
     # ======================================================
     # logging helpers (logger 형태가 다양해도 최대한 깨지지 않게)

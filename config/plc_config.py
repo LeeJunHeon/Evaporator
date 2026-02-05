@@ -1,111 +1,90 @@
-# -*- coding: utf-8 -*-
-"""plc_config.py
-
-Evaporator 프로젝트용 PLC(Modbus-TCP) 설정 로더.
-
-목표
- - config/devices.ini 에서 PLC 접속정보를 읽는다.
- - 섹션이 없거나 값이 비어있어도, 프로그램이 "바로 죽지" 않게 기본값으로 동작한다.
-   (처음 장비 세팅 전 UI 개발 단계에서 특히 유용)
-
-추후 확장
- - 사용자가 UI의 Config 창에서 값을 수정하고 ini로 저장하는 기능을 추가할 때
-   여기 파일의 dataclass 구조를 그대로 재사용하면 된다.
-"""
-
-from __future__ import annotations
-
+# plc_config.py
 from dataclasses import dataclass
 from configparser import ConfigParser
 from pathlib import Path
+from typing import Optional
 
+def _default_ini_path() -> Path:
+    # <project_root>/config/devices.ini
+    return Path(__file__).resolve().parent / "devices.ini"
+
+def _normalize_parity(parity: str) -> str:
+    p = str(parity).strip().upper()
+    if p in ("", "NONE", "NO", "N", "0"):
+        return "N"
+    if p in ("EVEN", "E", "2"):
+        return "E"
+    if p in ("ODD", "O", "1"):
+        return "O"
+    if p in ("MARK", "M"):
+        return "M"
+    if p in ("SPACE", "S"):
+        return "S"
+    return "N"
+
+def _normalize_unit(unit: int) -> int:
+    # Modbus RTU에서 0은 브로드캐스트(읽기 응답 없음 가능) → 운용 안정상 1로 보정
+    u = int(unit)
+    return 1 if u <= 0 else u
 
 @dataclass(frozen=True)
 class PLCSettings:
-    # Modbus-RTU (RS-232)
-    port: str = "COM5"
+    # ✅ 기본값은 devices.ini 템플릿과 동일하게
+    port: str = "COM8"
     method: str = "rtu"
-    baudrate: int = 9600
+    baudrate: int = 115200
     bytesize: int = 8
     parity: str = "N"
     stopbits: int = 1
     unit: int = 1
 
-    # Door 열림/닫힘(기구 이동) 시간(초) — UI 인터락 기준
+    timeout_s: float = 0.5
+    poll_interval_s: float = 1.0
+    reconnect_interval_s: float = 0.6
+
+    # ✅ plc.py에 있던 값도 ini로 올려서 단일 소스화
+    inter_cmd_gap_s: float = 0.05
+
+    pulse_ms: int = 180
     door_move_time_s: float = 10.0
 
-    # 타임아웃/주기
-    timeout_s: float = 2.0
-    poll_interval_s: float = 0.25
-    reconnect_interval_s: float = 1.0
-
-    # momentary(pulse) 동작 시 펄스폭(ms) — 현재는 HMI를 래치로 쓰므로 기본값만 둠
-    pulse_ms: int = 180
-
-    # ✅ DAC (4~20mA 전용)
+    # DAC (4~20mA)
     dac_full_scale_code: int = 4000
     dac_offset_code: int = 0
     dac_current_min_ma: float = 4.0
     dac_current_max_ma: float = 20.0
 
-
-def _get_str(cfg: ConfigParser, section: str, key: str, default: str) -> str:
-    if cfg.has_option(section, key):
-        return cfg.get(section, key).strip()
-    return default
-
-
-def _get_int(cfg: ConfigParser, section: str, key: str, default: int) -> int:
-    if cfg.has_option(section, key):
-        return cfg.getint(section, key)
-    return default
-
-
-def _get_float(cfg: ConfigParser, section: str, key: str, default: float) -> float:
-    if cfg.has_option(section, key):
-        return cfg.getfloat(section, key)
-    return default
-
-
-def load_plc_settings(ini_path: str | Path, section: str = "plc") -> PLCSettings:
-    """devices.ini 에서 PLC 설정을 읽는다.
-
-    - [plc] 섹션이 없으면 기본값(PLCSettings 기본값)으로 반환
-    - ip가 비어있어도 기본값 사용
-    """
-    ini_path = Path(ini_path)
-    if not ini_path.exists():
-        # ini 자체가 없으면 개발 단계에서는 기본값으로라도 뜨게
+def load_plc_settings(ini_path: Optional[str | Path] = None, section: str = "plc") -> PLCSettings:
+    path = Path(ini_path) if ini_path is not None else _default_ini_path()
+    if not path.exists():
         return PLCSettings()
 
     cfg = ConfigParser()
-    cfg.read(ini_path, encoding="utf-8")
-
+    cfg.read(path, encoding="utf-8")
     if not cfg.has_section(section):
         return PLCSettings()
 
-    port = _get_str(cfg, section, "port", PLCSettings.port) or PLCSettings.port
-    method = (_get_str(cfg, section, "method", PLCSettings.method) or PLCSettings.method).lower()
-    parity = (_get_str(cfg, section, "parity", PLCSettings.parity) or PLCSettings.parity).upper()
+    # (생략) _get_str/_get_int/_get_float는 기존 그대로 사용 가능
+
+    parity = _normalize_parity(cfg.get(section, "parity", fallback=PLCSettings.parity))
+    unit = _normalize_unit(cfg.getint(section, "unit", fallback=PLCSettings.unit))
 
     return PLCSettings(
-        port=port,
-        method=method,
-        baudrate=_get_int(cfg, section, "baudrate", PLCSettings.baudrate),
-        bytesize=_get_int(cfg, section, "bytesize", PLCSettings.bytesize),
+        port=cfg.get(section, "port", fallback=PLCSettings.port).strip() or PLCSettings.port,
+        method=cfg.get(section, "method", fallback=PLCSettings.method).strip().lower() or PLCSettings.method,
+        baudrate=cfg.getint(section, "baudrate", fallback=PLCSettings.baudrate),
+        bytesize=cfg.getint(section, "bytesize", fallback=PLCSettings.bytesize),
         parity=parity,
-        stopbits=_get_int(cfg, section, "stopbits", PLCSettings.stopbits),
-        unit=_get_int(cfg, section, "unit", PLCSettings.unit),
-        timeout_s=_get_float(cfg, section, "timeout_s", PLCSettings.timeout_s),
-        poll_interval_s=_get_float(cfg, section, "poll_interval_s", PLCSettings.poll_interval_s),
-        reconnect_interval_s=_get_float(cfg, section, "reconnect_interval_s", PLCSettings.reconnect_interval_s),
-        pulse_ms=_get_int(cfg, section, "pulse_ms", PLCSettings.pulse_ms),
-        door_move_time_s=_get_float(cfg, section, "door_move_time_s", PLCSettings.door_move_time_s),
-
-        # ✅ DAC (4~20mA)
-        dac_full_scale_code=_get_int(cfg, section, "dac_full_scale_code", PLCSettings.dac_full_scale_code),
-        dac_offset_code=_get_int(cfg, section, "dac_offset_code", PLCSettings.dac_offset_code),
-        dac_current_min_ma=_get_float(cfg, section, "dac_current_min_ma", PLCSettings.dac_current_min_ma),
-        dac_current_max_ma=_get_float(cfg, section, "dac_current_max_ma", PLCSettings.dac_current_max_ma),
+        stopbits=cfg.getint(section, "stopbits", fallback=PLCSettings.stopbits),
+        unit=unit,
+        timeout_s=cfg.getfloat(section, "timeout_s", fallback=PLCSettings.timeout_s),
+        poll_interval_s=cfg.getfloat(section, "poll_interval_s", fallback=PLCSettings.poll_interval_s),
+        reconnect_interval_s=cfg.getfloat(section, "reconnect_interval_s", fallback=PLCSettings.reconnect_interval_s),
+        inter_cmd_gap_s=cfg.getfloat(section, "inter_cmd_gap_s", fallback=PLCSettings.inter_cmd_gap_s),
+        pulse_ms=cfg.getint(section, "pulse_ms", fallback=PLCSettings.pulse_ms),
+        door_move_time_s=cfg.getfloat(section, "door_move_time_s", fallback=PLCSettings.door_move_time_s),
+        dac_full_scale_code=cfg.getint(section, "dac_full_scale_code", fallback=PLCSettings.dac_full_scale_code),
+        dac_offset_code=cfg.getint(section, "dac_offset_code", fallback=PLCSettings.dac_offset_code),
+        dac_current_min_ma=cfg.getfloat(section, "dac_current_min_ma", fallback=PLCSettings.dac_current_min_ma),
+        dac_current_max_ma=cfg.getfloat(section, "dac_current_max_ma", fallback=PLCSettings.dac_current_max_ma),
     )
-

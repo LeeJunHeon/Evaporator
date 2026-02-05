@@ -4,23 +4,20 @@ devices/plc.py
 
 Evaporator PLC 컨트롤러 (Modbus RTU over RS-232) - Async Wrapper
 
-핵심 목표
-- UI/공정 스레드가 멈추지 않게: asyncio + to_thread + 단일 락으로 직렬화
-- Modbus-RTU는 minimalmodbus(= 내부적으로 pyserial 사용)로 처리
-- 주소맵(Mxxxx, Dxxxx) 기반으로 COIL / HOLDING REGISTER 접근 제공
-- HMI/공정 코드에서 호출하던 고수준 API(rp(), rv(), vv(), set_dac_current() 등)는 유지
-
-주의
-- LS(XG5000) PLC의 M 디바이스는 16진 주소를 쓰는 경우가 많습니다.
-  예) M0000B = 0x0B = 11, M00020 = 0x20 = 32
+[DEBUG 강화 버전]
+- 연결이 왜 안 되는지 찾기 위해, connect/ping/IO 전 과정에 최대한 많은 로그를 남깁니다.
+- logger는 기존과 동일하게 외부에서 주입(예: logging.Logger.info 같은 함수) 가능.
 """
 
 from __future__ import annotations
 
 import asyncio
 import time
+import sys
+import platform
+import traceback
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import minimalmodbus
 
@@ -68,7 +65,7 @@ PLC_REG_MAP: Dict[str, int] = {
 class PLCConfig:
     # Serial / Modbus-RTU
     port: str = "COM5"
-    method: str = "rtu"        # ✅ ini 호환용(실제로는 minimalmodbus가 RTU만 지원)
+    method: str = "rtu"        # (ini 호환용) minimalmodbus는 RTU만 사용
     baudrate: int = 9600
     bytesize: int = 8
     parity: str = "N"
@@ -76,7 +73,7 @@ class PLCConfig:
     unit: int = 1
     timeout_s: float = 2.0
 
-    # 요청 간격(너무 빠르면 PLC가 응답을 놓치거나 프레임이 꼬일 수 있음)
+    # 요청 간격
     inter_cmd_gap_s: float = 0.05
 
     # momentary(pulse) 사용 시 펄스폭(ms)
@@ -88,6 +85,14 @@ class PLCConfig:
     dac_current_min_ma: float = 4.0
     dac_current_max_ma: float = 20.0
 
+    # ===== DEBUG =====
+    debug: bool = True                 # 전체 디버그 로그 ON/OFF
+    debug_stacktrace: bool = True      # 예외 시 traceback까지 출력
+    debug_io_timing: bool = True       # I/O 수행시간(ms) 출력
+    debug_config_dump: bool = True     # connect 시 config dump
+    debug_ping_detail: bool = True     # ping 내부 시도 상세
+    debug_unit_candidates: Tuple[int, ...] = ()  # 비우면 (cfg.unit, 1)만 사용. 채우면 추가로 시도
+
 
 # ======================================================
 # 3) Async PLC
@@ -96,21 +101,19 @@ class PLCConfig:
 class AsyncPLC:
     """
     minimalmodbus.Instrument 를 asyncio에서 안전하게 쓰기 위한 래퍼.
-
-    - 모든 I/O는 단일 asyncio.Lock으로 직렬화(폴링/버튼 동시 접근 방지)
+    - 모든 I/O는 단일 asyncio.Lock으로 직렬화
     - 실제 serial I/O는 asyncio.to_thread(...) 로 실행
-    - 예외가 나면 포트를 닫아두고, 다음 호출에서 재연결되도록 설계
+    - 예외가 나면 포트를 닫고 다음 호출에서 재연결
     """
 
     def __init__(
         self,
         port: str = "COM5",
         *,
-        # ✅ 기존 코드/ini 호출부와의 호환을 위해 method는 받되, 내부에서는 사용하지 않습니다.
         method: str = "rtu",
         baudrate: int = 9600,
         bytesize: int = 8,
-        parity: str = "N",
+        parity: Any = "N",
         stopbits: int = 1,
         unit: int = 1,
         timeout_s: float = 2.0,
@@ -123,14 +126,26 @@ class AsyncPLC:
         dac_current_min_ma: float = 4.0,
         dac_current_max_ma: float = 20.0,
 
+        # debug
+        debug: bool = True,
+        debug_stacktrace: bool = True,
+        debug_io_timing: bool = True,
+        debug_config_dump: bool = True,
+        debug_ping_detail: bool = True,
+        debug_unit_candidates: Tuple[int, ...] = (),
+
         logger=None,
     ) -> None:
+        self.log = logger or (lambda *a, **k: None)
+
+        p_norm = self._normalize_parity(parity)
+
         self.cfg = PLCConfig(
             port=str(port),
             method=str(method),
             baudrate=int(baudrate),
             bytesize=int(bytesize),
-            parity=str(parity).upper(),
+            parity=p_norm,
             stopbits=int(stopbits),
             unit=int(unit),
             timeout_s=float(timeout_s),
@@ -141,9 +156,14 @@ class AsyncPLC:
             dac_offset_code=int(dac_offset_code),
             dac_current_min_ma=float(dac_current_min_ma),
             dac_current_max_ma=float(dac_current_max_ma),
-        )
 
-        self.log = logger or (lambda *a, **k: None)
+            debug=bool(debug),
+            debug_stacktrace=bool(debug_stacktrace),
+            debug_io_timing=bool(debug_io_timing),
+            debug_config_dump=bool(debug_config_dump),
+            debug_ping_detail=bool(debug_ping_detail),
+            debug_unit_candidates=tuple(int(x) for x in (debug_unit_candidates or ())),
+        )
 
         self._inst: Optional[minimalmodbus.Instrument] = None
         self._lock = asyncio.Lock()
@@ -152,31 +172,88 @@ class AsyncPLC:
 
         self._SYNONYMS: Dict[str, str] = self._build_synonyms()
 
-    # --------------------------
+    # ======================================================
+    # logging helpers (logger 형태가 다양해도 최대한 깨지지 않게)
+    # ======================================================
+
+    def _emit(self, prefix: str, msg: str, *args) -> None:
+        if not self.cfg.debug and prefix.startswith("[DBG"):
+            return
+        line = f"[PLC]{prefix} {msg}"
+        try:
+            # logging.Logger.info 스타일(printf) 지원
+            self.log(line, *args)
+        except TypeError:
+            # 단일 문자열만 받는 logger도 지원
+            try:
+                self.log(line % args if args else line)
+            except Exception:
+                pass
+        except Exception:
+            # logger 자체가 문제여도 PLC 로직은 계속
+            pass
+
+    def _dbg(self, msg: str, *args) -> None:
+        self._emit("[DBG]", msg, *args)
+
+    def _inf(self, msg: str, *args) -> None:
+        self._emit("[INF]", msg, *args)
+
+    def _wrn(self, msg: str, *args) -> None:
+        self._emit("[WRN]", msg, *args)
+
+    def _err(self, msg: str, *args) -> None:
+        self._emit("[ERR]", msg, *args)
+
+    def _exc_text(self) -> str:
+        if not self.cfg.debug_stacktrace:
+            return ""
+        return traceback.format_exc()
+
+    # ======================================================
     # lifecycle
-    # --------------------------
+    # ======================================================
+
     async def connect(self) -> None:
         """포트를 열고 기본 통신(ping)이 되는지 확인."""
         self._closed = False
-        async with self._lock:
-            await asyncio.to_thread(self._connect_sync)
 
-        self.log(
-            "PLC connected: port=%s baud=%s 8%s%s (unit=%s, timeout=%.2fs)",
+        if self.cfg.debug_config_dump:
+            self._dump_env()
+            self._dump_cfg("connect() called")
+
+        async with self._lock:
+            t0 = time.monotonic()
+            try:
+                await asyncio.to_thread(self._connect_sync)
+            except Exception as e:
+                self._err("connect FAILED: %r", e)
+                et = self._exc_text()
+                if et:
+                    self._err("traceback:\n%s", et)
+                raise
+            finally:
+                if self.cfg.debug_io_timing:
+                    self._dbg("connect() total=%.1f ms", (time.monotonic() - t0) * 1000.0)
+
+        self._inf(
+            "PLC connected OK: port=%s baud=%s bytesize=%s parity=%s stopbits=%s unit=%s timeout=%.3fs",
             self.cfg.port,
             self.cfg.baudrate,
+            self.cfg.bytesize,
             self.cfg.parity,
             self.cfg.stopbits,
             self.cfg.unit,
             self.cfg.timeout_s,
         )
+        self._dump_serial_state("after connect")
 
     async def close(self) -> None:
         """포트 닫기."""
         self._closed = True
         async with self._lock:
             await asyncio.to_thread(self._close_sync)
-        self.log("PLC closed")
+        self._inf("PLC closed")
 
     def is_connected(self) -> bool:
         try:
@@ -185,30 +262,72 @@ class AsyncPLC:
             return False
 
     async def ping(self) -> None:
-        """연결 확인용(응답성 체크). connect 직후/재연결 직후에 호출하기 좋음."""
+        """연결 확인용(응답성 체크)."""
         async with self._lock:
-            await asyncio.to_thread(self._connect_sync)
-            await self._throttle_locked()
-            await asyncio.to_thread(self._ping_sync)
-            self._touch_io_ts()
+            t0 = time.monotonic()
+            try:
+                await asyncio.to_thread(self._connect_sync)
+                await self._throttle_locked(op="ping")
+                await asyncio.to_thread(self._ping_sync)
+                self._touch_io_ts()
+                self._inf("PING OK")
+            except Exception as e:
+                self._err("PING FAILED: %r", e)
+                et = self._exc_text()
+                if et:
+                    self._err("traceback:\n%s", et)
+                await asyncio.to_thread(self._close_sync)
+                raise
+            finally:
+                if self.cfg.debug_io_timing:
+                    self._dbg("ping() total=%.1f ms", (time.monotonic() - t0) * 1000.0)
 
-    # --------------------------
-    # internal: connect/close
-    # --------------------------
+    # ======================================================
+    # internal: normalize / connect / close
+    # ======================================================
+
+    @staticmethod
+    def _normalize_parity(parity: Any) -> str:
+        """
+        parity가 None/'None'/'NONE' 같은 형태로 들어오면 실제 시리얼 parity가 깨질 수 있으므로
+        무조건 pyserial이 기대하는 1글자 형태로 정규화.
+        """
+        if parity is None:
+            return "N"
+        p = str(parity).strip().upper()
+        if p in ("", "NONE", "NO", "N", "0"):
+            return "N"
+        if p in ("EVEN", "E", "2"):
+            return "E"
+        if p in ("ODD", "O", "1"):
+            return "O"
+        if p in ("MARK", "M"):
+            return "M"
+        if p in ("SPACE", "S"):
+            return "S"
+        return "N"
+
     @staticmethod
     def _normalize_port(port: str) -> str:
-        # Windows에서 COM10 이상은 "\\\\.\\COM10" 형태가 안전합니다.
+        """
+        Windows에서 COM10 이상은 '\\\\.\\COM10' 형태가 안전합니다.
+        COM9 이하도 그대로 써도 되지만, 일관성 위해 COM10+만 보정.
+        """
         p = str(port).strip()
         if p.upper().startswith("COM") and len(p) > 4:
-            return r"\\.\\" + p
+            return f"\\\\.\\{p}"
         return p
 
     def _new_instrument(self, unit: int) -> minimalmodbus.Instrument:
-        inst = minimalmodbus.Instrument(self._normalize_port(self.cfg.port), int(unit))
+        port_norm = self._normalize_port(self.cfg.port)
+        self._dbg("create Instrument: port(raw)=%r port(norm)=%r unit=%s", self.cfg.port, port_norm, unit)
+
+        inst = minimalmodbus.Instrument(port_norm, int(unit))
+
         # Serial 기본 설정
         inst.serial.baudrate = int(self.cfg.baudrate)
         inst.serial.bytesize = int(self.cfg.bytesize)
-        inst.serial.parity = str(self.cfg.parity)
+        inst.serial.parity = str(self.cfg.parity)  # 이미 1글자 정규화됨
         inst.serial.stopbits = int(self.cfg.stopbits)
         inst.serial.timeout = float(self.cfg.timeout_s)
         inst.serial.write_timeout = float(self.cfg.timeout_s)
@@ -221,6 +340,16 @@ class AsyncPLC:
         inst.mode = minimalmodbus.MODE_RTU
         inst.clear_buffers_before_each_transaction = True
         inst.close_port_after_each_call = False
+
+        self._dbg(
+            "serial cfg applied: baud=%s bytesize=%s parity=%r stopbits=%s timeout=%.3f write_timeout=%.3f",
+            inst.serial.baudrate,
+            inst.serial.bytesize,
+            inst.serial.parity,
+            inst.serial.stopbits,
+            inst.serial.timeout,
+            getattr(inst.serial, "write_timeout", None),
+        )
         return inst
 
     def _connect_sync(self) -> None:
@@ -229,24 +358,40 @@ class AsyncPLC:
 
         # 이미 열려 있으면 그대로 사용
         if self._inst is not None and getattr(self._inst.serial, "is_open", False):
+            self._dbg("_connect_sync: already open -> reuse (unit=%s)", getattr(self._inst, "address", None))
             return
 
-        # unit이 틀리면 "No response"가 반복되므로, 아주 제한적으로만 자동 보정(설정값, 1)
-        candidates: List[int] = [int(self.cfg.unit)]
-        if self.cfg.unit != 1:
+        # 후보 unit 구성
+        candidates: List[int] = []
+        candidates.append(int(self.cfg.unit))
+
+        # cfg.debug_unit_candidates로 추가 지정 가능
+        for u in self.cfg.debug_unit_candidates:
+            if int(u) not in candidates:
+                candidates.append(int(u))
+
+        # 그래도 1은 보정 후보로
+        if 1 not in candidates:
             candidates.append(1)
+
+        self._inf("_connect_sync: start (port=%r unit_candidates=%s)", self.cfg.port, candidates)
 
         last_err: Optional[Exception] = None
         for uid in candidates:
+            self._inf("_connect_sync: try unit=%s", uid)
             try:
                 inst = self._new_instrument(uid)
 
-                # minimalmodbus는 트랜잭션 시 자동 open도 하지만,
-                # 상태를 명확히 하기 위해 여기서 open해둠
+                # 명시적으로 open
                 if not inst.serial.is_open:
+                    self._dbg("serial.open() ...")
                     inst.serial.open()
+                    self._dbg("serial.open() done (is_open=%s)", inst.serial.is_open)
+                else:
+                    self._dbg("serial already open (is_open=%s)", inst.serial.is_open)
 
                 self._inst = inst
+                self._dump_serial_state(f"after open (unit={uid})")
 
                 # 최소 ping(응답 확인)
                 self._ping_sync()
@@ -254,14 +399,24 @@ class AsyncPLC:
                 # 성공 → unit 확정
                 self.cfg.unit = int(uid)
                 self._touch_io_ts()
+                self._inf("_connect_sync: SUCCESS unit=%s", uid)
                 return
+
             except Exception as e:
                 last_err = e
+                self._err("_connect_sync: FAIL unit=%s err=%r", uid, e)
+                et = self._exc_text()
+                if et:
+                    self._err("traceback:\n%s", et)
+
+                # 현재 인스턴스 닫기
                 try:
                     if self._inst and self._inst.serial and self._inst.serial.is_open:
+                        self._dbg("serial.close() due to connect fail")
                         self._inst.serial.close()
-                except Exception:
-                    pass
+                except Exception as e2:
+                    self._wrn("serial.close() failed: %r", e2)
+
                 self._inst = None
 
         raise RuntimeError(f"Modbus RTU connect/ping failed (last={last_err!r})")
@@ -270,9 +425,10 @@ class AsyncPLC:
         if self._inst is not None:
             try:
                 if self._inst.serial and self._inst.serial.is_open:
+                    self._dbg("_close_sync: serial.close()")
                     self._inst.serial.close()
-            except Exception:
-                pass
+            except Exception as e:
+                self._wrn("_close_sync: close failed: %r", e)
         self._inst = None
 
     def _ping_sync(self) -> None:
@@ -282,37 +438,59 @@ class AsyncPLC:
         """
         assert self._inst is not None
 
-        for addr in (0, 32, 5):
-            try:
-                bits = self._inst.read_bits(int(addr), 1, functioncode=1)  # FC1 Read Coils
-                if bits and len(bits) >= 1:
-                    return
-            except Exception:
-                continue
-        raise IOError("No response on ping (tried coils 0,32,5)")
+        addrs = (0, 32, 5)
+        self._inf("_ping_sync: start (try coils=%s, fc=1)", addrs)
 
-    # --------------------------
+        last: Optional[Exception] = None
+        for addr in addrs:
+            try:
+                t0 = time.monotonic()
+                if self.cfg.debug_ping_detail:
+                    self._dbg("_ping_sync: read_bits(addr=%s, count=1, fc=1)", addr)
+
+                bits = self._inst.read_bits(int(addr), 1, functioncode=1)  # FC1 Read Coils
+
+                if self.cfg.debug_io_timing:
+                    self._dbg("_ping_sync: addr=%s done in %.1f ms -> %r", addr, (time.monotonic() - t0) * 1000.0, bits)
+
+                if bits and len(bits) >= 1:
+                    self._inf("_ping_sync: OK (addr=%s -> %r)", addr, bits)
+                    return
+            except Exception as e:
+                last = e
+                if self.cfg.debug_ping_detail:
+                    self._wrn("_ping_sync: addr=%s failed: %r", addr, e)
+        raise IOError(f"No response on ping (tried coils {addrs}, last={last!r})")
+
+    # ======================================================
     # throttle
-    # --------------------------
-    async def _throttle_locked(self) -> None:
+    # ======================================================
+
+    async def _throttle_locked(self, op: str = "io") -> None:
         gap = float(self.cfg.inter_cmd_gap_s)
         dt = time.monotonic() - float(self._last_io_ts)
         if dt < gap:
-            await asyncio.sleep(gap - dt)
+            sleep_s = gap - dt
+            if self.cfg.debug:
+                self._dbg("throttle(%s): dt=%.4fs < gap=%.4fs -> sleep %.4fs", op, dt, gap, sleep_s)
+            await asyncio.sleep(sleep_s)
+        else:
+            if self.cfg.debug:
+                self._dbg("throttle(%s): dt=%.4fs >= gap=%.4fs -> no sleep", op, dt, gap)
 
     def _touch_io_ts(self) -> None:
         self._last_io_ts = time.monotonic()
 
-    # --------------------------
+    # ======================================================
     # addressing & synonyms
-    # --------------------------
+    # ======================================================
+
     def _build_synonyms(self) -> Dict[str, str]:
         def norm(x: str) -> str:
             return x.upper().replace(" ", "").replace("_", "").replace("-", "").replace("/", "")
 
         syn: Dict[str, str] = {}
 
-        # 사람이 입력하기 쉬운 별칭
         syn[norm("RP")] = "R_P_SW"
         syn[norm("RV")] = "R_V_SW"
         syn[norm("FV")] = "F_V_SW"
@@ -339,7 +517,6 @@ class AsyncPLC:
         syn[norm("DAC2")] = "DAC_POWER_2"
         syn[norm("DACPOWER1")] = "DAC_POWER_1"
         syn[norm("DACPOWER2")] = "DAC_POWER_2"
-
         return syn
 
     @staticmethod
@@ -366,13 +543,11 @@ class AsyncPLC:
         if not key_raw:
             raise ValueError("empty address/name")
 
-        # 1) canonical key
         if key_raw in PLC_COIL_MAP:
             return int(PLC_COIL_MAP[key_raw])
         if key_raw in PLC_REG_MAP:
             return int(PLC_REG_MAP[key_raw])
 
-        # 2) synonyms
         nk = key_raw.upper().replace(" ", "").replace("_", "").replace("-", "").replace("/", "")
         if nk in self._SYNONYMS:
             canonical = self._SYNONYMS[nk]
@@ -381,14 +556,12 @@ class AsyncPLC:
             if canonical in PLC_REG_MAP:
                 return int(PLC_REG_MAP[canonical])
 
-        # 3) "M00020" / "D00001"
         up = key_raw.upper()
         if up.startswith("M"):
             return self._parse_m_device_to_coil(up)
         if up.startswith("D"):
             return self._parse_d_device_to_reg(up)
 
-        # 4) numeric (e.g. "0x20", "32")
         return int(key_raw, 0)
 
     def _is_reg_name(self, name: Any) -> bool:
@@ -404,90 +577,147 @@ class AsyncPLC:
             return True
         return False
 
-    # --------------------------
-    # low-level I/O
-    # --------------------------
+    # ======================================================
+    # low-level I/O (로그 최대)
+    # ======================================================
+
     async def read_coil(self, addr: int) -> bool:
         addr = int(addr)
         async with self._lock:
+            t0 = time.monotonic()
+            self._dbg("READ_COIL start addr=%s (FC1)", addr)
             await asyncio.to_thread(self._connect_sync)
-            await self._throttle_locked()
+            await self._throttle_locked(op="read_coil")
             try:
                 assert self._inst is not None
                 bits = await asyncio.to_thread(self._inst.read_bits, addr, 1, 1)  # FC1
                 self._touch_io_ts()
-                return bool(bits[0])
-            except Exception:
+                v = bool(bits[0])
+                self._dbg("READ_COIL ok addr=%s -> %s (raw=%r)", addr, v, bits)
+                return v
+            except Exception as e:
+                self._err("READ_COIL fail addr=%s err=%r", addr, e)
+                et = self._exc_text()
+                if et:
+                    self._err("traceback:\n%s", et)
                 await asyncio.to_thread(self._close_sync)
                 raise
+            finally:
+                if self.cfg.debug_io_timing:
+                    self._dbg("READ_COIL time=%.1f ms", (time.monotonic() - t0) * 1000.0)
 
     async def read_coils_block(self, start_addr: int, count: int) -> List[bool]:
         start_addr = int(start_addr)
         count = max(1, int(count))
         async with self._lock:
+            t0 = time.monotonic()
+            self._dbg("READ_COILS_BLOCK start start=%s count=%s (FC1)", start_addr, count)
             await asyncio.to_thread(self._connect_sync)
-            await self._throttle_locked()
+            await self._throttle_locked(op="read_coils_block")
             try:
                 assert self._inst is not None
                 bits = await asyncio.to_thread(self._inst.read_bits, start_addr, count, 1)  # FC1
                 self._touch_io_ts()
                 if len(bits) < count:
                     bits = list(bits) + [0] * (count - len(bits))
-                return [bool(b) for b in bits[:count]]
-            except Exception:
+                out = [bool(b) for b in bits[:count]]
+                self._dbg("READ_COILS_BLOCK ok start=%s count=%s -> %r", start_addr, count, out)
+                return out
+            except Exception as e:
+                self._err("READ_COILS_BLOCK fail start=%s count=%s err=%r", start_addr, count, e)
+                et = self._exc_text()
+                if et:
+                    self._err("traceback:\n%s", et)
                 await asyncio.to_thread(self._close_sync)
                 raise
+            finally:
+                if self.cfg.debug_io_timing:
+                    self._dbg("READ_COILS_BLOCK time=%.1f ms", (time.monotonic() - t0) * 1000.0)
 
     async def write_coil(self, addr: int, value: bool) -> None:
         addr = int(addr)
         value = bool(value)
         async with self._lock:
+            t0 = time.monotonic()
+            self._dbg("WRITE_COIL start addr=%s value=%s (FC5)", addr, value)
             await asyncio.to_thread(self._connect_sync)
-            await self._throttle_locked()
+            await self._throttle_locked(op="write_coil")
             try:
                 assert self._inst is not None
                 await asyncio.to_thread(self._inst.write_bit, addr, 1 if value else 0, 5)  # FC5
                 self._touch_io_ts()
-            except Exception:
+                self._dbg("WRITE_COIL ok addr=%s value=%s", addr, value)
+            except Exception as e:
+                self._err("WRITE_COIL fail addr=%s value=%s err=%r", addr, value, e)
+                et = self._exc_text()
+                if et:
+                    self._err("traceback:\n%s", et)
                 await asyncio.to_thread(self._close_sync)
                 raise
+            finally:
+                if self.cfg.debug_io_timing:
+                    self._dbg("WRITE_COIL time=%.1f ms", (time.monotonic() - t0) * 1000.0)
 
     async def read_reg(self, addr: int) -> int:
         addr = int(addr)
         async with self._lock:
+            t0 = time.monotonic()
+            self._dbg("READ_REG start addr=%s (FC3)", addr)
             await asyncio.to_thread(self._connect_sync)
-            await self._throttle_locked()
+            await self._throttle_locked(op="read_reg")
             try:
                 assert self._inst is not None
                 v = await asyncio.to_thread(self._inst.read_register, addr, 0, 3, False)  # FC3
                 self._touch_io_ts()
-                return int(v)
-            except Exception:
+                out = int(v)
+                self._dbg("READ_REG ok addr=%s -> %s", addr, out)
+                return out
+            except Exception as e:
+                self._err("READ_REG fail addr=%s err=%r", addr, e)
+                et = self._exc_text()
+                if et:
+                    self._err("traceback:\n%s", et)
                 await asyncio.to_thread(self._close_sync)
                 raise
+            finally:
+                if self.cfg.debug_io_timing:
+                    self._dbg("READ_REG time=%.1f ms", (time.monotonic() - t0) * 1000.0)
 
     async def write_reg(self, addr: int, value: int) -> None:
         addr = int(addr)
         value = int(value)
         async with self._lock:
+            t0 = time.monotonic()
+            self._dbg("WRITE_REG start addr=%s value=%s (FC6)", addr, value)
             await asyncio.to_thread(self._connect_sync)
-            await self._throttle_locked()
+            await self._throttle_locked(op="write_reg")
             try:
                 assert self._inst is not None
                 await asyncio.to_thread(self._inst.write_register, addr, value, 0, 6, False)  # FC6
                 self._touch_io_ts()
-            except Exception:
+                self._dbg("WRITE_REG ok addr=%s value=%s", addr, value)
+            except Exception as e:
+                self._err("WRITE_REG fail addr=%s value=%s err=%r", addr, value, e)
+                et = self._exc_text()
+                if et:
+                    self._err("traceback:\n%s", et)
                 await asyncio.to_thread(self._close_sync)
                 raise
+            finally:
+                if self.cfg.debug_io_timing:
+                    self._dbg("WRITE_REG time=%.1f ms", (time.monotonic() - t0) * 1000.0)
 
-    # --------------------------
+    # ======================================================
     # high-level helpers
-    # --------------------------
+    # ======================================================
+
     async def pulse(self, addr: int, *, ms: Optional[int] = None) -> None:
         width = self.cfg.pulse_ms if ms is None else int(ms)
+        self._dbg("PULSE start addr=%s width=%sms", addr, width)
         await self.write_coil(int(addr), True)
         await asyncio.sleep(max(0.01, width / 1000.0))
         await self.write_coil(int(addr), False)
+        self._dbg("PULSE done addr=%s", addr)
 
     async def write_switch(
         self,
@@ -501,6 +731,7 @@ class AsyncPLC:
             raise TypeError(f"write_switch는 COIL 전용입니다. register로 보이는 입력: {name_or_addr}")
 
         addr = self._addr(name_or_addr)
+        self._dbg("WRITE_SWITCH name=%r -> addr=%s on=%s momentary=%s", name_or_addr, addr, on, momentary)
         if momentary:
             await self.pulse(addr, ms=pulse_ms)
         else:
@@ -510,14 +741,17 @@ class AsyncPLC:
         if self._is_reg_name(name_or_addr):
             raise TypeError(f"read_bit은 COIL 전용입니다. register로 보이는 입력: {name_or_addr}")
         addr = self._addr(name_or_addr)
+        self._dbg("READ_BIT name=%r -> addr=%s", name_or_addr, addr)
         return bool(await self.read_coil(addr))
 
     async def read_reg_name(self, name_or_addr: Any) -> int:
         addr = self._addr(name_or_addr)
+        self._dbg("READ_REG_NAME name=%r -> addr=%s", name_or_addr, addr)
         return int(await self.read_reg(addr))
 
     async def write_reg_name(self, name_or_addr: Any, value: int) -> None:
         addr = self._addr(name_or_addr)
+        self._dbg("WRITE_REG_NAME name=%r -> addr=%s value=%s", name_or_addr, addr, value)
         await self.write_reg(addr, int(value))
 
     # --------------------------------------------------
@@ -544,9 +778,10 @@ class AsyncPLC:
     async def power2(self, on: bool = True, *, momentary: bool = False) -> None: await self.write_switch("POWER2", on, momentary=momentary)
     async def door(self, on: bool = True, *, momentary: bool = False) -> None: await self.write_switch("DOOR", on, momentary=momentary)
 
-    # --------------------------
+    # ======================================================
     # DAC helpers (4~20mA)
-    # --------------------------
+    # ======================================================
+
     def _clamp_dac_code(self, code: int) -> int:
         fs = int(self.cfg.dac_full_scale_code)
         if fs <= 0:
@@ -566,12 +801,10 @@ class AsyncPLC:
         key = "DAC_POWER_1" if int(ch) == 1 else "DAC_POWER_2" if int(ch) == 2 else None
         if key is None:
             raise ValueError("DAC channel must be 1 or 2")
+        self._dbg("SET_DAC_POWER ch=%s code=%s", ch, code)
         await self.write_reg_name(key, self._clamp_dac_code(int(code)))
 
     async def set_dac_current(self, ch: int, ma: float) -> int:
-        """
-        4~20mA(Current) → DAC 코드로 변환해서 D00000/D00001에 기록
-        """
         mn = float(self.cfg.dac_current_min_ma)
         mx = float(self.cfg.dac_current_max_ma)
         if mx <= mn:
@@ -590,5 +823,47 @@ class AsyncPLC:
         code = int(round(x * fs)) + offset
         code = self._clamp_dac_code(code)
 
+        self._dbg("SET_DAC_CURRENT ch=%s ma=%.3f -> code=%s (mn=%.3f mx=%.3f fs=%s offset=%s)",
+                  ch, ma, code, mn, mx, fs, offset)
+
         await self.set_dac_power(ch, code)
         return code
+
+    # ======================================================
+    # debug dumps
+    # ======================================================
+
+    def _dump_env(self) -> None:
+        self._inf("ENV python=%s platform=%s", sys.version.replace("\n", " "), platform.platform())
+        self._inf("ENV minimalmodbus=%s", getattr(minimalmodbus, "__version__", "unknown"))
+
+    def _dump_cfg(self, title: str) -> None:
+        self._inf("CFG DUMP (%s)", title)
+        self._inf("  port=%r (norm=%r)", self.cfg.port, self._normalize_port(self.cfg.port))
+        self._inf("  baudrate=%s bytesize=%s parity=%r stopbits=%s unit=%s timeout_s=%.3f",
+                  self.cfg.baudrate, self.cfg.bytesize, self.cfg.parity, self.cfg.stopbits, self.cfg.unit, self.cfg.timeout_s)
+        self._inf("  inter_cmd_gap_s=%.4f pulse_ms=%s", self.cfg.inter_cmd_gap_s, self.cfg.pulse_ms)
+        self._inf("  debug=%s stack=%s timing=%s ping_detail=%s extra_units=%s",
+                  self.cfg.debug, self.cfg.debug_stacktrace, self.cfg.debug_io_timing, self.cfg.debug_ping_detail, self.cfg.debug_unit_candidates)
+
+    def _dump_serial_state(self, where: str) -> None:
+        try:
+            if not self._inst:
+                self._dbg("SERIAL STATE (%s): inst=None", where)
+                return
+            ser = getattr(self._inst, "serial", None)
+            if not ser:
+                self._dbg("SERIAL STATE (%s): serial=None", where)
+                return
+            self._dbg("SERIAL STATE (%s): is_open=%s port=%r baud=%s bytesize=%s parity=%r stopbits=%s timeout=%r write_timeout=%r",
+                      where,
+                      getattr(ser, "is_open", None),
+                      getattr(ser, "port", None),
+                      getattr(ser, "baudrate", None),
+                      getattr(ser, "bytesize", None),
+                      getattr(ser, "parity", None),
+                      getattr(ser, "stopbits", None),
+                      getattr(ser, "timeout", None),
+                      getattr(ser, "write_timeout", None))
+        except Exception as e:
+            self._wrn("_dump_serial_state failed: %r", e)

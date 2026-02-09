@@ -1,6 +1,7 @@
 # main.py
 from __future__ import annotations
 
+import gc
 import sys
 from pathlib import Path
 from typing import Optional, Any
@@ -101,15 +102,14 @@ class PlcAdapterFromBinder:
 
     def is_connected(self) -> bool:
         try:
-            return bool(getattr(self._binder, "_connected", False))
+            return bool(self._binder.is_connected())
         except Exception:
             return False
 
     # --- 공정에서 상태 조회가 필요할 때(폴링 캐시 기반) ---
     def get_states(self) -> dict[str, bool]:
         try:
-            d = getattr(self._binder, "_last_states", {}) or {}
-            return dict(d)
+            return dict(self._binder.get_states() or {})
         except Exception:
             return {}
 
@@ -121,10 +121,8 @@ class PlcAdapterFromBinder:
 
     # --- 공정에서 write ---
     def enqueue_write(self, coil_name: str, on: bool, momentary: bool = False) -> None:
-        w = getattr(self._binder, "_worker", None)
-        if w is None:
-            raise RuntimeError("PLC worker not initialized")
-        w.enqueue_write(str(coil_name), bool(on), momentary=bool(momentary))
+        # ✅ Binder가 제공하는 연결체크/방어 로직을 그대로 타게 함
+        self._binder.enqueue_write(str(coil_name), bool(on), momentary=bool(momentary))
 
     # alias(엔진 구현 차이 방어)
     def write_coil(self, coil_name: str, on: bool) -> None:
@@ -215,6 +213,20 @@ class HmiWindow(QWidget):
         self._stm_service = stm_service
         self._acs_service = acs_service
 
+    def _set_process_controller_devices(self, stm: Any, acs: Any) -> None:
+        """ProcessController가 stm/acs를 참조한다면 여기서 갈아끼움."""
+        pc = self._process_controller
+        if pc is None:
+            return
+        for attr, val in (("stm", stm), ("acs", acs)):
+            try:
+                if hasattr(pc, attr):
+                    setattr(pc, attr, val)
+                elif hasattr(pc, f"_{attr}"):
+                    setattr(pc, f"_{attr}", val)
+            except Exception:
+                pass
+
     def open_config_dialog(self) -> None:
         """Config 팝업 → Save(=Accepted)면 즉시 장비 재연결 (기존 유지)"""
         dlg = ConfigDialog(ini_path=self._ini_path, parent=self)
@@ -225,7 +237,7 @@ class HmiWindow(QWidget):
     def _apply_config_and_reconnect(self) -> None:
         errors: list[str] = []
 
-        # 1) PLC 재연결(워커 재시작) - 기존 유지
+        # ✅ 1) PLC만 즉시 재연결
         try:
             if self._plc_binder:
                 new_plc_settings = load_plc_settings(self._ini_path)
@@ -233,24 +245,17 @@ class HmiWindow(QWidget):
         except Exception as e:
             errors.append(f"PLC reconnect failed: {e}")
 
-        # 2) 센서 재연결 - (신규 서비스가 있으면 그쪽 reload, 없으면 기존 DeviceManager reload)
-        try:
-            if self._stm_service is not None and hasattr(self._stm_service, "reload_from_ini"):
-                self._stm_service.reload_from_ini(self._ini_path)
-            if self._acs_service is not None and hasattr(self._acs_service, "reload_from_ini"):
-                self._acs_service.reload_from_ini(self._ini_path)
-
-            if (self._stm_service is None or self._acs_service is None) and self._dev_mgr:
-                dev_errs = self._dev_mgr.reload_from_ini(self._ini_path, connect=False)
-                for k, v in dev_errs.items():
-                    errors.append(f"{k}: {v}")
-        except Exception as e:
-            errors.append(f"Sensor reconnect failed: {e}")
+        # ✅ 2) STM/ACS는 여기서 절대 재연결/재생성하지 않음
+        #     (Stop→메모리해제, Start→재생성 규칙 유지)
 
         if errors:
             QMessageBox.warning(self, "Reconnect", "일부 장비 재연결 실패:\n" + "\n".join(errors))
         else:
-            QMessageBox.information(self, "Reconnect", "저장 완료 (PLC만 즉시 적용). STM/ACS는 Start에서 연결됩니다.")
+            QMessageBox.information(
+                self,
+                "Reconnect",
+                "저장 완료. (PLC만 즉시 적용)\nSTM/ACS는 다음 Start에서 새로 생성/연결됩니다.",
+            )
 
     def _confirm_exit(self) -> bool:
         ret = QMessageBox.question(
@@ -310,36 +315,97 @@ class ProcessWindow(QWidget):
         self.ui.startProcess.clicked.connect(self._on_start_clicked)   
         self.ui.stopProcess.clicked.connect(self._on_stop_clicked)   
 
-        # ✅ UI에 버튼이 있는 경우에만 연결 (없으면 기존처럼 “아무 것도 안 함”)
-        if hasattr(self.ui, "startProcess"):
-            self.ui.startProcess.clicked.connect(self._on_start_clicked)
-        if hasattr(self.ui, "stopProcess"):
-            self.ui.stopProcess.clicked.connect(self._on_stop_clicked)
-        if hasattr(self.ui, "pauseProcess"):
-            self.ui.pauseProcess.clicked.connect(self._on_pause_clicked)
-        if hasattr(self.ui, "resumeProcess"):
-            self.ui.resumeProcess.clicked.connect(self._on_resume_clicked)
-
-    def _on_start_clicked(self):
-        if not self.hmi_window or not getattr(self.hmi_window, "_dev_mgr", None):
+    def _connect_sensors_if_needed(self) -> None:
+        """✅ Start에서만 STM/ACS를 '새로 생성'해서 연결(start)한다."""
+        if self.hmi_window is None:
             return
-
-        dev_mgr = self.hmi_window._dev_mgr
         ini_path = self.hmi_window._ini_path
 
-        # 최신 ini 기준으로 reload + connect
-        dev_errs = dev_mgr.reload_from_ini(ini_path, connect=True)
-
-        if dev_errs:
-            QMessageBox.warning(self, "Device Connect", "STM/ACS 연결 실패:\n" + "\n".join([f"{k}: {v}" for k, v in dev_errs.items()]))
-        else:
-            QMessageBox.information(self, "Device Connect", "STM/ACS 연결 성공")
-
-    def _on_stop_clicked(self):
-        if not self.hmi_window or not getattr(self.hmi_window, "_dev_mgr", None):
+        # 이미 살아있으면(Stop 안 눌렀으면) 재사용
+        if self._stm_service is not None or self._acs_service is not None:
+            _append_text(getattr(self.ui, "logWindow", None), "[DEV] STM/ACS already alive (reuse)")
             return
-        self.hmi_window._dev_mgr.close_all()
-        QMessageBox.information(self, "Device Disconnect", "STM/ACS 연결 종료")
+
+        # 1) 서비스가 있으면: 새로 생성 후 start() (정해진 함수 1개: start)
+        if STMService is not None and ACSService is not None:
+            try:
+                stm = STMService.from_ini(ini_path) if hasattr(STMService, "from_ini") else STMService(ini_path)
+                acs = ACSService.from_ini(ini_path) if hasattr(ACSService, "from_ini") else ACSService(ini_path)
+
+                stm.start()
+                acs.start()
+
+                self._stm_service = stm
+                self._acs_service = acs
+                self.hmi_window._stm_service = stm
+                self.hmi_window._acs_service = acs
+
+                self._set_process_controller_devices(stm, acs)
+
+                _append_text(getattr(self.ui, "logWindow", None), "[DEV] STM/ACS connected (fresh instance)")
+                return
+            except Exception as e:
+                _append_text(getattr(self.ui, "logWindow", None), f"[DEV][WARN] STM/ACS start failed: {e!r}")
+                self._stm_service = None
+                self._acs_service = None
+                self.hmi_window._stm_service = None
+                self.hmi_window._acs_service = None
+
+        # 2) 서비스가 없으면: DeviceManager를 Start에서 생성+connect (정해진 함수 1개: reload_from_ini)
+        try:
+            dev_mgr = DeviceManager.from_ini(ini_path)
+            errs = dev_mgr.reload_from_ini(ini_path, connect=True)
+            self.hmi_window._dev_mgr = dev_mgr
+
+            if errs:
+                _append_text(getattr(self.ui, "logWindow", None), "[DEV][WARN] DeviceManager connect errors:")
+                for k, v in errs.items():
+                    _append_text(getattr(self.ui, "logWindow", None), f"  - {k}: {v}")
+            else:
+                _append_text(getattr(self.ui, "logWindow", None), "[DEV] STM/ACS connected (DeviceManager)")
+        except Exception as e:
+            _append_text(getattr(self.ui, "logWindow", None), f"[DEV][WARN] DeviceManager connect exception: {e!r}")
+
+    def _disconnect_sensors_if_needed(self) -> None:
+        """✅ Stop에서 STM/ACS 연결 해제 + 메모리 정리. (PLC는 건드리지 않음)"""
+
+        # 1) 서비스 기반이면 stop()만 호출 (후보 3개 금지)
+        if self._stm_service is not None:
+            try:
+                self._stm_service.stop()
+                _append_text(getattr(self.ui, "logWindow", None), "[DEV] STM stop() called")
+            except Exception as e:
+                _append_text(getattr(self.ui, "logWindow", None), f"[DEV][WARN] STM stop failed: {e!r}")
+
+        if self._acs_service is not None:
+            try:
+                self._acs_service.stop()
+                _append_text(getattr(self.ui, "logWindow", None), "[DEV] ACS stop() called")
+            except Exception as e:
+                _append_text(getattr(self.ui, "logWindow", None), f"[DEV][WARN] ACS stop failed: {e!r}")
+
+        # 2) DeviceManager 기반이면 close_all()만 호출
+        if self.hmi_window is not None and getattr(self.hmi_window, "_dev_mgr", None) is not None:
+            try:
+                self.hmi_window._dev_mgr.close_all()
+                _append_text(getattr(self.ui, "logWindow", None), "[DEV] DeviceManager.close_all() called")
+            except Exception as e:
+                _append_text(getattr(self.ui, "logWindow", None), f"[DEV][WARN] DeviceManager close failed: {e!r}")
+
+        # 3) ProcessController에서도 장비 참조 제거 (다음 Start에서 새로 주입)
+        self._set_process_controller_devices(None, None)
+
+        # 4) 참조 제거 (메모리 회수)
+        if self.hmi_window is not None:
+            self.hmi_window._stm_service = None
+            self.hmi_window._acs_service = None
+            self.hmi_window._dev_mgr = None
+
+        self._stm_service = None
+        self._acs_service = None
+
+        gc.collect()
+        _append_text(getattr(self.ui, "logWindow", None), "[DEV] sensors released + gc.collect()")
 
     def set_hmi_window(self, hmi_window: HmiWindow):
         self.hmi_window = hmi_window
@@ -385,35 +451,144 @@ class ProcessWindow(QWidget):
         self.hmi_window.raise_()
         self.hmi_window.activateWindow()
 
+    def _inject_sensors_to_process_controller(self, *, stm: Any, acs: Any) -> None:
+        pc = self._process_controller
+        if pc is None:
+            return
+
+        # ProcessController가 보통 self.stm / self.acs 로 잡고 있을 가능성이 큼
+        for attr, val in (("stm", stm), ("acs", acs)):
+            try:
+                if hasattr(pc, attr):
+                    setattr(pc, attr, val)
+                elif hasattr(pc, f"_{attr}"):
+                    setattr(pc, f"_{attr}", val)
+            except Exception:
+                pass
+
+    def _ensure_sensors_connected_fresh(self) -> None:
+        """Start에서 호출: STM/ACS가 없으면 '새로 생성하고 연결(start)'"""
+        if self.hmi_window is None:
+            return
+        ini_path = self.hmi_window._ini_path
+
+        # 이미 살아있으면 재사용(Stop을 안 눌렀다면 여기로 들어올 수 있음)
+        if (self._stm_service is not None) or (self._acs_service is not None) or (self.hmi_window._dev_mgr is not None):
+            _append_text(self.ui.logWindow, "[DEV] STM/ACS already allocated (reuse).")
+            return
+
+        # 1) 신규 서비스(STMService/ACSService)가 있으면: Start에서 생성+start()
+        if (STMService is not None) and (ACSService is not None):
+            try:
+                stm = STMService.from_ini(ini_path) if hasattr(STMService, "from_ini") else STMService(ini_path)
+                acs = ACSService.from_ini(ini_path) if hasattr(ACSService, "from_ini") else ACSService(ini_path)
+
+                # ✅ 연결은 Start에서만
+                stm.start()
+                acs.start()
+
+                self._stm_service = stm
+                self._acs_service = acs
+                self.hmi_window._stm_service = stm
+                self.hmi_window._acs_service = acs
+
+                self._inject_sensors_to_process_controller(stm=stm, acs=acs)
+                _append_text(self.ui.logWindow, "[DEV] STM/ACS connected (fresh instance).")
+                return
+            except Exception as e:
+                _append_text(self.ui.logWindow, f"[DEV][WARN] STM/ACS start failed: {e!r}")
+                self._stm_service = None
+                self._acs_service = None
+                self.hmi_window._stm_service = None
+                self.hmi_window._acs_service = None
+
+        # 2) fallback: DeviceManager로 연결(서비스가 없을 때만)
+        try:
+            dev_mgr = DeviceManager.from_ini(ini_path)
+            errs = dev_mgr.reload_from_ini(ini_path, connect=True)
+
+            # 여기서 HMI에 dev_mgr를 “연결된 상태로” 잠깐 보관했다가 Stop에서 제거
+            self.hmi_window._dev_mgr = dev_mgr
+
+            if errs:
+                _append_text(self.ui.logWindow, "[DEV][WARN] DeviceManager connect errors:")
+                for k, v in errs.items():
+                    _append_text(self.ui.logWindow, f"  - {k}: {v}")
+            else:
+                _append_text(self.ui.logWindow, "[DEV] STM/ACS connected (DeviceManager).")
+        except Exception as e:
+            _append_text(self.ui.logWindow, f"[DEV][WARN] DeviceManager connect exception: {e!r}")
+
+    def _shutdown_sensors_and_release_memory(self) -> None:
+        """Stop에서 호출: STM/ACS 연결 해제 + 객체 해제 + gc.collect()"""
+        # 1) 서비스 기반이면 stop()만 호출 (후보 3개 금지)
+        if self._stm_service is not None:
+            try:
+                self._stm_service.stop()
+                _append_text(self.ui.logWindow, "[DEV] STM stop() called")
+            except Exception as e:
+                _append_text(self.ui.logWindow, f"[DEV][WARN] STM stop failed: {e!r}")
+
+        if self._acs_service is not None:
+            try:
+                self._acs_service.stop()
+                _append_text(self.ui.logWindow, "[DEV] ACS stop() called")
+            except Exception as e:
+                _append_text(self.ui.logWindow, f"[DEV][WARN] ACS stop failed: {e!r}")
+
+        # 2) DeviceManager fallback이면 close_all()만 호출
+        if self.hmi_window is not None and self.hmi_window._dev_mgr is not None:
+            try:
+                self.hmi_window._dev_mgr.close_all()
+                _append_text(self.ui.logWindow, "[DEV] DeviceManager.close_all() called")
+            except Exception as e:
+                _append_text(self.ui.logWindow, f"[DEV][WARN] DeviceManager close failed: {e!r}")
+
+        # 3) 참조 제거 → 메모리 회수
+        self._stm_service = None
+        self._acs_service = None
+        if self.hmi_window is not None:
+            self.hmi_window._stm_service = None
+            self.hmi_window._acs_service = None
+            self.hmi_window._dev_mgr = None
+
+        # 4) GC
+        gc.collect()
+        _append_text(self.ui.logWindow, "[DEV] sensors released + gc.collect()")
+
     def _on_start_clicked(self) -> None:
+        # ✅ Start에서만 STM/ACS 생성/연결
+        self._ensure_sensors_connected_fresh()
+
         pc = self._process_controller
         if pc is None:
             QMessageBox.warning(self, "Process", "ProcessController가 연결되지 않았습니다.")
             return
+
         try:
-            # 레시피가 없으면 샘플 생성(해당 메서드가 있을 때만)
-            try:
-                r = pc.get_recipe()
-            except Exception:
-                r = None
-            if r is None and hasattr(pc, "make_and_set_sample_recipe"):
+            # 레시피 준비(기존 로직 유지)
+            r = pc.get_recipe()
+            if r is None:
                 pc.make_and_set_sample_recipe()
 
             pc.start()
-            _append_text(getattr(self.ui, "logWindow", None), "[UI] 공정 시작 요청")
+            _append_text(self.ui.logWindow, "[UI] 공정 시작 요청")
         except Exception as e:
             QMessageBox.warning(self, "Process Start Failed", f"{e!r}")
-            _append_text(getattr(self.ui, "logWindow", None), f"[START FAIL] {e!r}")
+            _append_text(self.ui.logWindow, f"[START FAIL] {e!r}")
 
     def _on_stop_clicked(self) -> None:
+        # ✅ 앱 종료가 아니라 "공정 stop" 의미
         pc = self._process_controller
-        if pc is None:
-            return
-        try:
-            pc.stop()
-            _append_text(getattr(self.ui, "logWindow", None), "[UI] 공정 정지 요청")
-        except Exception as e:
-            _append_text(getattr(self.ui, "logWindow", None), f"[STOP FAIL] {e!r}")
+        if pc is not None:
+            try:
+                pc.stop()
+                _append_text(self.ui.logWindow, "[UI] 공정 정지 요청")
+            except Exception as e:
+                _append_text(self.ui.logWindow, f"[STOP FAIL] {e!r}")
+
+        # ✅ Stop에서 STM/ACS 끊고 메모리 해제 → 다음 Start 때 새로 생성
+        self._shutdown_sensors_and_release_memory()
 
     def _on_pause_clicked(self) -> None:
         pc = self._process_controller
@@ -495,34 +670,10 @@ def main():
     plc_binder.start()
     app.aboutToQuit.connect(plc_binder.stop)
 
-    # ------------------------------
-    # 센서 연결
-    # - 신규 STMService/ACSService가 있으면 우선 사용
-    # - 둘 중 하나라도 실패하면 기존 DeviceManager로 fallback
-    # ------------------------------
+    # ✅ STM/ACS는 Start에서만 생성/연결한다.
     dev_mgr: Optional[DeviceManager] = None
     stm_service: Any = None
     acs_service: Any = None
-
-    if STMService is not None and ACSService is not None:
-        try:
-            stm_service = STMService.from_ini(ini_path) if hasattr(STMService, "from_ini") else STMService(ini_path)
-            acs_service = ACSService.from_ini(ini_path) if hasattr(ACSService, "from_ini") else ACSService(ini_path)
-            if hasattr(stm_service, "start"):
-                stm_service.start()
-            if hasattr(acs_service, "start"):
-                acs_service.start()
-        except Exception:
-            stm_service = None
-            acs_service = None
-
-    # fallback: 기존 DeviceManager 유지(현재 main.py의 흐름 그대로)
-    if stm_service is None or acs_service is None:
-        # ✅ STM/ACS 매니저는 만들되, HMI 시작 시에는 연결하지 않음
-        #    (Start 버튼 눌렀을 때 연결)
-        dev_mgr = DeviceManager.from_ini(ini_path)
-
-        app.aboutToQuit.connect(dev_mgr.close_all)
 
     # ------------------------------
     # LogService (신규)
@@ -554,30 +705,36 @@ def main():
                 stm=stm_service,
                 acs=acs_service,
             )
-        except Exception:
+        except Exception as e:
             process_controller = None
+            _append_text(getattr(hmi.ui, "logWindow", None), f"[BOOT][WARN] ProcessController init failed: {e!r}")
 
     # 종료 시 신규 서비스 정리
     def _shutdown_new_services() -> None:
-        # 공정 실행 중이면 stop 시도
         if process_controller is not None:
             try:
-                if hasattr(process_controller, "is_running") and process_controller.is_running():
+                if process_controller.is_running():
                     process_controller.stop()
             except Exception:
                 pass
 
+        # ✅ stop()만 시도
         for svc in (stm_service, acs_service, log_service):
             if svc is None:
                 continue
-            for name in ("stop", "close", "shutdown"):
-                fn = getattr(svc, name, None)
-                if callable(fn):
-                    try:
-                        fn()
-                    except Exception:
-                        pass
-                    break
+            fn = getattr(svc, "stop", None)
+            if callable(fn):
+                try:
+                    fn()
+                except Exception:
+                    pass
+
+        # 혹시 DeviceManager가 Start에서 생성되었을 수 있으니 HMI쪽도 정리
+        try:
+            if getattr(hmi, "_dev_mgr", None) is not None:
+                hmi._dev_mgr.close_all()
+        except Exception:
+            pass
 
     app.aboutToQuit.connect(_shutdown_new_services)
 

@@ -304,12 +304,60 @@ class Ui_Form(object):
         self.page_2 = QWidget()
         self.page_2.setObjectName("page_2")
 
-        self.materialEdit = QLineEdit(self.page_2)
+        # ✅ Material name: QLineEdit -> QPushButton
+        self.materialEdit = QPushButton(self.page_2)
         self.materialEdit.setObjectName("materialEdit")
         self.materialEdit.setGeometry(QRect(0, 170, 91, 26))
-        self.materialEdit2 = QLineEdit(self.page_2)
+        self.materialEdit.setAutoDefault(False)
+
+        self.materialEdit2 = QPushButton(self.page_2)
         self.materialEdit2.setObjectName("materialEdit2")
         self.materialEdit2.setGeometry(QRect(100, 170, 91, 26))
+        self.materialEdit2.setAutoDefault(False)
+
+        # ✅ material 하단에 density/zfactor 표시(ρ, Z + read-only QLineEdit)
+        self.materialRhoLabel1 = QLabel(self.page_2)
+        self.materialRhoLabel1.setGeometry(QRect(0, 200, 12, 20))
+        self.materialDensityEdit1 = QLineEdit(self.page_2)
+        self.materialDensityEdit1.setGeometry(QRect(12, 200, 79, 20))
+        self.materialDensityEdit1.setReadOnly(True)
+        self.materialDensityEdit1.setPlaceholderText("-")
+
+        self.materialRhoLabel2 = QLabel(self.page_2)
+        self.materialRhoLabel2.setGeometry(QRect(100, 200, 12, 20))
+        self.materialDensityEdit2 = QLineEdit(self.page_2)
+        self.materialDensityEdit2.setGeometry(QRect(112, 200, 79, 20))
+        self.materialDensityEdit2.setReadOnly(True)
+        self.materialDensityEdit2.setPlaceholderText("-")
+
+        self.materialZLabel1 = QLabel(self.page_2)
+        self.materialZLabel1.setGeometry(QRect(0, 225, 12, 20))
+        self.materialZfactorEdit1 = QLineEdit(self.page_2)
+        self.materialZfactorEdit1.setGeometry(QRect(12, 225, 79, 20))
+        self.materialZfactorEdit1.setReadOnly(True)
+        self.materialZfactorEdit1.setPlaceholderText("-")
+
+        self.materialZLabel2 = QLabel(self.page_2)
+        self.materialZLabel2.setGeometry(QRect(100, 225, 12, 20))
+        self.materialZfactorEdit2 = QLineEdit(self.page_2)
+        self.materialZfactorEdit2.setGeometry(QRect(112, 225, 79, 20))
+        self.materialZfactorEdit2.setReadOnly(True)
+        self.materialZfactorEdit2.setPlaceholderText("-")
+
+        # ✅ start/stop 위: 현재 dep.rate / thickness 표시
+        self.currentRateLabel = QLabel(self.page_2)
+        self.currentRateLabel.setGeometry(QRect(0, 450, 191, 20))
+        self.currentRateEdit = QLineEdit(self.page_2)
+        self.currentRateEdit.setGeometry(QRect(0, 470, 191, 26))
+        self.currentRateEdit.setReadOnly(True)
+        self.currentRateEdit.setPlaceholderText("-")
+
+        self.currentThicknessLabel = QLabel(self.page_2)
+        self.currentThicknessLabel.setGeometry(QRect(0, 490, 191, 20))
+        self.currentThicknessEdit = QLineEdit(self.page_2)
+        self.currentThicknessEdit.setGeometry(QRect(0, 510, 191, 26))
+        self.currentThicknessEdit.setReadOnly(True)
+        self.currentThicknessEdit.setPlaceholderText("-")
 
         self.graphWidget = QWidget(self.page_2)
         self.graphWidget.setObjectName("graphWidget")

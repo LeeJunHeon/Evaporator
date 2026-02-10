@@ -19,6 +19,7 @@ from ui.config_dialog import ConfigDialog
 from config.plc_config import load_plc_settings
 from controller.hmi_plc_binder import HmiPlcBinder
 from utils.device_manager import DeviceManager
+from ui.material_catalog_dialog import MaterialCatalogDialog
 
 
 # ============================================================

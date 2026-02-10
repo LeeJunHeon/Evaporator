@@ -640,14 +640,26 @@ class AsyncPLC:
     def _is_reg_name(self, name: Any) -> bool:
         if isinstance(name, int):
             return False
+
         s = str(name).strip()
+
+        # ✅ 코일 맵에 있는 이름은 무조건 COIL (DOOR_SW 같은 케이스 보호)
+        if s in PLC_COIL_MAP:
+            return False
+
+        # ✅ 레지스터 맵에 있는 이름만 REG (현재는 DAC_POWER_1/2만 해당)
         if s in PLC_REG_MAP:
             return True
+
         nk = s.upper().replace(" ", "").replace("_", "").replace("-", "").replace("/", "")
         if nk in self._SYNONYMS and self._SYNONYMS[nk] in PLC_REG_MAP:
             return True
-        if s.upper().startswith("D"):
+
+        # ✅ "D00000" 처럼 'D' 다음이 전부 숫자일 때만 REG로 본다
+        up = s.upper()
+        if up.startswith("D") and up[1:].isdigit():
             return True
+
         return False
 
     # ======================================================

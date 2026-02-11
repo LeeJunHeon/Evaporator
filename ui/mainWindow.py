@@ -60,11 +60,27 @@ class Ui_Form(object):
         self.widget.setGeometry(QRect(140, 250, 261, 201))
         self.widget.setAutoFillBackground(True)
 
-        # (선택) 중앙 Chamber 글자 (원치 않으면 아래 4줄 삭제)
+        # ✅ Chamber 타이틀(상단)
         self.chamberLabel = QLabel(self.widget)
         self.chamberLabel.setObjectName("chamberLabel")
-        self.chamberLabel.setGeometry(QRect(0, 0, 261, 201))
+        self.chamberLabel.setGeometry(QRect(0, 10, 261, 55))
         self.chamberLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        # ✅ Pressure 캡션(중간)
+        self.pressureCaption = QLabel(self.widget)
+        self.pressureCaption.setObjectName("pressureCaption")
+        self.pressureCaption.setGeometry(QRect(0, 75, 261, 20))
+        self.pressureCaption.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        # ✅ Pressure 값(하단, 크게)
+        self.pressureValue = QLabel(self.widget)
+        self.pressureValue.setObjectName("pressureValue")
+        self.pressureValue.setGeometry(QRect(0, 95, 261, 90))
+        self.pressureValue.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        # 표시가 항상 위로 오도록
+        self.pressureCaption.raise_()
+        self.pressureValue.raise_()
 
         self.fvBtn = QPushButton(self.page)
         self.fvBtn.setObjectName("fvBtn")
@@ -74,6 +90,11 @@ class Ui_Form(object):
         self.processBtn = QPushButton(self.page)
         self.processBtn.setObjectName("processBtn")
         self.processBtn.setGeometry(QRect(10, 20, 101, 71))
+
+        # ✅ Vacuum ON (Process 아래, 동일 크기)
+        self.vacuumOnBtn = QPushButton(self.page)
+        self.vacuumOnBtn.setObjectName("vacuumOnBtn")
+        self.vacuumOnBtn.setGeometry(QRect(10, 110, 101, 71))
 
         # ✅ Config 버튼 (Process 오른쪽, 동일 크기/스타일)
         self.configBtn = QPushButton(self.page)
@@ -506,6 +527,7 @@ class Ui_Form(object):
         self.fvBtn.setText(QCoreApplication.translate("Form", "F / V", None))
         self.processBtn.setText(QCoreApplication.translate("Form", "Process", None))
         self.configBtn.setText(QCoreApplication.translate("Form", "Config", None))
+        self.vacuumOnBtn.setText(QCoreApplication.translate("Form", "Vacuum\nON", None))
         self.vvBtn.setText(QCoreApplication.translate("Form", "V / V", None))
         self.doorBtn.setText(QCoreApplication.translate("Form", "Door", None))
         self.ms2shutterBtn.setText(QCoreApplication.translate("Form", "M.S 2\nShutter", None))
@@ -519,8 +541,12 @@ class Ui_Form(object):
         self.label_4.setText(QCoreApplication.translate("Form", "Water", None))
         self.rvBtn.setText(QCoreApplication.translate("Form", "R / V", None))
 
-        # (선택) 중앙 글자 (원치 않으면 아래 1줄 삭제)
+        # ✅ Chamber 타이틀
         self.chamberLabel.setText(QCoreApplication.translate("Form", "Chamber", None))
+
+        # ✅ Pressure 표시(기본값)
+        self.pressureCaption.setText(QCoreApplication.translate("Form", "Pressure (ACS-2000)", None))
+        self.pressureValue.setText(QCoreApplication.translate("Form", "--- Torr", None))
 
         self.materialLabel.setText(QCoreApplication.translate("Form", "Material Name", None))
         self.stopProcess.setText(QCoreApplication.translate("Form", "Stop", None))
@@ -596,7 +622,7 @@ class Ui_Form(object):
         toggle_buttons = [
             self.vvBtn, self.doorBtn, self.ftmBtn, self.mainshutterBtn,
             self.ms1powerBtn, self.ms1shutterBtn, self.ms2powerBtn, self.ms2shutterBtn,
-            self.rvBtn, self.mvBtn, self.pushButton_13, self.fvBtn, self.rpBtn,
+            self.rvBtn, self.mvBtn, self.pushButton_13, self.fvBtn, self.rpBtn, self.vacuumOnBtn,
         ]
         for b in toggle_buttons:
             b.setCheckable(True)
@@ -623,12 +649,30 @@ class Ui_Form(object):
 
         # ---- chamber block ----
         self.widget.setStyleSheet("background-color: rgb(220,220,220); border: none;")
+
+        # Chamber 타이틀(조잡하지 않게 약간만 줄임)
         if hasattr(self, "chamberLabel"):
             ch_font = QFont()
-            ch_font.setPointSize(22)
+            ch_font.setPointSize(20)
             ch_font.setBold(True)
             self.chamberLabel.setFont(ch_font)
             self.chamberLabel.setStyleSheet("color: rgb(90,90,90); background: transparent;")
+
+        # Pressure 캡션(작게, 회색)
+        if hasattr(self, "pressureCaption"):
+            cap_font = QFont()
+            cap_font.setPointSize(10)
+            cap_font.setBold(True)
+            self.pressureCaption.setFont(cap_font)
+            self.pressureCaption.setStyleSheet("color: rgb(110,110,110); background: transparent;")
+
+        # Pressure 값(크게, 진한색, 숫자 보기 좋게)
+        if hasattr(self, "pressureValue"):
+            val_font = QFont("Consolas")  # 없으면 자동 fallback
+            val_font.setPointSize(18)
+            val_font.setBold(True)
+            self.pressureValue.setFont(val_font)
+            self.pressureValue.setStyleSheet("color: rgb(40,40,40); background: transparent;")
 
         # ---- indicators ----
         self._style_indicator(self.g2_indicator_2, on=False)  # G1

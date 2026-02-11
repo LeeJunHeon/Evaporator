@@ -75,10 +75,10 @@ class Ui_Form(object):
         self.processBtn.setObjectName("processBtn")
         self.processBtn.setGeometry(QRect(10, 20, 101, 71))
 
-        # ✅ Config 버튼 (Process 아래, 동일 크기/스타일)
+        # ✅ Config 버튼 (Process 오른쪽, 동일 크기/스타일)
         self.configBtn = QPushButton(self.page)
         self.configBtn.setObjectName("configBtn")
-        self.configBtn.setGeometry(QRect(10, 110, 101, 71))
+        self.configBtn.setGeometry(QRect(120, 20, 101, 71))
 
         self.vvBtn = QPushButton(self.page)
         self.vvBtn.setObjectName("vvBtn")
@@ -294,7 +294,8 @@ class Ui_Form(object):
 
         self.processMonitor_HMI = QLineEdit(self.page)
         self.processMonitor_HMI.setObjectName("processMonitor_HMI")
-        self.processMonitor_HMI.setGeometry(QRect(120, 20, 481, 71))
+        # Process/Config 버튼을 상단에 가로 배치하기 위해 폭을 줄이고 오른쪽으로 이동
+        self.processMonitor_HMI.setGeometry(QRect(230, 20, 371, 71))
 
         self.stackedWidget.addWidget(self.page)
 

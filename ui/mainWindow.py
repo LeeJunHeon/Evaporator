@@ -11,10 +11,10 @@
 """
 
 from PySide6.QtCore import QCoreApplication, QMetaObject, QRect, Qt
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QPalette
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QFrame, QLabel, QLineEdit, QPlainTextEdit,
-    QPushButton, QStackedWidget, QWidget, QRadioButton,
+    QPushButton, QStackedWidget, QWidget,
 )
 
 
@@ -22,12 +22,12 @@ class Ui_Form(object):
     def setupUi(self, Form):
         if not Form.objectName():
             Form.setObjectName("Form")
-        Form.resize(1121, 631)
+        Form.resize(1121, 700)
         Form.setAutoFillBackground(True)
 
         self.stackedWidget = QStackedWidget(Form)
         self.stackedWidget.setObjectName("stackedWidget")
-        self.stackedWidget.setGeometry(QRect(10, 0, 1101, 631))
+        self.stackedWidget.setGeometry(QRect(10, 0, 1101, 700))
 
         # =========================
         # PAGE 0 (HMI)
@@ -37,27 +37,27 @@ class Ui_Form(object):
 
         self.pushButton_13 = QPushButton(self.page)
         self.pushButton_13.setObjectName("pushButton_13")
-        self.pushButton_13.setGeometry(QRect(770, 260, 101, 71))
+        self.pushButton_13.setGeometry(QRect(770, 310, 101, 71))
 
         self.ms2powerBtn = QPushButton(self.page)
         self.ms2powerBtn.setObjectName("ms2powerBtn")
-        self.ms2powerBtn.setGeometry(QRect(430, 450, 101, 71))
+        self.ms2powerBtn.setGeometry(QRect(430, 500, 101, 71))
 
         self.ftmBtn = QPushButton(self.page)
         self.ftmBtn.setObjectName("ftmBtn")
-        self.ftmBtn.setGeometry(QRect(220, 100, 101, 71))
+        self.ftmBtn.setGeometry(QRect(220, 150, 101, 71))
 
         self.rpBtn = QPushButton(self.page)
         self.rpBtn.setObjectName("rpBtn")
-        self.rpBtn.setGeometry(QRect(770, 370, 101, 71))
+        self.rpBtn.setGeometry(QRect(770, 420, 101, 71))
 
         self.mvBtn = QPushButton(self.page)
         self.mvBtn.setObjectName("mvBtn")
-        self.mvBtn.setGeometry(QRect(620, 260, 101, 71))
+        self.mvBtn.setGeometry(QRect(620, 310, 101, 71))
 
         self.widget = QWidget(self.page)
         self.widget.setObjectName("widget")
-        self.widget.setGeometry(QRect(140, 200, 261, 201))
+        self.widget.setGeometry(QRect(140, 250, 261, 201))
         self.widget.setAutoFillBackground(True)
 
         # (선택) 중앙 Chamber 글자 (원치 않으면 아래 4줄 삭제)
@@ -68,7 +68,7 @@ class Ui_Form(object):
 
         self.fvBtn = QPushButton(self.page)
         self.fvBtn.setObjectName("fvBtn")
-        self.fvBtn.setGeometry(QRect(920, 260, 101, 71))
+        self.fvBtn.setGeometry(QRect(920, 310, 101, 71))
 
         # ✅ 기본 스타일 유지
         self.processBtn = QPushButton(self.page)
@@ -82,39 +82,39 @@ class Ui_Form(object):
 
         self.vvBtn = QPushButton(self.page)
         self.vvBtn.setObjectName("vvBtn")
-        self.vvBtn.setGeometry(QRect(10, 200, 101, 71))
+        self.vvBtn.setGeometry(QRect(10, 250, 101, 71))
 
         self.doorBtn = QPushButton(self.page)
         self.doorBtn.setObjectName("doorBtn")
-        self.doorBtn.setGeometry(QRect(10, 330, 101, 71))
+        self.doorBtn.setGeometry(QRect(10, 380, 101, 71))
 
         self.ms2shutterBtn = QPushButton(self.page)
         self.ms2shutterBtn.setObjectName("ms2shutterBtn")
-        self.ms2shutterBtn.setGeometry(QRect(430, 550, 101, 71))
+        self.ms2shutterBtn.setGeometry(QRect(430, 600, 101, 71))
 
         self.ms1shutterBtn = QPushButton(self.page)
         self.ms1shutterBtn.setObjectName("ms1shutterBtn")
-        self.ms1shutterBtn.setGeometry(QRect(10, 550, 101, 71))
+        self.ms1shutterBtn.setGeometry(QRect(10, 600, 101, 71))
 
         self.mainshutterBtn = QPushButton(self.page)
         self.mainshutterBtn.setObjectName("mainshutterBtn")
-        self.mainshutterBtn.setGeometry(QRect(430, 200, 101, 71))
+        self.mainshutterBtn.setGeometry(QRect(430, 250, 101, 71))
 
         # ---- PIPES (frames) ----
         self.frame_17 = QFrame(self.page)
         self.frame_17.setObjectName("frame_17")
-        self.frame_17.setGeometry(QRect(360, 285, 721, 21))
+        self.frame_17.setGeometry(QRect(360, 335, 721, 21))
         self.frame_17.setAutoFillBackground(True)
         self.frame_17.setFrameShape(QFrame.Shape.StyledPanel)
         self.frame_17.setFrameShadow(QFrame.Shadow.Raised)
 
         self.ms1powerBtn = QPushButton(self.page)
         self.ms1powerBtn.setObjectName("ms1powerBtn")
-        self.ms1powerBtn.setGeometry(QRect(10, 450, 101, 71))
+        self.ms1powerBtn.setGeometry(QRect(10, 500, 101, 71))
 
         self.hmiLogWindow = QPlainTextEdit(self.page)
         self.hmiLogWindow.setObjectName("hmiLogWindow")
-        self.hmiLogWindow.setGeometry(QRect(570, 450, 511, 171))
+        self.hmiLogWindow.setGeometry(QRect(570, 500, 511, 171))
         font = QFont()
         font.setPointSize(11)
         self.hmiLogWindow.setFont(font)
@@ -178,116 +178,116 @@ class Ui_Form(object):
 
         self.rvBtn = QPushButton(self.page)
         self.rvBtn.setObjectName("rvBtn")
-        self.rvBtn.setGeometry(QRect(770, 150, 101, 71))
+        self.rvBtn.setGeometry(QRect(770, 200, 101, 71))
 
         self.frame_20 = QFrame(self.page)
         self.frame_20.setObjectName("frame_20")
-        self.frame_20.setGeometry(QRect(570, 180, 21, 121))
+        self.frame_20.setGeometry(QRect(570, 230, 21, 121))
         self.frame_20.setAutoFillBackground(True)
         self.frame_20.setFrameShape(QFrame.Shape.StyledPanel)
         self.frame_20.setFrameShadow(QFrame.Shadow.Raised)
 
         self.frame_21 = QFrame(self.page)
         self.frame_21.setObjectName("frame_21")
-        self.frame_21.setGeometry(QRect(570, 180, 511, 21))
+        self.frame_21.setGeometry(QRect(570, 230, 511, 21))
         self.frame_21.setAutoFillBackground(True)
         self.frame_21.setFrameShape(QFrame.Shape.StyledPanel)
         self.frame_21.setFrameShadow(QFrame.Shadow.Raised)
 
         self.frame_22 = QFrame(self.page)
         self.frame_22.setObjectName("frame_22")
-        self.frame_22.setGeometry(QRect(1060, 180, 21, 231))
+        self.frame_22.setGeometry(QRect(1060, 230, 21, 231))
         self.frame_22.setAutoFillBackground(True)
         self.frame_22.setFrameShape(QFrame.Shape.StyledPanel)
         self.frame_22.setFrameShadow(QFrame.Shadow.Raised)
 
         self.frame_18 = QFrame(self.page)
         self.frame_18.setObjectName("frame_18")
-        self.frame_18.setGeometry(QRect(850, 390, 231, 21))
+        self.frame_18.setGeometry(QRect(850, 440, 231, 21))
         self.frame_18.setAutoFillBackground(True)
         self.frame_18.setFrameShape(QFrame.Shape.StyledPanel)
         self.frame_18.setFrameShadow(QFrame.Shadow.Raised)
 
         self.frame_23 = QFrame(self.page)
         self.frame_23.setObjectName("frame_23")
-        self.frame_23.setGeometry(QRect(90, 230, 61, 21))
+        self.frame_23.setGeometry(QRect(90, 280, 61, 21))
         self.frame_23.setAutoFillBackground(True)
         self.frame_23.setFrameShape(QFrame.Shape.StyledPanel)
         self.frame_23.setFrameShadow(QFrame.Shadow.Raised)
 
         self.frame_24 = QFrame(self.page)
         self.frame_24.setObjectName("frame_24")
-        self.frame_24.setGeometry(QRect(390, 230, 61, 21))
+        self.frame_24.setGeometry(QRect(390, 280, 61, 21))
         self.frame_24.setAutoFillBackground(True)
         self.frame_24.setFrameShape(QFrame.Shape.StyledPanel)
         self.frame_24.setFrameShadow(QFrame.Shadow.Raised)
 
         self.frame_25 = QFrame(self.page)
         self.frame_25.setObjectName("frame_25")
-        self.frame_25.setGeometry(QRect(90, 360, 61, 21))
+        self.frame_25.setGeometry(QRect(90, 410, 61, 21))
         self.frame_25.setAutoFillBackground(True)
         self.frame_25.setFrameShape(QFrame.Shape.StyledPanel)
         self.frame_25.setFrameShadow(QFrame.Shadow.Raised)
 
         self.frame_26 = QFrame(self.page)
         self.frame_26.setObjectName("frame_26")
-        self.frame_26.setGeometry(QRect(100, 480, 81, 21))
+        self.frame_26.setGeometry(QRect(100, 530, 81, 21))
         self.frame_26.setAutoFillBackground(True)
         self.frame_26.setFrameShape(QFrame.Shape.StyledPanel)
         self.frame_26.setFrameShadow(QFrame.Shadow.Raised)
 
         self.frame_27 = QFrame(self.page)
         self.frame_27.setObjectName("frame_27")
-        self.frame_27.setGeometry(QRect(160, 390, 21, 111))
+        self.frame_27.setGeometry(QRect(160, 440, 21, 111))
         self.frame_27.setAutoFillBackground(True)
         self.frame_27.setFrameShape(QFrame.Shape.StyledPanel)
         self.frame_27.setFrameShadow(QFrame.Shadow.Raised)
 
         self.frame_28 = QFrame(self.page)
         self.frame_28.setObjectName("frame_28")
-        self.frame_28.setGeometry(QRect(220, 390, 21, 211))
+        self.frame_28.setGeometry(QRect(220, 440, 21, 211))
         self.frame_28.setAutoFillBackground(True)
         self.frame_28.setFrameShape(QFrame.Shape.StyledPanel)
         self.frame_28.setFrameShadow(QFrame.Shadow.Raised)
 
         self.frame_29 = QFrame(self.page)
         self.frame_29.setObjectName("frame_29")
-        self.frame_29.setGeometry(QRect(100, 580, 141, 21))
+        self.frame_29.setGeometry(QRect(100, 630, 141, 21))
         self.frame_29.setAutoFillBackground(True)
         self.frame_29.setFrameShape(QFrame.Shape.StyledPanel)
         self.frame_29.setFrameShadow(QFrame.Shadow.Raised)
 
         self.frame_30 = QFrame(self.page)
         self.frame_30.setObjectName("frame_30")
-        self.frame_30.setGeometry(QRect(300, 390, 21, 211))
+        self.frame_30.setGeometry(QRect(300, 440, 21, 211))
         self.frame_30.setAutoFillBackground(True)
         self.frame_30.setFrameShape(QFrame.Shape.StyledPanel)
         self.frame_30.setFrameShadow(QFrame.Shadow.Raised)
 
         self.frame_31 = QFrame(self.page)
         self.frame_31.setObjectName("frame_31")
-        self.frame_31.setGeometry(QRect(300, 580, 141, 21))
+        self.frame_31.setGeometry(QRect(300, 630, 141, 21))
         self.frame_31.setAutoFillBackground(True)
         self.frame_31.setFrameShape(QFrame.Shape.StyledPanel)
         self.frame_31.setFrameShadow(QFrame.Shadow.Raised)
 
         self.frame_32 = QFrame(self.page)
         self.frame_32.setObjectName("frame_32")
-        self.frame_32.setGeometry(QRect(360, 480, 81, 21))
+        self.frame_32.setGeometry(QRect(360, 530, 81, 21))
         self.frame_32.setAutoFillBackground(True)
         self.frame_32.setFrameShape(QFrame.Shape.StyledPanel)
         self.frame_32.setFrameShadow(QFrame.Shadow.Raised)
 
         self.frame_33 = QFrame(self.page)
         self.frame_33.setObjectName("frame_33")
-        self.frame_33.setGeometry(QRect(360, 390, 21, 111))
+        self.frame_33.setGeometry(QRect(360, 440, 21, 111))
         self.frame_33.setAutoFillBackground(True)
         self.frame_33.setFrameShape(QFrame.Shape.StyledPanel)
         self.frame_33.setFrameShadow(QFrame.Shadow.Raised)
 
         self.frame_34 = QFrame(self.page)
         self.frame_34.setObjectName("frame_34")
-        self.frame_34.setGeometry(QRect(260, 140, 21, 71))
+        self.frame_34.setGeometry(QRect(260, 190, 21, 71))
         self.frame_34.setAutoFillBackground(True)
         self.frame_34.setFrameShape(QFrame.Shape.StyledPanel)
         self.frame_34.setFrameShadow(QFrame.Shadow.Raised)
@@ -336,13 +336,11 @@ class Ui_Form(object):
         self.materialDensityEdit1.setObjectName("materialDensityEdit1")
         self.materialDensityEdit1.setGeometry(QRect(0, 220, 91, 26))
         self.materialDensityEdit1.setReadOnly(True)
-        self.materialDensityEdit1.setPlaceholderText("-")
 
         self.materialDensityEdit2 = QLineEdit(self.page_2)
         self.materialDensityEdit2.setObjectName("materialDensityEdit2")
         self.materialDensityEdit2.setGeometry(QRect(100, 220, 91, 26))
         self.materialDensityEdit2.setReadOnly(True)
-        self.materialDensityEdit2.setPlaceholderText("-")
 
         # Z-factor label (위에 1개로 통합)
         self.materialZLabel1 = QLabel(self.page_2)
@@ -360,28 +358,35 @@ class Ui_Form(object):
         self.materialZfactorEdit1.setObjectName("materialZfactorEdit1")
         self.materialZfactorEdit1.setGeometry(QRect(0, 270, 91, 26))
         self.materialZfactorEdit1.setReadOnly(True)
-        self.materialZfactorEdit1.setPlaceholderText("-")
 
         self.materialZfactorEdit2 = QLineEdit(self.page_2)
         self.materialZfactorEdit2.setObjectName("materialZfactorEdit2")
         self.materialZfactorEdit2.setGeometry(QRect(100, 270, 91, 26))
         self.materialZfactorEdit2.setReadOnly(True)
-        self.materialZfactorEdit2.setPlaceholderText("-")
 
-        # ✅ start/stop 위: 현재 dep.rate / thickness 표시
+        # ✅ Current: Rate는 재료별 2칸, Thick는 1칸(전체폭)
         self.currentRateLabel = QLabel(self.page_2)
         self.currentRateLabel.setGeometry(QRect(0, 500, 91, 20))
+
+        self.currentRateLabel2 = QLabel(self.page_2)
+        self.currentRateLabel2.setObjectName("currentRateLabel2")
+        self.currentRateLabel2.setGeometry(QRect(100, 500, 91, 20))
+
         self.currentRateEdit = QLineEdit(self.page_2)
         self.currentRateEdit.setGeometry(QRect(0, 520, 91, 26))
         self.currentRateEdit.setReadOnly(True)
-        self.currentRateEdit.setPlaceholderText("-")
+
+        self.currentRateEdit2 = QLineEdit(self.page_2)
+        self.currentRateEdit2.setObjectName("currentRateEdit2")
+        self.currentRateEdit2.setGeometry(QRect(100, 520, 91, 26))
+        self.currentRateEdit2.setReadOnly(True)
 
         self.currentThicknessLabel = QLabel(self.page_2)
-        self.currentThicknessLabel.setGeometry(QRect(100, 500, 91, 20))
+        self.currentThicknessLabel.setGeometry(QRect(0, 550, 191, 20))
+
         self.currentThicknessEdit = QLineEdit(self.page_2)
-        self.currentThicknessEdit.setGeometry(QRect(100, 520, 91, 26))
+        self.currentThicknessEdit.setGeometry(QRect(0, 570, 191, 26))
         self.currentThicknessEdit.setReadOnly(True)
-        self.currentThicknessEdit.setPlaceholderText("-")
 
         self.graphWidget = QWidget(self.page_2)
         self.graphWidget.setObjectName("graphWidget")
@@ -417,15 +422,15 @@ class Ui_Form(object):
 
         self.stopProcess = QPushButton(self.page_2)
         self.stopProcess.setObjectName("stopProcess")
-        self.stopProcess.setGeometry(QRect(100, 550, 91, 71))  # ✅ 오른쪽으로 이동
+        self.stopProcess.setGeometry(QRect(100, 610, 91, 71))  # ✅ 오른쪽으로 이동
 
         self.startProcess = QPushButton(self.page_2)
         self.startProcess.setObjectName("startProcess")
-        self.startProcess.setGeometry(QRect(0, 550, 91, 71))    # ✅ 왼쪽으로 이동
+        self.startProcess.setGeometry(QRect(0, 610, 91, 71))    # ✅ 왼쪽으로 이동
 
         self.logWindow = QPlainTextEdit(self.page_2)
         self.logWindow.setObjectName("logWindow")
-        self.logWindow.setGeometry(QRect(210, 490, 891, 131))
+        self.logWindow.setGeometry(QRect(210, 490, 891, 191))
 
         self.logWindow.setReadOnly(True)
         self.logWindow.setUndoRedoEnabled(False)
@@ -465,15 +470,15 @@ class Ui_Form(object):
         self.hmiBtn.setObjectName("hmiBtn")
         self.hmiBtn.setGeometry(QRect(0, 50, 191, 61))
 
-        self.sourcePower1 = QRadioButton(self.page_2)
+        self.sourcePower1 = QCheckBox(self.page_2)
         self.sourcePower1.setObjectName("sourcePower1")
         self.sourcePower1.setGeometry(QRect(0, 120, 81, 24))
 
-        self.sourcePower2 = QRadioButton(self.page_2)
+        self.sourcePower2 = QCheckBox(self.page_2)
         self.sourcePower2.setObjectName("sourcePower2")
         self.sourcePower2.setGeometry(QRect(110, 120, 81, 24))
 
-        # 기본 선택(무조건 하나 선택되게)
+        # 기본 선택(안전하게 Power1만 기본 체크, 둘 다 가능)
         self.sourcePower1.setChecked(True)
 
         self.processMonitor_Process = QLineEdit(self.page_2)
@@ -538,8 +543,11 @@ class Ui_Form(object):
         self.materialZLabel1.setText(QCoreApplication.translate("Form", "Z-Factor", None))
         self.materialZLabel2.setText(QCoreApplication.translate("Form", "", None))    # 숨김 처리용
 
-        # ✅ Current (2칸이라 글자 짧게)
-        self.currentRateLabel.setText(QCoreApplication.translate("Form", "Cur Rate", None))
+        # Cur Rate는 2칸이므로 각 칸 라벨 분리(재료/소스 1/2 의미)
+        self.currentRateLabel.setText(QCoreApplication.translate("Form", "Cur Rate 1", None))
+        self.currentRateLabel2.setText(QCoreApplication.translate("Form", "Cur Rate 2", None))
+
+        # Thick는 전체 1칸
         self.currentThicknessLabel.setText(QCoreApplication.translate("Form", "Cur Thick", None))
 
     # =========================
@@ -641,6 +649,30 @@ class Ui_Form(object):
             le.setReadOnly(True)
             le.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             le.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
+
+        # ✅ 표시용(LineEdit readOnly)도 "기존 입력칸(Dep.Rate 등)"과 동일한 기본 디자인 유지
+        # - border를 강제하지 않는다(기본 테마 테두리 유지)
+        # - readOnly 때문에 회색 배경이 되는 경우만 팔레트로 흰색 강제
+        readonly_display = [
+            self.materialDensityEdit1, self.materialDensityEdit2,
+            self.materialZfactorEdit1, self.materialZfactorEdit2,
+            self.currentRateEdit, self.currentThicknessEdit,
+        ]
+        if hasattr(self, "currentRateEdit2"):
+            readonly_display.append(self.currentRateEdit2)
+
+        for le in readonly_display:
+            # 혹시 이전에 스타일을 먹인 적이 있으면 제거(기본 디자인으로 복귀)
+            le.setStyleSheet("")
+
+            pal = le.palette()
+            pal.setColor(QPalette.ColorRole.Base, Qt.GlobalColor.white)
+            le.setPalette(pal)
+
+            # 표시 전용 UX
+            le.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            le.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
+
 
     def _style_indicator(self, w: QWidget, on: bool):
         bg = "#38d62f" if on else "#d82c2c"

@@ -11,9 +11,11 @@ _BASE_DIR = Path(__file__).resolve().parent
 if str(_BASE_DIR) not in sys.path:
     sys.path.insert(0, str(_BASE_DIR))
 
-from PySide6.QtWidgets import QApplication, QWidget, QMessageBox, QDialog
+from PySide6.QtWidgets import QApplication, QWidget, QMessageBox, QDialog, QVBoxLayout
 from PySide6.QtCore import Qt, QTimer
 
+# ✅ 그래프 위젯(별도 파일)
+from ui.rt_plot_widget import DepositionPlotWidget
 from ui.mainWindow import Ui_Form
 from ui.config_dialog import ConfigDialog
 from config.plc_config import load_plc_settings
@@ -322,6 +324,19 @@ class ProcessWindow(QWidget):
         self.ui.startProcess.clicked.connect(self._on_start_clicked)   
         self.ui.stopProcess.clicked.connect(self._on_stop_clicked)   
 
+        # =========================
+        # ✅ RT 표시(1초) + 그래프
+        # =========================
+        self._last_rate: Optional[float] = None
+        self._last_thickness: Optional[float] = None
+
+        self._plot: Optional[DepositionPlotWidget] = None
+        self._init_rt_plot()  # graphWidget 자리에 plot 삽입
+
+        self._rt_timer = QTimer(self)
+        self._rt_timer.setInterval(1000)  # ✅ 1초
+        self._rt_timer.timeout.connect(self._tick_rt_ui)
+
     def set_hmi_window(self, hmi_window: HmiWindow):
         self.hmi_window = hmi_window
 
@@ -380,10 +395,17 @@ class ProcessWindow(QWidget):
         except: pass
 
     def _on_stm_rate(self, rate):
-        self.ui.currentRateEdit.setText(f"{float(rate):.3f}")
+        # ✅ 값만 저장 (UI/그래프는 1초 타이머에서)
+        try:
+            self._last_rate = float(rate)
+        except Exception:
+            self._last_rate = None
 
     def _on_stm_thickness(self, th):
-        self.ui.currentThicknessEdit.setText(f"{float(th):.2f}")
+        try:
+            self._last_thickness = float(th)
+        except Exception:
+            self._last_thickness = None
 
     def _ensure_sensors_connected_fresh(self) -> None:
         """Start에서 호출: STM/ACS가 없으면 '새로 생성하고 연결(start)'"""
@@ -499,19 +521,38 @@ class ProcessWindow(QWidget):
             return
 
         try:
-            # 레시피 준비(기존 로직 유지)
-            r = pc.get_recipe()
-            if r is None:
-                pc.make_and_set_sample_recipe()
+            run_cfg = self._collect_ui_run_cfg()
+            if run_cfg is None:
+                return
 
-            pc.start()
+            # ✅ 1초 RT 시작
+            self._rt_start()
+
+            # ✅ ProcessController에 UI 기반 시작 API가 있으면 그걸 사용
+            if hasattr(pc, "start_from_ui"):
+                pc.start_from_ui(run_cfg)
+            else:
+                # 레시피 자동 생성은 금지. 레시피가 없으면 시작 못한다고 알림.
+                r = pc.get_recipe() if hasattr(pc, "get_recipe") else None
+                if r is None:
+                    QMessageBox.warning(self, "Process", "레시피가 없고 start_from_ui도 없습니다.\n(샘플 레시피 자동 생성은 제거됨)")
+                    self._rt_stop()
+                    return
+                pc.start()
+
             _append_text(self.ui.logWindow, "[UI] 공정 시작 요청")
         except Exception as e:
             QMessageBox.warning(self, "Process Start Failed", f"{e!r}")
             _append_text(self.ui.logWindow, f"[START FAIL] {e!r}")
 
     def _on_stop_clicked(self) -> None:
-        # ✅ 앱 종료가 아니라 "공정 stop" 의미
+        # ✅ 1) UI RT부터 멈춤
+        self._rt_stop()
+
+        # ✅ 2) 하드웨어 안전종료(요구 순서)
+        self._safe_shutdown_plc_best_effort()
+
+        # ✅ 3) 공정 로직 stop
         pc = self._process_controller
         if pc is not None:
             try:
@@ -520,7 +561,7 @@ class ProcessWindow(QWidget):
             except Exception as e:
                 _append_text(self.ui.logWindow, f"[STOP FAIL] {e!r}")
 
-        # ✅ Stop에서 STM/ACS 끊고 메모리 해제 → 다음 Start 때 새로 생성
+        # ✅ 4) Stop에서 STM/ACS 끊고 메모리 해제
         self._shutdown_sensors_and_release_memory()
 
     def _on_pause_clicked(self) -> None:
@@ -608,6 +649,156 @@ class ProcessWindow(QWidget):
             self.ui.materialEdit2.setText(mat or "Select")
             self.ui.materialDensityEdit2.setText(f"{float(den):.4f}")
             self.ui.materialZfactorEdit2.setText(f"{float(z):.4f}")
+
+    # ================== 그래프 설정 ==================
+    def _init_rt_plot(self) -> None:
+        """ui.graphWidget 자리에 DepositionPlotWidget을 삽입"""
+        host = getattr(self.ui, "graphWidget", None)
+        if host is None:
+            return
+
+        # 이미 layout이 없으면 생성
+        lay = host.layout()
+        if lay is None:
+            lay = QVBoxLayout(host)
+            lay.setContentsMargins(0, 0, 0, 0)
+            lay.setSpacing(0)
+            host.setLayout(lay)
+
+        # 기존 위젯 제거(중복 방지)
+        while lay.count():
+            item = lay.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.setParent(None)
+
+        self._plot = DepositionPlotWidget(parent=host)
+        lay.addWidget(self._plot)
+
+    def _rt_start(self) -> None:
+        if self._plot is not None:
+            try:
+                self._plot.clear()
+            except Exception:
+                pass
+        if not self._rt_timer.isActive():
+            self._rt_timer.start()
+
+    def _rt_stop(self) -> None:
+        if self._rt_timer.isActive():
+            self._rt_timer.stop()
+
+    def _tick_rt_ui(self) -> None:
+        """1초마다 lineedit + 그래프 갱신"""
+        rate = self._last_rate
+        th = self._last_thickness
+
+        try:
+            self.ui.currentRateEdit.setText(f"{rate:.3f}" if rate is not None else "")
+        except Exception:
+            pass
+
+        try:
+            self.ui.currentThicknessEdit.setText(f"{th:.2f}" if th is not None else "")
+        except Exception:
+            pass
+
+        if self._plot is not None:
+            try:
+                self._plot.append(rate=rate, thickness=th)
+            except Exception:
+                pass
+    # ================== 그래프 설정 ==================
+
+    # ================== UI 값 파싱 ==================
+    def _read_float(self, wname: str) -> Optional[float]:
+        w = getattr(self.ui, wname, None)
+        if w is None or not hasattr(w, "text"):
+            return None
+        s = str(w.text()).strip()
+        if not s:
+            return None
+        try:
+            return float(s)
+        except Exception:
+            return None
+
+    def _collect_ui_run_cfg(self) -> Optional[dict[str, Any]]:
+        # Power 선택(동시 가능)
+        p1 = bool(getattr(getattr(self.ui, "sourcePower1", None), "isChecked", lambda: False)())
+        p2 = bool(getattr(getattr(self.ui, "sourcePower2", None), "isChecked", lambda: False)())
+        if not (p1 or p2):
+            QMessageBox.warning(self, "Input", "Power1/Power2 중 최소 1개는 선택해야 합니다.")
+            return None
+
+        # 입력값
+        target_rate = self._read_float("depositionRateEdit")  # UI objectName이 다르면 여기만 맞춰주면 됨
+        target_thk  = self._read_float("thicknessEdit")       # "
+        delay_min   = self._read_float("delayEdit")           # 분, 소수 허용
+
+        if target_rate is None:
+            QMessageBox.warning(self, "Input", "Target Dep.rate를 입력하세요.")
+            return None
+        if target_thk is None:
+            QMessageBox.warning(self, "Input", "Target Thickness를 입력하세요.")
+            return None
+        if delay_min is None:
+            delay_min = 0.0
+
+        cfg: dict[str, Any] = {
+            "use_power1": p1,
+            "use_power2": p2,
+            "material_1": self._material_1,
+            "material_2": self._material_2,
+            "target_dep_rate": float(target_rate),
+            "target_thickness": float(target_thk),
+            "delay_min": float(delay_min),
+        }
+        return cfg
+    # ================== UI 값 파싱 ==================
+
+    # ================== 공정 종료 함수 ==================
+    def _safe_shutdown_plc_best_effort(self) -> None:
+        """
+        Stop 시 안전종료 순서:
+        1) MAIN_SHUTTER close
+        2) DAC 0
+        3) POWER off
+        """
+        if self.hmi_window is None:
+            return
+        binder = getattr(self.hmi_window, "_plc_binder", None)
+        if binder is None:
+            _append_text(self.ui.logWindow, "[PLC][WARN] plc_binder is None")
+            return
+
+        # 1) main shutter close
+        try:
+            binder.enqueue_write("MAIN_SHUTTER_SW", False)
+            _append_text(self.ui.logWindow, "[SAFE] MAIN_SHUTTER -> CLOSE")
+        except Exception as e:
+            _append_text(self.ui.logWindow, f"[SAFE][WARN] MAIN_SHUTTER close failed: {e!r}")
+
+        # 2) DAC = 0 (binder가 reg write 지원하는 경우에만)
+        try:
+            if hasattr(binder, "enqueue_write_reg"):
+                binder.enqueue_write_reg("DAC_POWER_1", 0)
+                binder.enqueue_write_reg("DAC_POWER_2", 0)
+                _append_text(self.ui.logWindow, "[SAFE] DAC_POWER_1/2 -> 0")
+            else:
+                _append_text(self.ui.logWindow, "[SAFE][WARN] binder has no enqueue_write_reg(). DAC=0 미지원")
+        except Exception as e:
+            _append_text(self.ui.logWindow, f"[SAFE][WARN] DAC=0 failed: {e!r}")
+
+        # 3) power off
+        try:
+            binder.enqueue_write("POWER_1_SW", False)
+            binder.enqueue_write("POWER_2_SW", False)
+            _append_text(self.ui.logWindow, "[SAFE] POWER_1/2 -> OFF")
+        except Exception as e:
+            _append_text(self.ui.logWindow, f"[SAFE][WARN] POWER off failed: {e!r}")
+    # ================== 공정 종료 함수 ==================
+
 
 # ============================================================
 # main

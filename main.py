@@ -329,6 +329,7 @@ class ProcessWindow(QWidget):
         # =========================
         self._last_rate: Optional[float] = None
         self._last_thickness: Optional[float] = None
+        self._last_power: Optional[float] = None   # ✅ 추가
 
         self._plot: Optional[DepositionPlotWidget] = None
         self._init_rt_plot()  # graphWidget 자리에 plot 삽입
@@ -542,15 +543,16 @@ class ProcessWindow(QWidget):
 
             _append_text(self.ui.logWindow, "[UI] 공정 시작 요청")
         except Exception as e:
+            self._rt_stop()  # ✅ 추가
             QMessageBox.warning(self, "Process Start Failed", f"{e!r}")
             _append_text(self.ui.logWindow, f"[START FAIL] {e!r}")
 
     def _on_stop_clicked(self) -> None:
-        # ✅ 1) UI RT부터 멈춤
-        self._rt_stop()
-
-        # ✅ 2) 하드웨어 안전종료(요구 순서)
+        # ✅ 1) 제일 먼저 하드웨어 안전종료(셔터→DAC0→파워OFF)
         self._safe_shutdown_plc_best_effort()
+
+        # ✅ 2) 그 다음 UI RT 멈춤
+        self._rt_stop()
 
         # ✅ 3) 공정 로직 stop
         pc = self._process_controller
@@ -585,6 +587,9 @@ class ProcessWindow(QWidget):
             _append_text(getattr(self.ui, "logWindow", None), f"[RESUME FAIL] {e!r}")
 
     def _on_status(self, st: Any) -> None:
+        # ✅ (추가) status에서 power/dac 값을 최대한 추출해서 그래프에 사용
+        self._try_update_last_power(st)
+
         # UI에 표시용 위젯이 있으면 업데이트(없으면 무시)
         w = getattr(self.ui, "processMonitor_Process", None)
         if w is None:
@@ -597,6 +602,45 @@ class ProcessWindow(QWidget):
                 w.setText(msg)
         except Exception:
             pass
+
+    def _try_update_last_power(self, st: Any) -> None:
+        """
+        ProcessController가 status에 power/dac 관련 값을 넣어줄 수도 있고,
+        dict로 올 수도 있어서 최대한 방어적으로 추출한다.
+        - 우선순위: total/combined -> (dac1+dac2) -> single
+        """
+        try:
+            # dict 형태
+            if isinstance(st, dict):
+                for k in ("power", "power_dac", "dac", "dac_power", "power_cmd", "dac_cmd"):
+                    if k in st and st[k] is not None:
+                        self._last_power = float(st[k])
+                        return
+                # 2채널
+                if ("dac1" in st) or ("dac2" in st):
+                    d1 = float(st.get("dac1") or 0.0)
+                    d2 = float(st.get("dac2") or 0.0)
+                    self._last_power = d1 + d2
+                    return
+                return
+
+            # 객체 형태
+            for name in ("power", "power_dac", "dac", "dac_power", "power_cmd", "dac_cmd"):
+                if hasattr(st, name):
+                    v = getattr(st, name)
+                    if v is not None:
+                        self._last_power = float(v)
+                        return
+
+            # 2채널 객체 후보
+            if hasattr(st, "dac1") or hasattr(st, "dac2"):
+                d1 = float(getattr(st, "dac1", 0.0) or 0.0)
+                d2 = float(getattr(st, "dac2", 0.0) or 0.0)
+                self._last_power = d1 + d2
+                return
+        except Exception:
+            # power는 없어도 공정은 돌 수 있으니 무시
+            return
 
     def _on_error(self, err: Any) -> None:
         try:
@@ -692,6 +736,7 @@ class ProcessWindow(QWidget):
         """1초마다 lineedit + 그래프 갱신"""
         rate = self._last_rate
         th = self._last_thickness
+        power = self._last_power
 
         try:
             self.ui.currentRateEdit.setText(f"{rate:.3f}" if rate is not None else "")
@@ -705,7 +750,7 @@ class ProcessWindow(QWidget):
 
         if self._plot is not None:
             try:
-                self._plot.append(rate=rate, thickness=th)
+                self._plot.append(rate=rate, power=power)
             except Exception:
                 pass
     # ================== 그래프 설정 ==================
@@ -797,6 +842,8 @@ class ProcessWindow(QWidget):
             _append_text(self.ui.logWindow, "[SAFE] POWER_1/2 -> OFF")
         except Exception as e:
             _append_text(self.ui.logWindow, f"[SAFE][WARN] POWER off failed: {e!r}")
+
+        self._last_power = 0.0
     # ================== 공정 종료 함수 ==================
 
 

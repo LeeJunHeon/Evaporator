@@ -19,7 +19,7 @@ from ui.config_dialog import ConfigDialog
 from config.plc_config import load_plc_settings
 from controller.hmi_plc_binder import HmiPlcBinder
 from utils.device_manager import DeviceManager
-from ui.material_catalog_dialog import MaterialCatalogDialog
+#from ui.material_catalog_dialog import MaterialCatalogDialog
 
 
 # ============================================================
@@ -311,6 +311,12 @@ class ProcessWindow(QWidget):
         self._stm_service: Any = None
         self._acs_service: Any = None
 
+        self._material_1 = None
+        self._material_2 = None
+
+        self.ui.materialEdit.clicked.connect(lambda: self._open_material_dialog(1))
+        self.ui.materialEdit2.clicked.connect(lambda: self._open_material_dialog(2))
+
         self.ui.hmiBtn.clicked.connect(self.goto_hmi_window)
 
         self.ui.startProcess.clicked.connect(self._on_start_clicked)   
@@ -360,6 +366,25 @@ class ProcessWindow(QWidget):
         self.hmi_window.raise_()
         self.hmi_window.activateWindow()
 
+    def _bind_stm_ui(self, stm):
+        self._unbind_stm_ui()
+        stm.sig_rate.connect(self._on_stm_rate)
+        stm.sig_thickness.connect(self._on_stm_thickness)
+
+    def _unbind_stm_ui(self):
+        if not self._stm_service:
+            return
+        try: self._stm_service.sig_rate.disconnect(self._on_stm_rate)
+        except: pass
+        try: self._stm_service.sig_thickness.disconnect(self._on_stm_thickness)
+        except: pass
+
+    def _on_stm_rate(self, rate):
+        self.ui.currentRateEdit.setText(f"{float(rate):.3f}")
+
+    def _on_stm_thickness(self, th):
+        self.ui.currentThicknessEdit.setText(f"{float(th):.2f}")
+
     def _ensure_sensors_connected_fresh(self) -> None:
         """Start에서 호출: STM/ACS가 없으면 '새로 생성하고 연결(start)'"""
         if self.hmi_window is None:
@@ -380,6 +405,7 @@ class ProcessWindow(QWidget):
                 # ✅ 연결은 Start에서만
                 stm.start()
                 acs.start()
+                self._bind_stm_ui(stm)
 
                 self._stm_service = stm
                 self._acs_service = acs
@@ -557,6 +583,31 @@ class ProcessWindow(QWidget):
 
         event.accept()
 
+    def _open_material_dialog(self, channel: int) -> None:
+        dlg = MaterialCatalogDialog(base_dir=_BASE_DIR, parent=self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        sel = dlg.selected()
+        if sel is None:
+            return
+        payload = {"material": sel.material, "density_g_cm3": sel.density_g_cm3, "z_factor": sel.z_factor}
+        self._apply_material(channel, payload)
+
+    def _apply_material(self, channel: int, data: dict[str, Any]) -> None:
+        mat = str(data.get("material", "")).strip()
+        den = data.get("density_g_cm3")
+        z = data.get("z_factor")
+
+        if channel == 1:
+            self._material_1 = dict(data)
+            self.ui.materialEdit.setText(mat or "Select")
+            self.ui.materialDensityEdit1.setText(f"{float(den):.4f}")
+            self.ui.materialZfactorEdit1.setText(f"{float(z):.4f}")
+        else:
+            self._material_2 = dict(data)
+            self.ui.materialEdit2.setText(mat or "Select")
+            self.ui.materialDensityEdit2.setText(f"{float(den):.4f}")
+            self.ui.materialZfactorEdit2.setText(f"{float(z):.4f}")
 
 # ============================================================
 # main

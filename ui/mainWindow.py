@@ -315,47 +315,71 @@ class Ui_Form(object):
         self.materialEdit2.setGeometry(QRect(100, 170, 91, 26))
         self.materialEdit2.setAutoDefault(False)
 
-        # ✅ material 하단에 density/zfactor 표시(ρ, Z + read-only QLineEdit)
+        # ✅ material 하단에 Density / Z-factor 표시 (라벨은 위, Edit은 2칸)
+        # - 기존 materialRhoLabel1/2, materialZLabel1/2는 "왼쪽 라벨" 용도였는데
+        #   이제 "위 라벨"로 재배치한다.
+        # - 오른쪽 라벨(materialRhoLabel2/materialZLabel2)은 안 쓰므로 숨긴다.
+
+        # Density label (위에 1개로 통합)
         self.materialRhoLabel1 = QLabel(self.page_2)
-        self.materialRhoLabel1.setGeometry(QRect(0, 200, 12, 20))
+        self.materialRhoLabel1.setObjectName("materialRhoLabel1")
+        self.materialRhoLabel1.setGeometry(QRect(0, 200, 191, 20))
+        self.materialRhoLabel1.setAlignment(Qt.AlignmentFlag.AlignLeading | Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+
+        # 기존 오른쪽 ρ 라벨은 사용 안함 → 숨김(겹침 방지)
+        self.materialRhoLabel2 = QLabel(self.page_2)
+        self.materialRhoLabel2.setObjectName("materialRhoLabel2")
+        self.materialRhoLabel2.setGeometry(QRect(0, 0, 0, 0))
+
+        # Density edits (PowerRamp처럼 2칸, 높이 26)
         self.materialDensityEdit1 = QLineEdit(self.page_2)
-        self.materialDensityEdit1.setGeometry(QRect(12, 200, 79, 20))
+        self.materialDensityEdit1.setObjectName("materialDensityEdit1")
+        self.materialDensityEdit1.setGeometry(QRect(0, 220, 91, 26))
         self.materialDensityEdit1.setReadOnly(True)
         self.materialDensityEdit1.setPlaceholderText("-")
 
-        self.materialRhoLabel2 = QLabel(self.page_2)
-        self.materialRhoLabel2.setGeometry(QRect(100, 200, 12, 20))
         self.materialDensityEdit2 = QLineEdit(self.page_2)
-        self.materialDensityEdit2.setGeometry(QRect(112, 200, 79, 20))
+        self.materialDensityEdit2.setObjectName("materialDensityEdit2")
+        self.materialDensityEdit2.setGeometry(QRect(100, 220, 91, 26))
         self.materialDensityEdit2.setReadOnly(True)
         self.materialDensityEdit2.setPlaceholderText("-")
 
+        # Z-factor label (위에 1개로 통합)
         self.materialZLabel1 = QLabel(self.page_2)
-        self.materialZLabel1.setGeometry(QRect(0, 225, 12, 20))
+        self.materialZLabel1.setObjectName("materialZLabel1")
+        self.materialZLabel1.setGeometry(QRect(0, 250, 191, 20))
+        self.materialZLabel1.setAlignment(Qt.AlignmentFlag.AlignLeading | Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+
+        # 기존 오른쪽 Z 라벨은 사용 안함 → 숨김
+        self.materialZLabel2 = QLabel(self.page_2)
+        self.materialZLabel2.setObjectName("materialZLabel2")
+        self.materialZLabel2.setGeometry(QRect(0, 0, 0, 0))
+
+        # Z-factor edits (2칸, 높이 26)
         self.materialZfactorEdit1 = QLineEdit(self.page_2)
-        self.materialZfactorEdit1.setGeometry(QRect(12, 225, 79, 20))
+        self.materialZfactorEdit1.setObjectName("materialZfactorEdit1")
+        self.materialZfactorEdit1.setGeometry(QRect(0, 270, 91, 26))
         self.materialZfactorEdit1.setReadOnly(True)
         self.materialZfactorEdit1.setPlaceholderText("-")
 
-        self.materialZLabel2 = QLabel(self.page_2)
-        self.materialZLabel2.setGeometry(QRect(100, 225, 12, 20))
         self.materialZfactorEdit2 = QLineEdit(self.page_2)
-        self.materialZfactorEdit2.setGeometry(QRect(112, 225, 79, 20))
+        self.materialZfactorEdit2.setObjectName("materialZfactorEdit2")
+        self.materialZfactorEdit2.setGeometry(QRect(100, 270, 91, 26))
         self.materialZfactorEdit2.setReadOnly(True)
         self.materialZfactorEdit2.setPlaceholderText("-")
 
         # ✅ start/stop 위: 현재 dep.rate / thickness 표시
         self.currentRateLabel = QLabel(self.page_2)
-        self.currentRateLabel.setGeometry(QRect(0, 450, 191, 20))
+        self.currentRateLabel.setGeometry(QRect(0, 500, 91, 20))
         self.currentRateEdit = QLineEdit(self.page_2)
-        self.currentRateEdit.setGeometry(QRect(0, 470, 191, 26))
+        self.currentRateEdit.setGeometry(QRect(0, 520, 91, 26))
         self.currentRateEdit.setReadOnly(True)
         self.currentRateEdit.setPlaceholderText("-")
 
         self.currentThicknessLabel = QLabel(self.page_2)
-        self.currentThicknessLabel.setGeometry(QRect(0, 490, 191, 20))
+        self.currentThicknessLabel.setGeometry(QRect(100, 500, 91, 20))
         self.currentThicknessEdit = QLineEdit(self.page_2)
-        self.currentThicknessEdit.setGeometry(QRect(0, 510, 191, 26))
+        self.currentThicknessEdit.setGeometry(QRect(100, 520, 91, 26))
         self.currentThicknessEdit.setReadOnly(True)
         self.currentThicknessEdit.setPlaceholderText("-")
 
@@ -366,17 +390,17 @@ class Ui_Form(object):
 
         self.deprateEdit = QLineEdit(self.page_2)
         self.deprateEdit.setObjectName("deprateEdit")
-        self.deprateEdit.setGeometry(QRect(0, 220, 91, 26))
+        self.deprateEdit.setGeometry(QRect(0, 320, 91, 26))
         self.deprateEdit2 = QLineEdit(self.page_2)
         self.deprateEdit2.setObjectName("deprateEdit2")
-        self.deprateEdit2.setGeometry(QRect(100, 220, 91, 26))
+        self.deprateEdit2.setGeometry(QRect(100, 320, 91, 26))
 
         self.powerEdit = QLineEdit(self.page_2)
         self.powerEdit.setObjectName("powerEdit")
-        self.powerEdit.setGeometry(QRect(0, 270, 91, 26))
+        self.powerEdit.setGeometry(QRect(0, 420, 91, 26))
         self.powerEdit2 = QLineEdit(self.page_2)
         self.powerEdit2.setObjectName("powerEdit2")
-        self.powerEdit2.setGeometry(QRect(100, 270, 91, 26))
+        self.powerEdit2.setGeometry(QRect(100, 420, 91, 26))
 
         self.thicknessEdit = QLineEdit(self.page_2)
         self.thicknessEdit.setObjectName("thicknessEdit")
@@ -384,7 +408,7 @@ class Ui_Form(object):
 
         self.delayEdit = QLineEdit(self.page_2)
         self.delayEdit.setObjectName("delayEdit")
-        self.delayEdit.setGeometry(QRect(0, 320, 191, 26))
+        self.delayEdit.setGeometry(QRect(0, 470, 191, 26))
 
         self.materialLabel = QLabel(self.page_2)
         self.materialLabel.setObjectName("materialLabel")
@@ -415,17 +439,17 @@ class Ui_Form(object):
 
         self.delayLabel = QLabel(self.page_2)
         self.delayLabel.setObjectName("delayLabel")
-        self.delayLabel.setGeometry(QRect(0, 300, 181, 20))
+        self.delayLabel.setGeometry(QRect(0, 450, 181, 20))
         self.delayLabel.setAlignment(Qt.AlignmentFlag.AlignLeading | Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
         self.pwoerLabel = QLabel(self.page_2)
         self.pwoerLabel.setObjectName("pwoerLabel")
-        self.pwoerLabel.setGeometry(QRect(0, 250, 181, 20))
+        self.pwoerLabel.setGeometry(QRect(0, 400, 181, 20))
         self.pwoerLabel.setAlignment(Qt.AlignmentFlag.AlignLeading | Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
         self.deprateLabel = QLabel(self.page_2)
         self.deprateLabel.setObjectName("deprateLabel")
-        self.deprateLabel.setGeometry(QRect(0, 200, 181, 20))
+        self.deprateLabel.setGeometry(QRect(0, 300, 181, 20))
         self.deprateLabel.setAlignment(Qt.AlignmentFlag.AlignLeading | Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
         self.evaporatorLabel = QLabel(self.page_2)
@@ -503,6 +527,20 @@ class Ui_Form(object):
         self.hmiBtn.setText(QCoreApplication.translate("Form", "HMI", None))
         self.sourcePower1.setText(QCoreApplication.translate("Form", "Power 1", None))
         self.sourcePower2.setText(QCoreApplication.translate("Form", "Power 2", None))
+
+        # ✅ Material 선택 버튼 기본 표시
+        self.materialEdit.setText(QCoreApplication.translate("Form", "Select", None))
+        self.materialEdit2.setText(QCoreApplication.translate("Form", "Select", None))
+
+        # ✅ Density / Z-Factor 라벨 (위 라벨)
+        self.materialRhoLabel1.setText(QCoreApplication.translate("Form", "Density", None))
+        self.materialRhoLabel2.setText(QCoreApplication.translate("Form", "", None))  # 숨김 처리용
+        self.materialZLabel1.setText(QCoreApplication.translate("Form", "Z-Factor", None))
+        self.materialZLabel2.setText(QCoreApplication.translate("Form", "", None))    # 숨김 처리용
+
+        # ✅ Current (2칸이라 글자 짧게)
+        self.currentRateLabel.setText(QCoreApplication.translate("Form", "Cur Rate", None))
+        self.currentThicknessLabel.setText(QCoreApplication.translate("Form", "Cur Thick", None))
 
     # =========================
     # Style only

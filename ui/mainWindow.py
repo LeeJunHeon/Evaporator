@@ -63,19 +63,19 @@ class Ui_Form(object):
         # ✅ Chamber 타이틀(상단)
         self.chamberLabel = QLabel(self.widget)
         self.chamberLabel.setObjectName("chamberLabel")
-        self.chamberLabel.setGeometry(QRect(0, 10, 261, 55))
+        self.chamberLabel.setGeometry(QRect(0, 14, 261, 50))
         self.chamberLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         # ✅ Pressure 캡션(중간)
         self.pressureCaption = QLabel(self.widget)
         self.pressureCaption.setObjectName("pressureCaption")
-        self.pressureCaption.setGeometry(QRect(0, 75, 261, 20))
+        self.pressureCaption.setGeometry(QRect(0, 68, 261, 18))
         self.pressureCaption.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         # ✅ Pressure 값(하단, 크게)
         self.pressureValue = QLabel(self.widget)
         self.pressureValue.setObjectName("pressureValue")
-        self.pressureValue.setGeometry(QRect(0, 95, 261, 90))
+        self.pressureValue.setGeometry(QRect(0, 90, 261, 96))
         self.pressureValue.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         # 표시가 항상 위로 오도록
@@ -545,7 +545,7 @@ class Ui_Form(object):
         self.chamberLabel.setText(QCoreApplication.translate("Form", "Chamber", None))
 
         # ✅ Pressure 표시(기본값)
-        self.pressureCaption.setText(QCoreApplication.translate("Form", "Pressure (ACS-2000)", None))
+        self.pressureCaption.setText(QCoreApplication.translate("Form", "Pressure", None))
         self.pressureValue.setText(QCoreApplication.translate("Form", "--- Torr", None))
 
         self.materialLabel.setText(QCoreApplication.translate("Form", "Material Name", None))
@@ -622,7 +622,7 @@ class Ui_Form(object):
         toggle_buttons = [
             self.vvBtn, self.doorBtn, self.ftmBtn, self.mainshutterBtn,
             self.ms1powerBtn, self.ms1shutterBtn, self.ms2powerBtn, self.ms2shutterBtn,
-            self.rvBtn, self.mvBtn, self.pushButton_13, self.fvBtn, self.rpBtn, self.vacuumOnBtn,
+            self.rvBtn, self.mvBtn, self.pushButton_13, self.fvBtn, self.rpBtn,
         ]
         for b in toggle_buttons:
             b.setCheckable(True)
@@ -661,10 +661,10 @@ class Ui_Form(object):
         # Pressure 캡션(작게, 회색)
         if hasattr(self, "pressureCaption"):
             cap_font = QFont()
-            cap_font.setPointSize(10)
-            cap_font.setBold(True)
+            cap_font.setPointSize(9)
+            cap_font.setBold(False)
             self.pressureCaption.setFont(cap_font)
-            self.pressureCaption.setStyleSheet("color: rgb(110,110,110); background: transparent;")
+            self.pressureCaption.setStyleSheet("color: rgb(120,120,120); background: transparent;")
 
         # Pressure 값(크게, 진한색, 숫자 보기 좋게)
         if hasattr(self, "pressureValue"):

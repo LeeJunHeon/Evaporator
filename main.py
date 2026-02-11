@@ -415,8 +415,18 @@ class ProcessWindow(QWidget):
         ini_path = self.hmi_window._ini_path
 
         # 이미 살아있으면 재사용(Stop을 안 눌렀다면 여기로 들어올 수 있음)
-        if (self._stm_service is not None) or (self._acs_service is not None) or (self.hmi_window._dev_mgr is not None):
+        if self._stm_service is not None or self._acs_service is not None:
             _append_text(self.ui.logWindow, "[DEV] STM/ACS already allocated (reuse).")
+            # ✅ reuse여도 UI 시그널은 다시 묶어줘야 함
+            try:
+                if self._stm_service is not None:
+                    self._bind_stm_ui(self._stm_service)
+            except Exception:
+                pass
+            return
+
+        if self.hmi_window._dev_mgr is not None:
+            _append_text(self.ui.logWindow, "[DEV] DeviceManager already allocated (reuse).")
             return
 
         # 1) 신규 서비스(STMService/ACSService)가 있으면: Start에서 생성+start()
@@ -466,6 +476,12 @@ class ProcessWindow(QWidget):
 
     def _shutdown_sensors_and_release_memory(self) -> None:
         """Stop에서 호출: STM/ACS 연결 해제 + 객체 해제 + gc.collect()"""
+        # ✅ 먼저 UI 시그널 해제
+        try:
+            self._unbind_stm_ui()
+        except Exception:
+            pass
+
         # 1) 서비스 기반이면 stop()만 호출 (후보 3개 금지)
         if self._stm_service is not None:
             try:

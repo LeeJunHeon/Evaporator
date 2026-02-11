@@ -4,18 +4,13 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional, List, Dict
+from typing import Any, Optional
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
     QPushButton, QLabel, QMessageBox, QAbstractItemView, QHeaderView
 )
-
-try:
-    from openpyxl import load_workbook
-except Exception:
-    load_workbook = None
 
 
 @dataclass
@@ -27,39 +22,27 @@ class MaterialRow:
 
 
 def _to_str(v: Any) -> str:
-    if v is None:
-        return ""
-    s = str(v).strip()
-    if s.lower() == "none":
-        return ""
-    return s
+    return "" if v is None else str(v).strip()
 
 
-def _to_float(v: Any, *, default: float = 0.0) -> float:
-    if v is None:
-        return default
-    if isinstance(v, (int, float)):
-        return float(v)
-    s = str(v).strip()
-    if not s:
-        return default
-    # "1.000*" 같은 표기 처리
-    s = s.replace("*", "").strip()
-    # "--------" 같은 표기 처리
-    if set(s) <= {"-"}:
-        return default
+def _to_float(v: Any, default: float = 0.0) -> float:
     try:
+        s = _to_str(v)
+        if not s:
+            return float(default)
+        # "1.000*" 같은 경우 방어
+        s = s.replace("*", "").strip()
         return float(s)
     except Exception:
-        return default
+        return float(default)
 
 
 class MaterialCatalogDialog(QDialog):
     """
-    - 최초 실행(저장 파일 없을 때): 물질표.xlsx를 읽어서 config/material_catalog.json 생성
-    - 이후 실행: config/material_catalog.json을 읽어서 표시
-    - 더블클릭 편집(셀 수정)하면 즉시 JSON 저장(영구 반영)
-    - 행 선택 후 Apply 누르면 selected()로 선택 값 반환
+    JSON 기반 Material Catalog
+    - config/material_catalog.json 만 사용 (엑셀 로딩 제거)
+    - 더블클릭 편집 가능
+    - Save(즉시 저장) + Apply(저장+선택 반환)
     """
 
     def __init__(self, *, base_dir: Path, parent=None) -> None:
@@ -69,21 +52,14 @@ class MaterialCatalogDialog(QDialog):
         self.resize(720, 520)
 
         self._base_dir = Path(base_dir)
-        self._config_dir = self._base_dir / "config"
-        self._config_dir.mkdir(parents=True, exist_ok=True)
-
-        self._json_path = self._config_dir / "material_catalog.json"
+        self._json_path = self._base_dir / "config" / "material_catalog.json"
         self._selected: Optional[MaterialRow] = None
-
-        self._loading = True  # itemChanged 저장 루프 방지
+        self._loading = True
 
         # ---------- UI ----------
         root = QVBoxLayout(self)
 
-        self.infoLabel = QLabel(
-            "더블클릭으로 Density/Z-Factor/Material/Note를 수정하면 즉시 저장됩니다.\n"
-            "행을 선택한 뒤 Apply를 누르면 Process 탭에 반영됩니다."
-        )
+        self.infoLabel = QLabel("Double-click to edit. (Material / Density / Z-Factor / Note)")
         self.infoLabel.setWordWrap(True)
         root.addWidget(self.infoLabel)
 
@@ -102,178 +78,81 @@ class MaterialCatalogDialog(QDialog):
         btn_row = QHBoxLayout()
         btn_row.addStretch(1)
 
+        self.saveBtn = QPushButton("Save", self)
         self.applyBtn = QPushButton("Apply", self)
         self.cancelBtn = QPushButton("Cancel", self)
+
+        btn_row.addWidget(self.saveBtn)
         btn_row.addWidget(self.applyBtn)
         btn_row.addWidget(self.cancelBtn)
 
         root.addLayout(btn_row)
 
         # ---------- signals ----------
+        self.saveBtn.clicked.connect(self._on_save)
         self.applyBtn.clicked.connect(self._on_apply)
         self.cancelBtn.clicked.connect(self.reject)
+
+        # itemChanged 때마다 자동 저장(원하면 주석 처리 가능)
         self.table.itemChanged.connect(self._on_item_changed)
 
-        # ---------- load data ----------
-        materials, notes = self._load_or_seed()
-        if notes:
-            # 엑셀 우측 비고(설명)들을 그대로 안내로도 표시
-            self.infoLabel.setText(
-                self.infoLabel.text()
-                + "\n\n[엑셀 비고 요약]\n- "
-                + "\n- ".join(notes)
-            )
-
-        self._populate(materials)
+        # ---------- load ----------
+        mats = self._load_json_items()
+        self._populate(mats)
         self._loading = False
 
-    # ------------------------
-    # public
-    # ------------------------
+    @classmethod
+    def pick(cls, *, base_dir: Path, parent=None) -> Optional[MaterialRow]:
+        dlg = cls(base_dir=base_dir, parent=parent)
+        if dlg.exec() != QDialog.Accepted:
+            return None
+        return dlg.selected()
+
     def selected(self) -> Optional[MaterialRow]:
         return self._selected
 
-    # ------------------------
-    # internal
-    # ------------------------
-    def _find_excel_path(self) -> Optional[Path]:
-        candidates = [
-            self._base_dir / "물질표.xlsx",
-            self._base_dir / "config" / "물질표.xlsx",
-            self._base_dir / "data" / "물질표.xlsx",
-        ]
-        for p in candidates:
-            if p.exists():
-                return p
-        return None
+    # ------------------------ req: JSON load/save
+    def _load_json_items(self) -> list[MaterialRow]:
+        if not self._json_path.exists():
+            QMessageBox.warning(self, "Missing file", f"파일이 없습니다:\n{self._json_path}")
+            return []
 
-    def _load_or_seed(self) -> tuple[list[MaterialRow], list[str]]:
-        """
-        1) JSON 있으면 JSON 로드
-        2) 없으면 Excel(물질표.xlsx) 로드 → JSON 저장(seed)
-        """
-        if self._json_path.exists():
-            try:
-                obj = json.loads(self._json_path.read_text(encoding="utf-8"))
-                mats = []
-                for it in obj.get("materials", []):
-                    mats.append(
-                        MaterialRow(
-                            material=_to_str(it.get("material")),
-                            density_g_cm3=float(it.get("density_g_cm3", 0.0)),
-                            z_factor=float(it.get("z_factor", 0.0)),
-                            note=_to_str(it.get("note")),
-                        )
-                    )
-                notes = [s for s in obj.get("notes", []) if _to_str(s)]
-                mats = [m for m in mats if m.material]  # 빈 행 제거
-                return mats, notes
-            except Exception as e:
-                QMessageBox.warning(self, "Load error", f"material_catalog.json 로드 실패:\n{e}")
+        try:
+            obj = json.loads(self._json_path.read_text(encoding="utf-8"))
 
-        # JSON 없으면 Excel seed
-        excel_path = self._find_excel_path()
-        if excel_path is None:
-            QMessageBox.warning(
-                self,
-                "Missing file",
-                "물질표.xlsx를 찾을 수 없습니다.\n"
-                "아래 위치 중 하나에 파일을 두세요:\n"
-                f"- {self._base_dir / '물질표.xlsx'}\n"
-                f"- {self._base_dir / 'config' / '물질표.xlsx'}\n"
-                f"- {self._base_dir / 'data' / '물질표.xlsx'}",
-            )
-            return [], []
+            # ✅ 네가 만든 포맷: {"version":1, "items":[...]}
+            if isinstance(obj, dict) and isinstance(obj.get("items"), list):
+                items = obj["items"]
 
-        if load_workbook is None:
-            QMessageBox.warning(self, "Missing dependency", "openpyxl이 없어 물질표.xlsx를 읽을 수 없습니다.")
-            return [], []
+            # (구버전 호환) {"materials":[...]} 형태도 들어오면 items로 변환
+            elif isinstance(obj, dict) and isinstance(obj.get("materials"), list):
+                items = obj["materials"]
+            else:
+                items = []
 
-        mats, notes = self._read_excel(excel_path)
-        # seed 저장
-        self._save_json(mats, notes)
-        return mats, notes
+            mats: list[MaterialRow] = []
+            for it in items:
+                if not isinstance(it, dict):
+                    continue
+                m = _to_str(it.get("material"))
+                if not m:
+                    continue
+                d = _to_float(it.get("density_g_cm3"), default=0.0)
+                z = _to_float(it.get("z_factor"), default=0.0)
+                note = _to_str(it.get("note"))
+                mats.append(MaterialRow(material=m, density_g_cm3=d, z_factor=z, note=note))
 
-    def _read_excel(self, excel_path: Path) -> tuple[list[MaterialRow], list[str]]:
-        wb = load_workbook(excel_path)
-        ws = wb.active
+            return mats
 
-        mats: list[MaterialRow] = []
-        notes: list[str] = []
+        except Exception as e:
+            QMessageBox.warning(self, "Load error", f"material_catalog.json 로드 실패:\n{e!r}")
+            return []
 
-        # 헤더: [물질, Density, Z factor, (빈), Note]
-        for r_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
-            material = _to_str(row[0] if len(row) > 0 else "")
-            density = _to_float(row[1] if len(row) > 1 else None, default=0.0)
-            zfac = _to_float(row[2] if len(row) > 2 else None, default=0.0)
-            note = _to_str(row[4] if len(row) > 4 else "")
-
-            if note:
-                notes.append(note)
-
-            # 빈 줄 스킵
-            if not material:
-                continue
-
-            mats.append(MaterialRow(material=material, density_g_cm3=density, z_factor=zfac, note=note))
-
-        # notes 중복 제거(순서 유지)
-        uniq = []
-        seen = set()
-        for n in notes:
-            if n not in seen:
-                uniq.append(n)
-                seen.add(n)
-
-        return mats, uniq
-
-    def _populate(self, mats: list[MaterialRow]) -> None:
-        self.table.setRowCount(len(mats))
-        for r, m in enumerate(mats):
-            it0 = QTableWidgetItem(m.material)
-            it1 = QTableWidgetItem(f"{m.density_g_cm3:g}")
-            it2 = QTableWidgetItem(f"{m.z_factor:g}")
-            it3 = QTableWidgetItem(m.note or "")
-
-            # 정렬/선택 편의
-            it0.setData(Qt.UserRole, m.material)
-
-            self.table.setItem(r, 0, it0)
-            self.table.setItem(r, 1, it1)
-            self.table.setItem(r, 2, it2)
-            self.table.setItem(r, 3, it3)
-
-    def _collect_rows(self) -> tuple[list[MaterialRow], list[str]]:
-        mats: list[MaterialRow] = []
-        notes: list[str] = []
-
-        for r in range(self.table.rowCount()):
-            material = _to_str(self.table.item(r, 0).text() if self.table.item(r, 0) else "")
-            density = _to_float(self.table.item(r, 1).text() if self.table.item(r, 1) else None, default=0.0)
-            zfac = _to_float(self.table.item(r, 2).text() if self.table.item(r, 2) else None, default=0.0)
-            note = _to_str(self.table.item(r, 3).text() if self.table.item(r, 3) else "")
-
-            if note:
-                notes.append(note)
-
-            if not material:
-                continue
-            mats.append(MaterialRow(material=material, density_g_cm3=density, z_factor=zfac, note=note))
-
-        # notes 중복 제거
-        uniq = []
-        seen = set()
-        for n in notes:
-            if n not in seen:
-                uniq.append(n)
-                seen.add(n)
-
-        return mats, uniq
-
-    def _save_json(self, mats: list[MaterialRow], notes: list[str]) -> None:
+    def _save_json_items(self, mats: list[MaterialRow]) -> None:
+        self._json_path.parent.mkdir(parents=True, exist_ok=True)
         obj = {
             "version": 1,
-            "materials": [
+            "items": [
                 {
                     "material": m.material,
                     "density_g_cm3": float(m.density_g_cm3),
@@ -282,52 +161,61 @@ class MaterialCatalogDialog(QDialog):
                 }
                 for m in mats
             ],
-            "notes": notes,
         }
         self._json_path.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    def _validate_cell(self, col: int, text: str) -> bool:
-        # 0: material (빈 값 금지)
-        if col == 0:
-            return bool(_to_str(text))
+    # ---------------- table helpers
+    def _populate(self, mats: list[MaterialRow]) -> None:
+        self.table.blockSignals(True)
+        self.table.setRowCount(len(mats))
+        for r, m in enumerate(mats):
+            self.table.setItem(r, 0, QTableWidgetItem(m.material))
+            self.table.setItem(r, 1, QTableWidgetItem(f"{m.density_g_cm3:g}"))
+            self.table.setItem(r, 2, QTableWidgetItem(f"{m.z_factor:g}"))
+            self.table.setItem(r, 3, QTableWidgetItem(m.note or ""))
+        self.table.blockSignals(False)
 
-        # 1: density > 0
-        if col == 1:
-            v = _to_float(text, default=-1.0)
-            return v > 0.0
+        if self.table.rowCount() > 0:
+            self.table.selectRow(0)
 
-        # 2: z_factor > 0
-        if col == 2:
-            v = _to_float(text, default=-1.0)
-            return v > 0.0
+    def _collect_rows(self) -> Optional[list[MaterialRow]]:
+        mats: list[MaterialRow] = []
 
-        # 3: note는 자유
-        return True
+        for r in range(self.table.rowCount()):
+            material = _to_str(self.table.item(r, 0).text() if self.table.item(r, 0) else "")
+            density = _to_float(self.table.item(r, 1).text() if self.table.item(r, 1) else "", default=0.0)
+            zfac = _to_float(self.table.item(r, 2).text() if self.table.item(r, 2) else "", default=0.0)
+            note = _to_str(self.table.item(r, 3).text() if self.table.item(r, 3) else "")
 
-    def _on_item_changed(self, item: QTableWidgetItem) -> None:
+            if not material:
+                QMessageBox.warning(self, "Invalid", f"{r+1}행: Material이 비어있습니다.")
+                return None
+            if density <= 0:
+                QMessageBox.warning(self, "Invalid", f"{r+1}행: Density는 0보다 커야 합니다.")
+                return None
+            if zfac <= 0:
+                QMessageBox.warning(self, "Invalid", f"{r+1}행: Z factor는 0보다 커야 합니다.")
+                return None
+
+            mats.append(MaterialRow(material=material, density_g_cm3=density, z_factor=zfac, note=note))
+
+        return mats
+
+    # ---------------- signals
+    def _on_item_changed(self, _item: QTableWidgetItem) -> None:
         if self._loading:
             return
-
-        col = item.column()
-        txt = item.text()
-
-        if not self._validate_cell(col, txt):
-            QMessageBox.warning(
-                self,
-                "Invalid value",
-                "값이 올바르지 않습니다.\n"
-                "- Material: 빈 값 불가\n"
-                "- Density: 0보다 큰 숫자\n"
-                "- Z factor: 0보다 큰 숫자",
-            )
-            # 유효하지 않으면 일단 빈칸으로 되돌려 강제 저장 방지
-            self._loading = True
-            item.setText("")
-            self._loading = False
+        mats = self._collect_rows()
+        if mats is None:
             return
+        self._save_json_items(mats)
 
-        mats, notes = self._collect_rows()
-        self._save_json(mats, notes)
+    def _on_save(self) -> None:
+        mats = self._collect_rows()
+        if mats is None:
+            return
+        self._save_json_items(mats)
+        QMessageBox.information(self, "Saved", "material_catalog.json 저장 완료")
 
     def _on_apply(self) -> None:
         row = self.table.currentRow()
@@ -335,21 +223,15 @@ class MaterialCatalogDialog(QDialog):
             QMessageBox.information(self, "Select", "적용할 행을 먼저 선택하세요.")
             return
 
-        material = _to_str(self.table.item(row, 0).text() if self.table.item(row, 0) else "")
-        density = _to_float(self.table.item(row, 1).text() if self.table.item(row, 1) else None, default=0.0)
-        zfac = _to_float(self.table.item(row, 2).text() if self.table.item(row, 2) else None, default=0.0)
+        mats = self._collect_rows()
+        if mats is None:
+            return
+        self._save_json_items(mats)
+
+        material = _to_str(self.table.item(row, 0).text())
+        density = _to_float(self.table.item(row, 1).text(), default=0.0)
+        zfac = _to_float(self.table.item(row, 2).text(), default=0.0)
         note = _to_str(self.table.item(row, 3).text() if self.table.item(row, 3) else "")
-
-        if not material:
-            QMessageBox.warning(self, "Invalid", "Material이 비어있습니다.")
-            return
-        if density <= 0 or zfac <= 0:
-            QMessageBox.warning(self, "Invalid", "Density/Z factor 값이 올바르지 않습니다.")
-            return
-
-        # 최신 테이블 상태 저장
-        mats, notes = self._collect_rows()
-        self._save_json(mats, notes)
 
         self._selected = MaterialRow(material=material, density_g_cm3=density, z_factor=zfac, note=note)
         self.accept()

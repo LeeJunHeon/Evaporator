@@ -584,14 +584,14 @@ class ProcessWindow(QWidget):
         event.accept()
 
     def _open_material_dialog(self, channel: int) -> None:
-        dlg = MaterialCatalogDialog(base_dir=_BASE_DIR, parent=self)
-        if dlg.exec() != QDialog.Accepted:
+        sel = MaterialCatalogDialog.pick(base_dir=_BASE_DIR, parent=self)
+        if not sel:
             return
-        sel = dlg.selected()
-        if sel is None:
-            return
-        payload = {"material": sel.material, "density_g_cm3": sel.density_g_cm3, "z_factor": sel.z_factor}
-        self._apply_material(channel, payload)
+        self._apply_material(channel, {
+            "material": sel.material,
+            "density_g_cm3": sel.density_g_cm3,
+            "z_factor": sel.z_factor,
+        })
 
     def _apply_material(self, channel: int, data: dict[str, Any]) -> None:
         mat = str(data.get("material", "")).strip()

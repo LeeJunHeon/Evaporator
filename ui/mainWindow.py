@@ -307,12 +307,12 @@ class Ui_Form(object):
         # ✅ Material name: QLineEdit -> QPushButton
         self.materialEdit = QPushButton(self.page_2)
         self.materialEdit.setObjectName("materialEdit")
-        self.materialEdit.setGeometry(QRect(0, 170, 91, 26))
+        self.materialEdit.setGeometry(QRect(0, 170, 91, 32))
         self.materialEdit.setAutoDefault(False)
 
         self.materialEdit2 = QPushButton(self.page_2)
         self.materialEdit2.setObjectName("materialEdit2")
-        self.materialEdit2.setGeometry(QRect(100, 170, 91, 26))
+        self.materialEdit2.setGeometry(QRect(100, 170, 91, 32))
         self.materialEdit2.setAutoDefault(False)
 
         # ✅ material 하단에 Density / Z-factor 표시 (라벨은 위, Edit은 2칸)

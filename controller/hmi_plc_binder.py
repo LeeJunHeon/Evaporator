@@ -678,53 +678,122 @@ class HmiPlcBinder(QObject):
 
     # ================= DAC 수동 입력 =================
     def _wire_dac_controls(self) -> None:
-        self._dac1_edit = getattr(self.ui, "dac1Edit", None)
-        self._dac1_btn  = getattr(self.ui, "dac1ApplyBtn", None)
-        self._dac2_edit = getattr(self.ui, "dac2Edit", None)
-        self._dac2_btn  = getattr(self.ui, "dac2ApplyBtn", None)
+        """DAC 수동 입력 UI 연결 (신규 SpinBox + 구버전 LineEdit 모두 대응)."""
 
-        if self._dac1_btn is not None:
-            self._dac1_btn.clicked.connect(lambda: self._on_apply_dac_code(1))
-        if self._dac1_edit is not None and hasattr(self._dac1_edit, "returnPressed"):
-            self._dac1_edit.returnPressed.connect(lambda: self._on_apply_dac_code(1))
+        # ✅ settings 기반 range (offset 포함)
+        fs = int(getattr(self.settings, "dac_full_scale_code", 4000))
+        off = int(getattr(self.settings, "dac_offset_code", 0))
+        lo, hi = off, off + fs
 
-        if self._dac2_btn is not None:
-            self._dac2_btn.clicked.connect(lambda: self._on_apply_dac_code(2))
-        if self._dac2_edit is not None and hasattr(self._dac2_edit, "returnPressed"):
-            self._dac2_edit.returnPressed.connect(lambda: self._on_apply_dac_code(2))
+        # ---------- 신규(UI 개선 버전): SpinBox ----------
+        self._dac1_spin = getattr(self.ui, "dac1Spin", None)
+        self._dac1_set_btn = getattr(self.ui, "dac1SetBtn", None)
+        self._dac1_reset_btn = getattr(self.ui, "dac1ResetBtn", None)
+
+        self._dac2_spin = getattr(self.ui, "dac2Spin", None)
+        self._dac2_set_btn = getattr(self.ui, "dac2SetBtn", None)
+        self._dac2_reset_btn = getattr(self.ui, "dac2ResetBtn", None)
+
+        for sp in (self._dac1_spin, self._dac2_spin):
+            if sp is not None and hasattr(sp, "setRange"):
+                try:
+                    sp.setRange(int(lo), int(hi))
+                    sp.setSingleStep(1)
+                except Exception:
+                    pass
+
+        if self._dac1_set_btn is not None:
+            self._dac1_set_btn.clicked.connect(lambda: self._on_apply_dac_code(1))
+        if self._dac1_reset_btn is not None:
+            self._dac1_reset_btn.clicked.connect(lambda: self._on_reset_dac(1))
+
+        if self._dac2_set_btn is not None:
+            self._dac2_set_btn.clicked.connect(lambda: self._on_apply_dac_code(2))
+        if self._dac2_reset_btn is not None:
+            self._dac2_reset_btn.clicked.connect(lambda: self._on_reset_dac(2))
+
+    def _on_reset_dac(self, ch: int) -> None:
+        """Reset 버튼: DAC 값을 0으로(설정 offset이 있으면 clamp됨) 즉시 write."""
+        # UI에도 반영
+        sp = self._dac1_spin if int(ch) == 1 else self._dac2_spin
+        ed = self._dac1_edit if int(ch) == 1 else self._dac2_edit
+
+        try:
+            if sp is not None:
+                sp.setValue(0)
+            elif ed is not None:
+                ed.setText("0")
+        except Exception:
+            pass
+
+        # 실제 write
+        self._apply_dac_code(ch, 0)
+
 
     def _on_apply_dac_code(self, ch: int) -> None:
-        edit = self._dac1_edit if int(ch) == 1 else self._dac2_edit
-        if edit is None:
+        """Apply 버튼: UI 입력값을 읽어서 PLC D레지스터로 write."""
+        sp = self._dac1_spin if int(ch) == 1 else self._dac2_spin
+        ed = self._dac1_edit if int(ch) == 1 else self._dac2_edit
+
+        # SpinBox가 있으면 SpinBox 값 우선
+        if sp is not None:
+            try:
+                v = int(sp.value())
+            except Exception:
+                self._popup_warn("입력 오류", "DAC 값 읽기 실패")
+                return
+            self._apply_dac_code(ch, v)
             return
 
-        # 미연결이면 팝업
-        if not self.is_connected() or not self._worker:
-            self._popup_warn("PLC 미연결", "PLC가 연결되지 않아 DAC 값을 전송할 수 없습니다.")
+        # 구버전 LineEdit fallback
+        if ed is None:
             return
 
-        raw = str(edit.text()).strip()
+        raw = str(ed.text()).strip()
         if not raw:
             self._popup_warn("입력 오류", "DAC 값을 입력하세요. (예: 0 ~ 4000)")
             return
-
         try:
-            v = int(float(raw))  # '1234.0' 같은 입력도 방어
+            v = int(float(raw))
         except Exception:
             self._popup_warn("입력 오류", f"DAC 값이 숫자가 아닙니다: {raw!r}")
+            return
+
+        self._apply_dac_code(ch, v)
+
+
+    def _apply_dac_code(self, ch: int, v: int) -> None:
+        """공통: clamp → UI 반영 → enqueue_write_reg."""
+        if not self.is_connected() or not self._worker:
+            self._popup_warn("PLC 미연결", "PLC가 연결되지 않아 DAC 값을 전송할 수 없습니다.")
             return
 
         fs = int(getattr(self.settings, "dac_full_scale_code", 4000))
         off = int(getattr(self.settings, "dac_offset_code", 0))
         lo, hi = off, off + fs
 
-        v_clamped = max(lo, min(int(v), hi))
-        if v_clamped != v:
-            edit.setText(str(v_clamped))
-            self._set_hmi_log(f"[WARN] DAC{ch}: 입력 {v} -> clamp {v_clamped} (range {lo}..{hi})")
+        v0 = int(v)
+        v_clamped = max(lo, min(v0, hi))
+
+        # UI에 clamp 반영
+        sp = self._dac1_spin if int(ch) == 1 else self._dac2_spin
+        ed = self._dac1_edit if int(ch) == 1 else self._dac2_edit
+        try:
+            if sp is not None and v_clamped != int(sp.value()):
+                sp.setValue(int(v_clamped))
+            if ed is not None and v_clamped != v0:
+                ed.setText(str(v_clamped))
+        except Exception:
+            pass
+
+        if v_clamped != v0:
+            self._set_hmi_log(f"[WARN] DAC{ch}: 입력 {v0} -> clamp {v_clamped} (range {lo}..{hi})")
 
         key = "DAC_POWER_1" if int(ch) == 1 else "DAC_POWER_2"
-        self._worker.enqueue_write_reg(key, int(v_clamped))
-        self._set_hmi_status(f"{key} <- {int(v_clamped)}")
-        self._set_hmi_log(f"DAC{ch} set: {int(v_clamped)}")
+        try:
+            self._worker.enqueue_write_reg(key, int(v_clamped))
+            self._set_hmi_status(f"{key} <- {int(v_clamped)}")
+            self._set_hmi_log(f"DAC{ch} set: {int(v_clamped)}")
+        except Exception as e:
+            self._popup_warn("전송 실패", f"DAC 값 전송 실패: {e!r}")
 

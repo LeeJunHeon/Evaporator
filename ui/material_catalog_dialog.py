@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
     QPushButton, QLabel, QMessageBox, QAbstractItemView, QHeaderView
@@ -93,9 +92,6 @@ class MaterialCatalogDialog(QDialog):
         self.applyBtn.clicked.connect(self._on_apply)
         self.cancelBtn.clicked.connect(self.reject)
 
-        # itemChanged 때마다 자동 저장(원하면 주석 처리 가능)
-        self.table.itemChanged.connect(self._on_item_changed)
-
         # ---------- load ----------
         mats = self._load_json_items()
         self._populate(mats)
@@ -120,15 +116,14 @@ class MaterialCatalogDialog(QDialog):
         try:
             obj = json.loads(self._json_path.read_text(encoding="utf-8"))
 
-            # ✅ 네가 만든 포맷: {"version":1, "items":[...]}
-            if isinstance(obj, dict) and isinstance(obj.get("items"), list):
-                items = obj["items"]
+            # ✅ 포맷 고정: {"version":1, "items":[...]}만 허용
+            if not (isinstance(obj, dict) and obj.get("version") == 1 and isinstance(obj.get("items"), list)):
+                QMessageBox.warning(self, "Invalid file",
+                                    f"material_catalog.json 포맷이 올바르지 않습니다.\n"
+                                    f"기대 포맷: {{'version':1,'items':[...]}} \n\n경로:\n{self._json_path}")
+                return []
 
-            # (구버전 호환) {"materials":[...]} 형태도 들어오면 items로 변환
-            elif isinstance(obj, dict) and isinstance(obj.get("materials"), list):
-                items = obj["materials"]
-            else:
-                items = []
+            items = obj["items"]
 
             mats: list[MaterialRow] = []
             for it in items:
@@ -202,14 +197,6 @@ class MaterialCatalogDialog(QDialog):
         return mats
 
     # ---------------- signals
-    def _on_item_changed(self, _item: QTableWidgetItem) -> None:
-        if self._loading:
-            return
-        mats = self._collect_rows()
-        if mats is None:
-            return
-        self._save_json_items(mats)
-
     def _on_save(self) -> None:
         mats = self._collect_rows()
         if mats is None:

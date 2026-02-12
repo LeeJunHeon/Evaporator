@@ -129,7 +129,7 @@ class Ui_Form(object):
         # =========================
         self.dacGroup = QGroupBox(self.page)
         self.dacGroup.setObjectName("dacGroup")
-        self.dacGroup.setGeometry(QRect(330, 140, 230, 120))  # ✅ 겹침 방지 위치
+        self.dacGroup.setGeometry(QRect(430, 95, 320, 115))
         self.dacGroup.setAutoFillBackground(True)
 
         self.dacGroupLayout = QGridLayout(self.dacGroup)
@@ -595,11 +595,11 @@ class Ui_Form(object):
         self.ms2shutterBtn.setText(QCoreApplication.translate("Form", "M.S 2\nShutter", None))
         self.ms1shutterBtn.setText(QCoreApplication.translate("Form", "M.S 1\nShutter", None))
         self.mainshutterBtn.setText(QCoreApplication.translate("Form", "Main\nShutter", None))
-        
+
         # DAC 수동 입력
-        self.dacGroup.setTitle(QCoreApplication.translate("Form", "DAC Manual (Code)", None))
-        self.dac1Label.setText(QCoreApplication.translate("Form", "P1 (D00000)", None))
-        self.dac2Label.setText(QCoreApplication.translate("Form", "P2 (D00001)", None))
+        self.dacGroup.setTitle(QCoreApplication.translate("Form", "Power Manual", None))
+        self.dac1Label.setText(QCoreApplication.translate("Form", "Power 1", None))
+        self.dac2Label.setText(QCoreApplication.translate("Form", "Power 2", None))
         self.dac1SetBtn.setText(QCoreApplication.translate("Form", "Apply", None))
         self.dac2SetBtn.setText(QCoreApplication.translate("Form", "Apply", None))
         self.dac1ResetBtn.setText(QCoreApplication.translate("Form", "Reset", None))

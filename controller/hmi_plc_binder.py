@@ -67,9 +67,11 @@ class PlcWorker(QThread):
         self._stop_evt = threading.Event()
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._cmd_q: Optional[asyncio.Queue] = None
+        self._reg_q: Optional[asyncio.Queue] = None
 
         # start() 이전에 enqueue된 명령은 임시 저장
         self._pending: List[Tuple[str, bool, bool]] = []
+        self._pending_reg: List[Tuple[str, int]] = []
         self._pending_lock = threading.Lock()
 
     # -------------------------------
@@ -89,6 +91,21 @@ class PlcWorker(QThread):
                 self._loop.call_soon_threadsafe(_poke)
             except Exception:
                 pass
+    
+    def enqueue_write_reg(self, reg_name: str, value: int) -> None:
+        """PLC register write 요청(스레드 안전)."""
+        if self._loop and self._reg_q:
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    self._reg_q.put((str(reg_name), int(value))),
+                    self._loop,
+                )
+                return
+            except Exception:
+                pass
+
+        with self._pending_lock:
+            self._pending_reg.append((str(reg_name), int(value)))
 
     def enqueue_write(self, coil_name: str, on: bool, momentary: bool = False) -> None:
         """PLC에 write 요청(스레드 안전)."""
@@ -116,6 +133,7 @@ class PlcWorker(QThread):
         asyncio.set_event_loop(loop)
         self._loop = loop
         self._cmd_q = asyncio.Queue()
+        self._reg_q = asyncio.Queue()
 
         # start 전에 들어온 명령 flush
         # - 여기(run)는 워커 스레드이므로, call_soon_threadsafe 대신 직접 put_nowait가 더 안전
@@ -125,6 +143,13 @@ class PlcWorker(QThread):
                     self._cmd_q.put_nowait(item)
                 except Exception:
                     pass
+
+            for item in self._pending_reg:
+                try:
+                    self._reg_q.put_nowait(item)
+                except Exception:
+                    pass
+
             self._pending.clear()
 
         try:
@@ -229,6 +254,7 @@ class PlcWorker(QThread):
         emit_connected(False)
 
     async def _drain_commands(self, plc: AsyncPLC) -> None:
+        # 1) coil writes
         if not self._cmd_q:
             return
         while not self._cmd_q.empty():
@@ -237,18 +263,68 @@ class PlcWorker(QThread):
                 continue
             await plc.write_switch(coil_name, on, momentary=momentary)
 
+        # 2) register writes (DAC 포함)
+        if self._reg_q:
+            while not self._reg_q.empty():
+                reg_name, value = self._reg_q.get_nowait()
+                if reg_name in ("__STOP__",):
+                    continue
+                # DAC는 clamp 로직을 타도록 set_dac_power를 사용
+                if str(reg_name) == "DAC_POWER_1":
+                    await plc.set_dac_power(1, int(value))
+                elif str(reg_name) == "DAC_POWER_2":
+                    await plc.set_dac_power(2, int(value))
+                else:
+                    await plc.write_reg_name(str(reg_name), int(value))
+
     async def _wait_or_handle_one_command(self, plc: AsyncPLC, seconds: float) -> None:
-        """poll interval 동안 대기하되, 명령이 오면 즉시 1개 처리."""
-        if not self._cmd_q or seconds <= 0:
+        if seconds <= 0:
             await asyncio.sleep(max(0.0, seconds))
             return
-        try:
-            coil_name, on, momentary = await asyncio.wait_for(self._cmd_q.get(), timeout=seconds)
-            if coil_name not in ("__STOP__",):
-                await plc.write_switch(coil_name, on, momentary=momentary)
-                await self._drain_commands(plc)
-        except asyncio.TimeoutError:
+
+        tasks = []
+        if self._cmd_q:
+            t = asyncio.create_task(self._cmd_q.get())
+            setattr(t, "_kind", "coil")
+            tasks.append(t)
+        if self._reg_q:
+            t = asyncio.create_task(self._reg_q.get())
+            setattr(t, "_kind", "reg")
+            tasks.append(t)
+
+        if not tasks:
+            await asyncio.sleep(max(0.0, seconds))
             return
+
+        done = set()
+        pending = set()
+        try:
+            done, pending = await asyncio.wait(tasks, timeout=seconds, return_when=asyncio.FIRST_COMPLETED)
+            if not done:
+                return
+
+            d = next(iter(done))
+            kind = getattr(d, "_kind", "")
+
+            if kind == "coil":
+                coil_name, on, momentary = d.result()
+                if coil_name not in ("__STOP__",):
+                    await plc.write_switch(coil_name, on, momentary=momentary)
+            elif kind == "reg":
+                reg_name, value = d.result()
+                if reg_name not in ("__STOP__",):
+                    if str(reg_name) == "DAC_POWER_1":
+                        await plc.set_dac_power(1, int(value))
+                    elif str(reg_name) == "DAC_POWER_2":
+                        await plc.set_dac_power(2, int(value))
+                    else:
+                        await plc.write_reg_name(str(reg_name), int(value))
+
+            await self._drain_commands(plc)
+
+        finally:
+            for p in pending:
+                p.cancel()
 
     async def _read_hmi_states(self, plc: AsyncPLC) -> Dict[str, bool]:
         """HMI에서 필요한 코일만 읽어서 dict로 반환."""
@@ -324,6 +400,9 @@ class HmiPlcBinder(QObject):
         self._reset_worker(settings)
 
         self._wire_ui()
+
+        # DAC 수동 입력 UI (있으면 자동으로 연결)
+        self._wire_dac_controls()
 
     # ============================================================
     # Public API (공정에서도 사용 가능)
@@ -596,3 +675,56 @@ class HmiPlcBinder(QObject):
                     pass
         except Exception:
             pass
+
+    # ================= DAC 수동 입력 =================
+    def _wire_dac_controls(self) -> None:
+        self._dac1_edit = getattr(self.ui, "dac1Edit", None)
+        self._dac1_btn  = getattr(self.ui, "dac1ApplyBtn", None)
+        self._dac2_edit = getattr(self.ui, "dac2Edit", None)
+        self._dac2_btn  = getattr(self.ui, "dac2ApplyBtn", None)
+
+        if self._dac1_btn is not None:
+            self._dac1_btn.clicked.connect(lambda: self._on_apply_dac_code(1))
+        if self._dac1_edit is not None and hasattr(self._dac1_edit, "returnPressed"):
+            self._dac1_edit.returnPressed.connect(lambda: self._on_apply_dac_code(1))
+
+        if self._dac2_btn is not None:
+            self._dac2_btn.clicked.connect(lambda: self._on_apply_dac_code(2))
+        if self._dac2_edit is not None and hasattr(self._dac2_edit, "returnPressed"):
+            self._dac2_edit.returnPressed.connect(lambda: self._on_apply_dac_code(2))
+
+    def _on_apply_dac_code(self, ch: int) -> None:
+        edit = self._dac1_edit if int(ch) == 1 else self._dac2_edit
+        if edit is None:
+            return
+
+        # 미연결이면 팝업
+        if not self.is_connected() or not self._worker:
+            self._popup_warn("PLC 미연결", "PLC가 연결되지 않아 DAC 값을 전송할 수 없습니다.")
+            return
+
+        raw = str(edit.text()).strip()
+        if not raw:
+            self._popup_warn("입력 오류", "DAC 값을 입력하세요. (예: 0 ~ 4000)")
+            return
+
+        try:
+            v = int(float(raw))  # '1234.0' 같은 입력도 방어
+        except Exception:
+            self._popup_warn("입력 오류", f"DAC 값이 숫자가 아닙니다: {raw!r}")
+            return
+
+        fs = int(getattr(self.settings, "dac_full_scale_code", 4000))
+        off = int(getattr(self.settings, "dac_offset_code", 0))
+        lo, hi = off, off + fs
+
+        v_clamped = max(lo, min(int(v), hi))
+        if v_clamped != v:
+            edit.setText(str(v_clamped))
+            self._set_hmi_log(f"[WARN] DAC{ch}: 입력 {v} -> clamp {v_clamped} (range {lo}..{hi})")
+
+        key = "DAC_POWER_1" if int(ch) == 1 else "DAC_POWER_2"
+        self._worker.enqueue_write_reg(key, int(v_clamped))
+        self._set_hmi_status(f"{key} <- {int(v_clamped)}")
+        self._set_hmi_log(f"DAC{ch} set: {int(v_clamped)}")
+

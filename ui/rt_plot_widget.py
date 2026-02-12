@@ -5,7 +5,7 @@ DepositionPlotWidget
 - 단일 그래프
   - X: time(s)
   - Y(left): Dep.rate (A/s)
-  - Y(right): Power (DAC)
+  - Y(right): Power (DAC)  # 고정 범위(기본 0~4000)
 - main.py에서는 append(rate=..., power=...)만 호출
 """
 
@@ -16,6 +16,7 @@ from collections import deque
 from typing import Deque, Optional, Tuple
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QPainter
 from PySide6.QtWidgets import QWidget, QVBoxLayout
 
 
@@ -37,7 +38,7 @@ class DepositionPlotWidget(QWidget):
 
         self._t0: Optional[float] = None
         self._rate_buf: Deque[Tuple[float, float]] = deque(maxlen=self._max_points)
-        self._power_buf: Deque[Tuple[float, float]] = deque(maxlen=self._max_points)
+        # Power 축은 DAC 고정 범위로 쓰므로 power_buf 불필요 -> 삭제
 
         from PySide6.QtCharts import QChart, QChartView, QLineSeries, QValueAxis  # type: ignore
 
@@ -51,6 +52,7 @@ class DepositionPlotWidget(QWidget):
         self._chart = QChart()
         self._chart.legend().hide()
         self._chart.setTitle("Dep. Rate / Power")
+        self._chart.setAnimationOptions(QChart.NoAnimation)
         self._chart.addSeries(self._rate_series)
         self._chart.addSeries(self._power_series)
 
@@ -79,6 +81,7 @@ class DepositionPlotWidget(QWidget):
         self._power_series.attachAxis(self._ax_power)
 
         self._view = QChartView(self._chart)
+        self._view.setRenderHint(QPainter.Antialiasing, True)
         lay.addWidget(self._view, 1)
 
         self._reset_axes()
@@ -86,7 +89,6 @@ class DepositionPlotWidget(QWidget):
     def clear(self) -> None:
         self._t0 = None
         self._rate_buf.clear()
-        self._power_buf.clear()
         self._rate_series.clear()
         self._power_series.clear()
         self._reset_axes()
@@ -106,7 +108,6 @@ class DepositionPlotWidget(QWidget):
 
         if power is not None:
             p = float(power)
-            self._power_buf.append((t, p))
             self._power_series.append(t, p)
             if self._power_series.count() > self._max_points:
                 self._power_series.removePoints(0, self._power_series.count() - self._max_points)
@@ -116,6 +117,7 @@ class DepositionPlotWidget(QWidget):
     def _reset_axes(self) -> None:
         self._ax_x.setRange(0.0, max(10.0, self._window_s))
         self._ax_rate.setRange(0.0, 1.0)
+        # Power 축은 DAC 고정 범위
         self._ax_power.setRange(self._p_def_min, self._p_def_max)
 
     def _update_axes(self, t_now: float) -> None:
@@ -129,8 +131,4 @@ class DepositionPlotWidget(QWidget):
             pad = max(0.01, (y_max - y_min) * 0.1)
             self._ax_rate.setRange(y_min - pad, y_max + pad)
 
-        if self._power_buf:
-            ys = [v for _, v in self._power_buf]
-            y_min, y_max = min(ys), max(ys)
-            pad = max(1.0, (y_max - y_min) * 0.1)
-            self._ax_power.setRange(y_min - pad, y_max + pad)
+        # Power 축은 고정이므로 여기서 자동 스케일링하지 않음

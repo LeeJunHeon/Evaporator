@@ -137,6 +137,15 @@ class PlcAdapterFromBinder:
     def pulse_coil(self, coil_name: str) -> None:
         self.enqueue_write(coil_name, True, momentary=True)
 
+    # --- DAC write ---
+    def enqueue_write_reg(self, reg_name: str, value: int) -> None:
+        # ✅ binder에 구현된 reg write를 그대로 사용
+        self._binder.enqueue_write_reg(str(reg_name), int(value))
+
+    # alias(엔진 구현 차이 방어)
+    def write_reg(self, reg_name: str, value: int) -> None:
+        self.enqueue_write_reg(reg_name, value)
+
 
 # ============================================================
 # HMI 창
@@ -307,6 +316,7 @@ class ProcessWindow(QWidget):
 
         self.hmi_window: Optional[HmiWindow] = None
         self._closing_all = False
+        self._close_stop_guard = False   # ✅ closeEvent에서 stop 중복 실행 방지
 
         self._process_controller: Any = None
         self._log_service: Any = None
@@ -414,20 +424,10 @@ class ProcessWindow(QWidget):
             return
         ini_path = self.hmi_window._ini_path
 
-        # 이미 살아있으면 재사용(Stop을 안 눌렀다면 여기로 들어올 수 있음)
-        if self._stm_service is not None or self._acs_service is not None:
-            _append_text(self.ui.logWindow, "[DEV] STM/ACS already allocated (reuse).")
-            # ✅ reuse여도 UI 시그널은 다시 묶어줘야 함
-            try:
-                if self._stm_service is not None:
-                    self._bind_stm_ui(self._stm_service)
-            except Exception:
-                pass
-            return
-
-        if self.hmi_window._dev_mgr is not None:
-            _append_text(self.ui.logWindow, "[DEV] DeviceManager already allocated (reuse).")
-            return
+        if (self._stm_service is not None) or (self._acs_service is not None) or (self.hmi_window._dev_mgr is not None):
+            _append_text(self.ui.logWindow, "[DEV] existing sensors/dev_mgr detected -> release & recreate")
+            self._shutdown_sensors_and_release_memory()   # ✅ 싹 정리
+            # 정리 후 아래 신규 생성 로직으로 계속 진행(= return 하지 않음)
 
         # 1) 신규 서비스(STMService/ACSService)가 있으면: Start에서 생성+start()
         if (STMService is not None) and (ACSService is not None):
@@ -675,9 +675,17 @@ class ProcessWindow(QWidget):
             _append_text(getattr(self.ui, "logWindow", None), "[FINISHED]")
 
     def closeEvent(self, event):
-        if getattr(self, "_closing_all", False):
-            event.accept()
-            return
+        # ✅ Process 창 닫기(X) = Stop 버튼과 동일하게 동작
+        #    (셔터 close → DAC 0 → Power off → pc.stop → STM/ACS stop+해제+GC)
+        if not getattr(self, "_close_stop_guard", False):
+            self._close_stop_guard = True
+            try:
+                self._on_stop_clicked()
+            except Exception:
+                # closeEvent에서 예외로 창이 안 닫히면 안 됨(무조건 닫히게)
+                pass
+
+        _append_text(getattr(self.ui, "logWindow", None), "[UI] Process window closed -> SAFE STOP (same as Stop button)")
 
         if self.hmi_window is not None:
             self.hmi_window.process_window = None
@@ -840,16 +848,13 @@ class ProcessWindow(QWidget):
         except Exception as e:
             _append_text(self.ui.logWindow, f"[SAFE][WARN] MAIN_SHUTTER close failed: {e!r}")
 
-        # 2) DAC = 0 (binder가 reg write 지원하는 경우에만)
+        # 2) DAC=0은 무조건 시도(미구현이면 그게 버그로 드러나야 함)
         try:
-            if hasattr(binder, "enqueue_write_reg"):
-                binder.enqueue_write_reg("DAC_POWER_1", 0)
-                binder.enqueue_write_reg("DAC_POWER_2", 0)
-                _append_text(self.ui.logWindow, "[SAFE] DAC_POWER_1/2 -> 0")
-            else:
-                _append_text(self.ui.logWindow, "[SAFE][WARN] binder has no enqueue_write_reg(). DAC=0 미지원")
+            binder.enqueue_write_reg("DAC_POWER_1", 0)
+            binder.enqueue_write_reg("DAC_POWER_2", 0)
+            _append_text(self.ui.logWindow, "[SAFE] DAC_POWER_1/2 -> 0")
         except Exception as e:
-            _append_text(self.ui.logWindow, f"[SAFE][WARN] DAC=0 failed: {e!r}")
+            _append_text(self.ui.logWindow, f"[SAFE][ERROR] DAC=0 FAILED (MUST FIX): {e!r}")
 
         # 3) power off
         try:

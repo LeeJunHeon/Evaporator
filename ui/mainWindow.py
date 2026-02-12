@@ -129,17 +129,24 @@ class Ui_Form(object):
         # =========================
         self.dacGroup = QGroupBox(self.page)
         self.dacGroup.setObjectName("dacGroup")
-        self.dacGroup.setGeometry(QRect(430, 95, 320, 115))
+        self.dacGroup.setGeometry(QRect(430, 100, 330, 115))
         self.dacGroup.setAutoFillBackground(True)
 
         self.dacGroupLayout = QGridLayout(self.dacGroup)
-        self.dacGroupLayout.setContentsMargins(10, 18, 10, 10)
+
+        # ✅ 왼쪽 여백(10 → 3~4) 줄이기
+        self.dacGroupLayout.setContentsMargins(4, 18, 10, 10)
+
+        # ✅ 레이아웃 자체를 왼쪽/위에 붙게(가로로 늘어나며 생기는 왼쪽 공백 줄어듦)
+        self.dacGroupLayout.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
+
         self.dacGroupLayout.setHorizontalSpacing(6)
         self.dacGroupLayout.setVerticalSpacing(6)
 
         # Row 0: P1
         self.dac1Label = QLabel(self.dacGroup)
         self.dac1Label.setObjectName("dac1Label")
+        self.dac1Label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.dacGroupLayout.addWidget(self.dac1Label, 0, 0)
 
         self.dac1Spin = QSpinBox(self.dacGroup)
@@ -147,7 +154,7 @@ class Ui_Form(object):
         self.dac1Spin.setRange(0, 4000)
         self.dac1Spin.setSingleStep(1)
         self.dac1Spin.setAccelerated(True)
-        self.dac1Spin.setFixedWidth(90)
+        self.dac1Spin.setFixedWidth(130)
         self.dacGroupLayout.addWidget(self.dac1Spin, 0, 1)
 
         self.dac1SetBtn = QPushButton(self.dacGroup)
@@ -163,6 +170,7 @@ class Ui_Form(object):
         # Row 1: P2
         self.dac2Label = QLabel(self.dacGroup)
         self.dac2Label.setObjectName("dac2Label")
+        self.dac2Label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.dacGroupLayout.addWidget(self.dac2Label, 1, 0)
 
         self.dac2Spin = QSpinBox(self.dacGroup)
@@ -170,7 +178,7 @@ class Ui_Form(object):
         self.dac2Spin.setRange(0, 4000)
         self.dac2Spin.setSingleStep(1)
         self.dac2Spin.setAccelerated(True)
-        self.dac2Spin.setFixedWidth(90)
+        self.dac2Spin.setFixedWidth(130)
         self.dacGroupLayout.addWidget(self.dac2Spin, 1, 1)
 
         self.dac2SetBtn = QPushButton(self.dacGroup)

@@ -79,14 +79,18 @@ class PlcWorker(QThread):
     # -------------------------------
     def stop(self) -> None:
         self._stop_evt.set()
-        if self._loop and self._cmd_q:
-            # 큐 대기 중이면 깨우기
+        if self._loop:
             def _poke():
                 try:
-                    self._cmd_q.put_nowait(("__STOP__", False, False))
+                    if self._cmd_q:
+                        self._cmd_q.put_nowait(("__STOP__", False, False))
                 except Exception:
                     pass
-
+                try:
+                    if self._reg_q:
+                        self._reg_q.put_nowait(("__STOP__", 0))
+                except Exception:
+                    pass
             try:
                 self._loop.call_soon_threadsafe(_poke)
             except Exception:
@@ -151,6 +155,7 @@ class PlcWorker(QThread):
                     pass
 
             self._pending.clear()
+            self._pending_reg.clear()   # ✅ 누락된 부분
 
         try:
             loop.run_until_complete(self._main())
@@ -678,7 +683,7 @@ class HmiPlcBinder(QObject):
 
     # ================= DAC 수동 입력 =================
     def _wire_dac_controls(self) -> None:
-        """DAC 수동 입력 UI 연결 (신규 SpinBox + 구버전 LineEdit 모두 대응)."""
+        """DAC 수동 입력 UI 연결 (SpinBox 전용)."""
 
         # ✅ settings 기반 range (offset 포함)
         fs = int(getattr(self.settings, "dac_full_scale_code", 4000))
@@ -713,54 +718,33 @@ class HmiPlcBinder(QObject):
             self._dac2_reset_btn.clicked.connect(lambda: self._on_reset_dac(2))
 
     def _on_reset_dac(self, ch: int) -> None:
-        """Reset 버튼: DAC 값을 0으로(설정 offset이 있으면 clamp됨) 즉시 write."""
-        # UI에도 반영
+        """Reset 버튼: DAC 값을 0으로 즉시 write (SpinBox 전용)."""
         sp = self._dac1_spin if int(ch) == 1 else self._dac2_spin
-        ed = self._dac1_edit if int(ch) == 1 else self._dac2_edit
+        if sp is None:
+            self._popup_warn("UI 오류", "DAC 입력 위젯(QSpinBox)을 찾지 못했습니다.")
+            return
 
         try:
-            if sp is not None:
-                sp.setValue(0)
-            elif ed is not None:
-                ed.setText("0")
+            sp.setValue(0)
         except Exception:
             pass
 
-        # 실제 write
         self._apply_dac_code(ch, 0)
 
-
     def _on_apply_dac_code(self, ch: int) -> None:
-        """Apply 버튼: UI 입력값을 읽어서 PLC D레지스터로 write."""
+        """Apply 버튼: SpinBox 값으로 PLC D레지스터 write."""
         sp = self._dac1_spin if int(ch) == 1 else self._dac2_spin
-        ed = self._dac1_edit if int(ch) == 1 else self._dac2_edit
-
-        # SpinBox가 있으면 SpinBox 값 우선
-        if sp is not None:
-            try:
-                v = int(sp.value())
-            except Exception:
-                self._popup_warn("입력 오류", "DAC 값 읽기 실패")
-                return
-            self._apply_dac_code(ch, v)
+        if sp is None:
+            self._popup_warn("UI 오류", "DAC 입력 위젯(QSpinBox)을 찾지 못했습니다.")
             return
 
-        # 구버전 LineEdit fallback
-        if ed is None:
-            return
-
-        raw = str(ed.text()).strip()
-        if not raw:
-            self._popup_warn("입력 오류", "DAC 값을 입력하세요. (예: 0 ~ 4000)")
-            return
         try:
-            v = int(float(raw))
+            v = int(sp.value())
         except Exception:
-            self._popup_warn("입력 오류", f"DAC 값이 숫자가 아닙니다: {raw!r}")
+            self._popup_warn("입력 오류", "DAC 값 읽기 실패")
             return
 
         self._apply_dac_code(ch, v)
-
 
     def _apply_dac_code(self, ch: int, v: int) -> None:
         """공통: clamp → UI 반영 → enqueue_write_reg."""
@@ -777,12 +761,9 @@ class HmiPlcBinder(QObject):
 
         # UI에 clamp 반영
         sp = self._dac1_spin if int(ch) == 1 else self._dac2_spin
-        ed = self._dac1_edit if int(ch) == 1 else self._dac2_edit
         try:
             if sp is not None and v_clamped != int(sp.value()):
                 sp.setValue(int(v_clamped))
-            if ed is not None and v_clamped != v0:
-                ed.setText(str(v_clamped))
         except Exception:
             pass
 

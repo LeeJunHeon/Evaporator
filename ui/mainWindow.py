@@ -14,7 +14,7 @@ from PySide6.QtCore import QCoreApplication, QMetaObject, QRect, Qt
 from PySide6.QtGui import QFont, QPalette
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QFrame, QLabel, QLineEdit, QPlainTextEdit,
-    QPushButton, QStackedWidget, QWidget,
+    QPushButton, QStackedWidget, QWidget, QGroupBox, QSpinBox, QGridLayout,
 )
 
 
@@ -123,26 +123,65 @@ class Ui_Form(object):
 
         # =========================
         # DAC manual set (Power1/Power2)
-        # - Main Shutter 버튼 위에서 Power1/Power2 DAC 코드를 수동 입력/적용
-        # - 실제 PLC write는 HmiPlcBinder가 처리
+        # - QSpinBox: ↑↓로 1씩 조절 + 직접 타이핑 가능
+        # - Apply/Reset 제공
+        # - 파이프(frame_20 x=570)와 겹치지 않게 좌측으로 배치
         # =========================
-        self.dac1Edit = QLineEdit(self.page)
-        self.dac1Edit.setObjectName("dac1Edit")
-        self.dac1Edit.setGeometry(QRect(430, 190, 101, 26))
-        self.dac1Edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.dacGroup = QGroupBox(self.page)
+        self.dacGroup.setObjectName("dacGroup")
+        self.dacGroup.setGeometry(QRect(330, 140, 230, 120))  # ✅ 겹침 방지 위치
+        self.dacGroup.setAutoFillBackground(True)
 
-        self.dac1ApplyBtn = QPushButton(self.page)
-        self.dac1ApplyBtn.setObjectName("dac1ApplyBtn")
-        self.dac1ApplyBtn.setGeometry(QRect(540, 190, 61, 26))
+        self.dacGroupLayout = QGridLayout(self.dacGroup)
+        self.dacGroupLayout.setContentsMargins(10, 18, 10, 10)
+        self.dacGroupLayout.setHorizontalSpacing(6)
+        self.dacGroupLayout.setVerticalSpacing(6)
 
-        self.dac2Edit = QLineEdit(self.page)
-        self.dac2Edit.setObjectName("dac2Edit")
-        self.dac2Edit.setGeometry(QRect(430, 220, 101, 26))
-        self.dac2Edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # Row 0: P1
+        self.dac1Label = QLabel(self.dacGroup)
+        self.dac1Label.setObjectName("dac1Label")
+        self.dacGroupLayout.addWidget(self.dac1Label, 0, 0)
 
-        self.dac2ApplyBtn = QPushButton(self.page)
-        self.dac2ApplyBtn.setObjectName("dac2ApplyBtn")
-        self.dac2ApplyBtn.setGeometry(QRect(540, 220, 61, 26))
+        self.dac1Spin = QSpinBox(self.dacGroup)
+        self.dac1Spin.setObjectName("dac1Spin")
+        self.dac1Spin.setRange(0, 4000)
+        self.dac1Spin.setSingleStep(1)
+        self.dac1Spin.setAccelerated(True)
+        self.dac1Spin.setFixedWidth(90)
+        self.dacGroupLayout.addWidget(self.dac1Spin, 0, 1)
+
+        self.dac1SetBtn = QPushButton(self.dacGroup)
+        self.dac1SetBtn.setObjectName("dac1SetBtn")
+        self.dac1SetBtn.setFixedWidth(50)
+        self.dacGroupLayout.addWidget(self.dac1SetBtn, 0, 2)
+
+        self.dac1ResetBtn = QPushButton(self.dacGroup)
+        self.dac1ResetBtn.setObjectName("dac1ResetBtn")
+        self.dac1ResetBtn.setFixedWidth(55)
+        self.dacGroupLayout.addWidget(self.dac1ResetBtn, 0, 3)
+
+        # Row 1: P2
+        self.dac2Label = QLabel(self.dacGroup)
+        self.dac2Label.setObjectName("dac2Label")
+        self.dacGroupLayout.addWidget(self.dac2Label, 1, 0)
+
+        self.dac2Spin = QSpinBox(self.dacGroup)
+        self.dac2Spin.setObjectName("dac2Spin")
+        self.dac2Spin.setRange(0, 4000)
+        self.dac2Spin.setSingleStep(1)
+        self.dac2Spin.setAccelerated(True)
+        self.dac2Spin.setFixedWidth(90)
+        self.dacGroupLayout.addWidget(self.dac2Spin, 1, 1)
+
+        self.dac2SetBtn = QPushButton(self.dacGroup)
+        self.dac2SetBtn.setObjectName("dac2SetBtn")
+        self.dac2SetBtn.setFixedWidth(50)
+        self.dacGroupLayout.addWidget(self.dac2SetBtn, 1, 2)
+
+        self.dac2ResetBtn = QPushButton(self.dacGroup)
+        self.dac2ResetBtn.setObjectName("dac2ResetBtn")
+        self.dac2ResetBtn.setFixedWidth(55)
+        self.dacGroupLayout.addWidget(self.dac2ResetBtn, 1, 3)
 
         # ---- PIPES (frames) ----
         self.frame_17 = QFrame(self.page)
@@ -556,11 +595,16 @@ class Ui_Form(object):
         self.ms2shutterBtn.setText(QCoreApplication.translate("Form", "M.S 2\nShutter", None))
         self.ms1shutterBtn.setText(QCoreApplication.translate("Form", "M.S 1\nShutter", None))
         self.mainshutterBtn.setText(QCoreApplication.translate("Form", "Main\nShutter", None))
+        
         # DAC 수동 입력
-        self.dac1Edit.setPlaceholderText(QCoreApplication.translate("Form", "P1 DAC (0-4000)", None))
-        self.dac2Edit.setPlaceholderText(QCoreApplication.translate("Form", "P2 DAC (0-4000)", None))
-        self.dac1ApplyBtn.setText(QCoreApplication.translate("Form", "Set1", None))
-        self.dac2ApplyBtn.setText(QCoreApplication.translate("Form", "Set2", None))
+        self.dacGroup.setTitle(QCoreApplication.translate("Form", "DAC Manual (Code)", None))
+        self.dac1Label.setText(QCoreApplication.translate("Form", "P1 (D00000)", None))
+        self.dac2Label.setText(QCoreApplication.translate("Form", "P2 (D00001)", None))
+        self.dac1SetBtn.setText(QCoreApplication.translate("Form", "Apply", None))
+        self.dac2SetBtn.setText(QCoreApplication.translate("Form", "Apply", None))
+        self.dac1ResetBtn.setText(QCoreApplication.translate("Form", "Reset", None))
+        self.dac2ResetBtn.setText(QCoreApplication.translate("Form", "Reset", None))
+
         self.ms1powerBtn.setText(QCoreApplication.translate("Form", "M.S 1\nPower", None))
         self.allstopBtn.setText(QCoreApplication.translate("Form", "ALL\nSTOP", None))
         self.label.setText(QCoreApplication.translate("Form", "G1", None))

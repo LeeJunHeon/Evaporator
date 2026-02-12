@@ -121,6 +121,29 @@ class Ui_Form(object):
         self.mainshutterBtn.setObjectName("mainshutterBtn")
         self.mainshutterBtn.setGeometry(QRect(430, 250, 101, 71))
 
+        # =========================
+        # DAC manual set (Power1/Power2)
+        # - Main Shutter 버튼 위에서 Power1/Power2 DAC 코드를 수동 입력/적용
+        # - 실제 PLC write는 HmiPlcBinder가 처리
+        # =========================
+        self.dac1Edit = QLineEdit(self.page)
+        self.dac1Edit.setObjectName("dac1Edit")
+        self.dac1Edit.setGeometry(QRect(430, 190, 101, 26))
+        self.dac1Edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.dac1ApplyBtn = QPushButton(self.page)
+        self.dac1ApplyBtn.setObjectName("dac1ApplyBtn")
+        self.dac1ApplyBtn.setGeometry(QRect(540, 190, 61, 26))
+
+        self.dac2Edit = QLineEdit(self.page)
+        self.dac2Edit.setObjectName("dac2Edit")
+        self.dac2Edit.setGeometry(QRect(430, 220, 101, 26))
+        self.dac2Edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.dac2ApplyBtn = QPushButton(self.page)
+        self.dac2ApplyBtn.setObjectName("dac2ApplyBtn")
+        self.dac2ApplyBtn.setGeometry(QRect(540, 220, 61, 26))
+
         # ---- PIPES (frames) ----
         self.frame_17 = QFrame(self.page)
         self.frame_17.setObjectName("frame_17")
@@ -533,6 +556,11 @@ class Ui_Form(object):
         self.ms2shutterBtn.setText(QCoreApplication.translate("Form", "M.S 2\nShutter", None))
         self.ms1shutterBtn.setText(QCoreApplication.translate("Form", "M.S 1\nShutter", None))
         self.mainshutterBtn.setText(QCoreApplication.translate("Form", "Main\nShutter", None))
+        # DAC 수동 입력
+        self.dac1Edit.setPlaceholderText(QCoreApplication.translate("Form", "P1 DAC (0-4000)", None))
+        self.dac2Edit.setPlaceholderText(QCoreApplication.translate("Form", "P2 DAC (0-4000)", None))
+        self.dac1ApplyBtn.setText(QCoreApplication.translate("Form", "Set1", None))
+        self.dac2ApplyBtn.setText(QCoreApplication.translate("Form", "Set2", None))
         self.ms1powerBtn.setText(QCoreApplication.translate("Form", "M.S 1\nPower", None))
         self.allstopBtn.setText(QCoreApplication.translate("Form", "ALL\nSTOP", None))
         self.label.setText(QCoreApplication.translate("Form", "G1", None))

@@ -28,12 +28,12 @@ try:
         ProcessRecipe,
         ProcessError,
         StopMode,
+        ProcessStep,
+        StepType,
     )
     from ..process.recipe_io import (
         load_recipe,
         save_recipe,
-        write_recipe_csv_template,
-        make_sample_recipe,
     )
     from ..process.engine import ProcessEngine, EngineResult
     from ..services.plc_service import PLCService
@@ -142,15 +142,79 @@ class ProcessController(QObject):
 
     def get_recipe(self) -> Optional[ProcessRecipe]:
         return self._recipe
+    
+    def build_recipe_from_ui(self, run_cfg: dict[str, Any]) -> ProcessRecipe:
+        """
+        UI 입력(run_cfg)을 ProcessRecipe로 변환.
+        - 실제 '동적 DAC/dep.rate 제어'는 다음 단계에서 engine.py가 수행
+        - 여기서는 엔진이 실행 가능한 형태로 '스켈레톤 레시피'를 만든다.
+        """
+        use_p1 = bool(run_cfg.get("use_power1", False))
+        use_p2 = bool(run_cfg.get("use_power2", False))
+        if not (use_p1 or use_p2):
+            raise ValueError("Power1/Power2 중 최소 1개는 선택되어야 합니다.")
 
-    def make_and_set_sample_recipe(self) -> ProcessRecipe:
-        r = make_sample_recipe()
+        material = str(run_cfg.get("material_name", "")).strip() or "UNKNOWN"
+        density = float(run_cfg.get("density", 0.0) or 0.0)
+        z_factor = float(run_cfg.get("z_factor", 0.0) or 0.0)
+
+        target_rate = float(run_cfg.get("target_rate", 0.0) or 0.0)
+        target_th = float(run_cfg.get("target_thickness", 0.0) or 0.0)
+        delay_min = float(run_cfg.get("delay_min", 0.0) or 0.0)
+
+        if target_rate <= 0:
+            raise ValueError("target_rate는 0보다 커야 합니다.")
+        if target_th <= 0:
+            raise ValueError("target_thickness는 0보다 커야 합니다.")
+        if delay_min < 0:
+            raise ValueError("delay_min은 0 이상이어야 합니다.")
+
+        # ✅ 엔진에서 사용할 파라미터는 meta로 넘겨둔다.
+        meta = {
+            "ui_run": True,
+            "material_name": material,
+            "density": density,
+            "z_factor": z_factor,
+            "use_power1": use_p1,
+            "use_power2": use_p2,
+            "target_rate": target_rate,
+            "target_thickness": target_th,
+            "delay_min": delay_min,
+        }
+
+        steps: list[ProcessStep] = [
+            # 안전 초기화
+            ProcessStep(step=StepType.PLC_WRITE_COIL, name="MAIN_SHUTTER_CLOSE", meta={"coil": "MAIN_SHUTTER_SW", "on": False}),
+            ProcessStep(step=StepType.PLC_WRITE_REG,  name="DAC1_0",              meta={"reg": "DAC_POWER_1", "value": 0}),
+            ProcessStep(step=StepType.PLC_WRITE_REG,  name="DAC2_0",              meta={"reg": "DAC_POWER_2", "value": 0}),
+
+            # 파워 스위치 상태를 명확히 세팅(선택 안 했으면 OFF)
+            ProcessStep(step=StepType.PLC_WRITE_COIL, name="POWER1_SET",          meta={"coil": "POWER_1_SW", "on": use_p1}),
+            ProcessStep(step=StepType.PLC_WRITE_COIL, name="POWER2_SET",          meta={"coil": "POWER_2_SW", "on": use_p2}),
+
+            # STM에 film 파라미터 세팅/제로링 같은 건 다음 단계에서 엔진/STMService에 실제 구현 예정
+            ProcessStep(step=StepType.MARK, name="STM_SET_FILM_PARAMS", meta={"density": density, "z_factor": z_factor, "material_name": material}),
+            ProcessStep(step=StepType.MARK, name="STM_ZERO_THICKNESS",  meta={}),
+            ProcessStep(step=StepType.MARK, name="EVAP_DEPOSITION_CONTROL", meta=meta),
+        ]
+
+        recipe = ProcessRecipe(
+            recipe_name=f"UI_{material}",
+            version=1,
+            meta=meta,
+            steps=steps,
+        )
+        recipe.validate(strict=True)
+        return recipe
+
+
+    def start_from_ui(self, run_cfg: dict[str, Any], *, run_id: Optional[str] = None) -> None:
+        """
+        UI 입력값으로 공정 시작.
+        """
+        r = self.build_recipe_from_ui(run_cfg)
         self.set_recipe(r)
-        return r
-
-    def write_csv_template(self, path: Union[str, Path]) -> None:
-        write_recipe_csv_template(path)
-        self._ui_info(f"CSV 템플릿 생성: {path}")
+        self.start(run_id=run_id, recipe=r)
 
     # --------------------------------------------------------
     # Run control
@@ -202,8 +266,31 @@ class ProcessController(QObject):
         w.start()
 
     def stop(self) -> None:
-        """정상 정지(안전정지 의도)"""
-        self._request_engine_stop(StopMode.STOP)
+        """
+        정상 정지(안전정지).
+        - 공정 실행 중이 아니어도 '안전 출력'은 항상 수행
+        """
+        self._issue_safe_stop_outputs(tag="STOP_BTN")
+        if self.is_running():
+            self._request_engine_stop(StopMode.STOP)
+        else:
+            self._ui_info("실행 중 공정 없음 → 안전 출력만 수행")
+
+
+    def abort(self) -> None:
+        self._issue_safe_stop_outputs(tag="ABORT_BTN")
+        if self.is_running():
+            self._request_engine_stop(StopMode.ABORT)
+        else:
+            self._ui_info("실행 중 공정 없음 → 안전 출력만 수행")
+
+
+    def estop(self) -> None:
+        self._issue_safe_stop_outputs(tag="ESTOP_BTN")
+        if self.is_running():
+            self._request_engine_stop(StopMode.ESTOP)
+        else:
+            self._ui_info("실행 중 공정 없음 → 안전 출력만 수행")
 
     def abort(self) -> None:
         """빠른 중단/에러 대응"""
@@ -234,6 +321,38 @@ class ProcessController(QObject):
     # --------------------------------------------------------
     # Internal helpers
     # --------------------------------------------------------
+    def _issue_safe_stop_outputs(self, *, tag: str = "SAFE_STOP") -> None:
+        """
+        안전 출력:
+        1) MAIN_SHUTTER close
+        2) DAC 0
+        3) POWER off
+        - UI thread에서도 blocking 없이 enqueue로만 수행
+        """
+        # 서비스가 안 떠 있으면 올려둔다(큐가 살아 있어야 명령이 들어감)
+        try:
+            self._ensure_services_running()
+        except Exception:
+            pass
+
+        # ✅ 요청 순서 보장: enqueue는 워커 큐 순서를 그대로 탄다.
+        try:
+            self.plc.enqueue_write_coil("MAIN_SHUTTER_SW", False, tag=tag)
+        except Exception as e:
+            self._ui_warn(f"MAIN_SHUTTER close 실패(enqueue): {e!r}")
+
+        try:
+            self.plc.enqueue_write_reg("DAC_POWER_1", 0, tag=tag)
+            self.plc.enqueue_write_reg("DAC_POWER_2", 0, tag=tag)
+        except Exception as e:
+            self._ui_warn(f"DAC=0 실패(enqueue): {e!r}")
+
+        try:
+            self.plc.enqueue_write_coil("POWER_1_SW", False, tag=tag)
+            self.plc.enqueue_write_coil("POWER_2_SW", False, tag=tag)
+        except Exception as e:
+            self._ui_warn(f"POWER OFF 실패(enqueue): {e!r}")
+
     def _request_engine_stop(self, mode: StopMode) -> None:
         if not self.is_running():
             self._ui_warn("실행 중인 공정이 없습니다.")

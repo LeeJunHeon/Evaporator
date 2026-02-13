@@ -148,6 +148,9 @@ class ProcessEngine:
         self._last_status_emit_ts: float = 0.0
         self._last_telemetry_ts: float = 0.0
 
+        self._last_dac_power_1: int = 0
+        self._last_dac_power_2: int = 0
+
     # --------------------------------------------------------
     # External controls (thread-safe-ish: 단순 플래그)
     # --------------------------------------------------------
@@ -286,7 +289,12 @@ class ProcessEngine:
             return
 
         if t == StepType.MARK:
-            # UI trace용 마커
+            # ✅ 특정 MARK는 엔진 제어 루프를 수행
+            if str(step.name) == "EVAP_DEPOSITION_CONTROL":
+                self._evap_deposition_control(recipe, step)
+                return
+
+            # (지금 단계에서는 다른 MARK는 그대로 로그만)
             self._log_info(f"MARK: {step.name}", tag="PROCESS", also_ui=False)
             return
 
@@ -357,6 +365,304 @@ class ProcessEngine:
             return
 
         raise EngineFailed(step.name, f"unsupported step type: {t}")
+    
+    # --------------------------------------------------------
+    # EVAP 증착 제어 루프
+    # --------------------------------------------------------
+    def _evap_deposition_control(self, recipe: ProcessRecipe, step: ProcessStep) -> None:
+        """
+        EVAP 증착 제어 루프
+        요구사항 반영:
+        - DAC 0~1000: 1초에 100씩 상승
+        - 1000 이후: 100씩 조정 + 10초 동안 1초 주기로 dep.rate 확인
+        - target_rate 도달 → delay_min(분, 소수 가능) 유지 → MAIN_SHUTTER OPEN
+        - target_thickness 도달까지 rate 유지(동적 보정)
+        - rate가 기준 대비 50% 이하로 급락하면 즉시 안전정지 후 실패 처리
+        """
+        meta: dict[str, Any] = {}
+        meta.update(getattr(recipe, "meta", None) or {})
+        meta.update(getattr(step, "meta", None) or {})  # step.meta가 우선
+
+        use_p1 = bool(meta.get("use_power1", False))
+        use_p2 = bool(meta.get("use_power2", False))
+        if not (use_p1 or use_p2):
+            raise EngineFailed(step.name, "use_power1/use_power2가 모두 False 입니다.")
+
+        target_rate = float(meta.get("target_rate", 0.0) or 0.0)
+        target_th = float(meta.get("target_thickness", 0.0) or 0.0)
+        delay_min = float(meta.get("delay_min", 0.0) or 0.0)
+
+        if target_rate <= 0:
+            raise EngineFailed(step.name, f"target_rate invalid: {target_rate}")
+        if target_th <= 0:
+            raise EngineFailed(step.name, f"target_thickness invalid: {target_th}")
+        if delay_min < 0:
+            raise EngineFailed(step.name, f"delay_min invalid: {delay_min}")
+
+        if self.stm is None:
+            raise EngineFailed(step.name, "STMService가 None입니다(증착 rate/thickness 읽기 불가).")
+
+        # --- 튜닝 파라미터(필요 시 meta로 외부에서 덮어쓸 수 있게 해도 됨) ---
+        DAC_MAX = int(meta.get("dac_max", 4000) or 4000)
+        DAC_FAST_LIMIT = int(meta.get("dac_fast_limit", 1000) or 1000)
+        DAC_FAST_STEP = int(meta.get("dac_fast_step", 100) or 100)
+        DAC_SLOW_STEP = int(meta.get("dac_slow_step", 100) or 100)
+
+        RATE_TOL = float(meta.get("rate_tol_ratio", 0.02) or 0.02)   # ±2% 밴드
+        DROP_RATIO = float(meta.get("rate_drop_ratio", 0.5) or 0.5)  # 50% 급락
+        DROP_COUNT = int(meta.get("rate_drop_count", 3) or 3)        # 3회 연속이면 abort
+
+        delay_s = max(0.0, delay_min * 60.0)
+
+        # 0) STM 연결 확인(짧게)
+        t0 = time.time()
+        while True:
+            self._check_stop_pause(recipe, step)
+            self._tick_emit(recipe, step)
+
+            s = self._get_stm_snapshot()
+            if s is not None and bool(getattr(s, "connected", False)):
+                break
+            if (time.time() - t0) > 5.0:
+                raise EngineFailed(step.name, "STM 연결 실패/미연결(5s timeout).")
+            time.sleep(0.2)
+
+        # 1) 안전 초기화: 셔터 닫기 → DAC 0 → power coil 세팅(선택된 것만 ON)
+        self._safe_shutdown_sequence(use_p1=use_p1, use_p2=use_p2, tag="EVAP_INIT")  # shutter close + dac0 + power off
+        # 선택된 파워만 ON
+        self._plc_write_coil("POWER_1_SW", bool(use_p1), tag="EVAP_POWER1_ON" if use_p1 else "EVAP_POWER1_OFF")
+        self._plc_write_coil("POWER_2_SW", bool(use_p2), tag="EVAP_POWER2_ON" if use_p2 else "EVAP_POWER2_OFF")
+
+        # 2) 목표 rate 도달까지 DAC 램프 + 피드백
+        dac = 0
+        self._evap_apply_dac(use_p1, use_p2, dac, tag="EVAP_DAC_SET_0")
+
+        # rate 급락 감지는 “셔터 open 이후”에 본격 적용(그 전에는 불안정 구간이 많아서)
+        drop_count = 0
+
+        # ---- 2-A) 0~1000(FAST): 1초마다 +100 ----
+        while True:
+            self._check_stop_pause(recipe, step)
+            self._tick_emit(recipe, step)
+
+            rt = self._get_rate()
+            if rt is not None and float(rt) >= target_rate:
+                break
+
+            if dac >= DAC_FAST_LIMIT:
+                break
+
+            dac = min(DAC_FAST_LIMIT, dac + DAC_FAST_STEP)
+            self._evap_apply_dac(use_p1, use_p2, dac, tag=f"EVAP_DAC_FAST_{dac}")
+
+            # 1초 동안 1Hz로 모니터링
+            for _ in range(1):
+                self._check_stop_pause(recipe, step)
+                self._tick_emit(recipe, step)
+                rt = self._get_rate()
+                self._emit_status(message=f"EVAP RAMP_FAST dac={dac} rate={rt}")
+                if rt is not None and float(rt) >= target_rate:
+                    break
+                time.sleep(1.0)
+
+            if rt is not None and float(rt) >= target_rate:
+                break
+
+        # ---- 2-B) 1000 이후(SLOW): 필요 시 ±100 조정, 10초 동안 1Hz로 확인 ----
+        while True:
+            self._check_stop_pause(recipe, step)
+            self._tick_emit(recipe, step)
+
+            rt = self._get_rate()
+            if rt is not None and float(rt) >= target_rate:
+                break
+
+            # 아직 목표 미달이면 +100 (상한 체크)
+            dac = min(DAC_MAX, dac + DAC_SLOW_STEP)
+            self._evap_apply_dac(use_p1, use_p2, dac, tag=f"EVAP_DAC_SLOW_{dac}")
+
+            # 10초 동안 1Hz로 rate 확인, 도달하면 조기 종료
+            reached = False
+            for i in range(10):
+                self._check_stop_pause(recipe, step)
+                self._tick_emit(recipe, step)
+
+                rt = self._get_rate()
+                self._emit_status(message=f"EVAP RAMP_SLOW dac={dac} t={i+1}/10 rate={rt}")
+                if rt is not None and float(rt) >= target_rate:
+                    reached = True
+                    break
+                time.sleep(1.0)
+
+            if reached:
+                break
+
+            # 안전: dac가 max까지 갔는데도 도달 못하면 엔진 실패
+            if dac >= DAC_MAX:
+                raise EngineFailed(step.name, f"target_rate 미도달: dac={dac} rate={rt}")
+
+        # 3) delay(셔터 닫힌 상태에서 안정화 시간). 이 구간에서도 rate 유지(미세 보정)
+        if delay_s > 0:
+            t_end = time.time() + delay_s
+            self._emit_status(message=f"EVAP delay start: {delay_s:.1f}s (keep rate)")
+
+            while time.time() < t_end:
+                self._check_stop_pause(recipe, step)
+                self._tick_emit(recipe, step)
+
+                rt = self._get_rate()
+                # delay 구간에서도 너무 떨어지면(목표의 50%↓) 바로 abort
+                if rt is not None and float(rt) < (target_rate * DROP_RATIO):
+                    raise EngineFailed(step.name, f"rate drop(before shutter open): rate={rt} < {target_rate*DROP_RATIO}")
+
+                # 미세 보정
+                new_dac = self._evap_adjust_dac(dac, rt, target_rate, tol_ratio=RATE_TOL, step_up=50, step_dn=50, dac_max=DAC_MAX)
+                if new_dac != dac:
+                    dac = new_dac
+                    self._evap_apply_dac(use_p1, use_p2, dac, tag=f"EVAP_DAC_FINE_{dac}")
+
+                time.sleep(1.0)
+
+        # 4) MAIN SHUTTER OPEN
+        self._plc_write_coil("MAIN_SHUTTER_SW", True, tag="EVAP_SHUTTER_OPEN")
+        self._emit_status(message="EVAP shutter opened")
+
+        # thickness는 “셔터 오픈 시점 기준 delta”로 계산(제로링 없어도 동작)
+        th0 = self._get_thickness()
+        th0 = float(th0) if th0 is not None else 0.0
+
+        # 급락 기준은 “셔터 오픈 직후 baseline_rate 또는 target_rate”
+        baseline_rate: Optional[float] = None
+        drop_count = 0
+
+        # 5) target_thickness 도달까지 rate 유지(동적 보정) + 급락 abort
+        while True:
+            self._check_stop_pause(recipe, step)
+            self._tick_emit(recipe, step)
+
+            rt = self._get_rate()
+            th = self._get_thickness()
+
+            # baseline_rate 캡처(처음 안정된 값)
+            if baseline_rate is None and rt is not None and float(rt) >= (target_rate * 0.8):
+                baseline_rate = float(rt)
+
+            # thickness 종료
+            if th is not None:
+                dep_th = float(th) - th0
+                self._emit_status(message=f"EVAP deposit: dac={dac} rate={rt} dth={dep_th:.1f}/{target_th:.1f}A")
+                if dep_th >= target_th:
+                    break
+            else:
+                self._emit_status(message=f"EVAP deposit: dac={dac} rate={rt} thickness=None")
+
+            # rate 급락 감지(연속 DROP_COUNT회면 abort)
+            if rt is not None:
+                ref = baseline_rate if baseline_rate is not None else target_rate
+                if float(rt) < (float(ref) * DROP_RATIO):
+                    drop_count += 1
+                else:
+                    drop_count = 0
+                if drop_count >= DROP_COUNT:
+                    raise EngineFailed(step.name, f"rate drop detected: rate={rt} ref={ref} (x{DROP_COUNT})")
+
+            # rate 유지 보정(셔터 오픈 후에는 조금 더 타이트하게)
+            new_dac = self._evap_adjust_dac(
+                dac, rt, target_rate,
+                tol_ratio=RATE_TOL,
+                step_up=50, step_dn=50,
+                dac_max=DAC_MAX,
+            )
+            if new_dac != dac:
+                dac = new_dac
+                self._evap_apply_dac(use_p1, use_p2, dac, tag=f"EVAP_DAC_HOLD_{dac}")
+
+            time.sleep(1.0)
+
+        # 6) 완료: 안전정지(셔터 close → DAC 0 → power off)
+        self._safe_shutdown_sequence(use_p1=use_p1, use_p2=use_p2, tag="EVAP_DONE")
+        self._log_info("EVAP deposition done", tag="PROCESS", also_ui=True)
+
+
+    def _evap_apply_dac(self, use_p1: bool, use_p2: bool, dac: int, *, tag: str) -> None:
+        """선택된 채널에만 DAC 값을 적용(동기 submit + wait)."""
+        dac = int(max(0, dac))
+        if use_p1:
+            self._plc_write_reg("DAC_POWER_1", dac, tag=f"{tag}_CH1")
+            self._last_dac_power_1 = dac
+        if use_p2:
+            self._plc_write_reg("DAC_POWER_2", dac, tag=f"{tag}_CH2")
+            self._last_dac_power_2 = dac
+
+
+    @staticmethod
+    def _evap_adjust_dac(
+        dac: int,
+        rate: Optional[float],
+        target_rate: float,
+        *,
+        tol_ratio: float,
+        step_up: int,
+        step_dn: int,
+        dac_max: int,
+    ) -> int:
+        """
+        간단한 피드백: 목표 ±tol_ratio 범위면 유지.
+        - rate가 없으면 변경하지 않음(0 반환 X)
+        """
+        if rate is None:
+            return int(dac)
+
+        r = float(rate)
+        tr = float(target_rate)
+        if tr <= 0:
+            return int(dac)
+
+        tol = abs(tr) * float(tol_ratio)
+        if abs(r - tr) <= tol:
+            return int(dac)
+
+        if r < tr:
+            return int(min(int(dac_max), int(dac) + int(step_up)))
+        else:
+            return int(max(0, int(dac) - int(step_dn)))
+
+
+    def _safe_shutdown_sequence(self, *, use_p1: bool, use_p2: bool, tag: str) -> None:
+        """
+        요구사항 안전 시퀀스:
+        1) MAIN_SHUTTER close
+        2) DAC 0
+        3) POWER off
+        (실패해도 예외 삼킴: best-effort)
+        """
+        # 1) shutter close
+        try:
+            self._plc_write_coil("MAIN_SHUTTER_SW", False, tag=f"{tag}_SHUTTER_CLOSE")
+        except Exception:
+            pass
+
+        # 2) dac 0 (선택 채널이든 아니든 둘 다 0으로 떨어뜨려도 안전)
+        try:
+            self._plc_write_reg("DAC_POWER_1", 0, tag=f"{tag}_DAC1_0")
+            self._last_dac_power_1 = 0
+        except Exception:
+            pass
+        try:
+            self._plc_write_reg("DAC_POWER_2", 0, tag=f"{tag}_DAC2_0")
+            self._last_dac_power_2 = 0
+        except Exception:
+            pass
+
+        # 3) power off
+        try:
+            self._plc_write_coil("POWER_1_SW", False, tag=f"{tag}_PWR1_OFF")
+        except Exception:
+            pass
+        try:
+            self._plc_write_coil("POWER_2_SW", False, tag=f"{tag}_PWR2_OFF")
+        except Exception:
+            pass
 
     # --------------------------------------------------------
     # PLC wrappers
@@ -630,8 +936,7 @@ class ProcessEngine:
     ) -> None:
         now = time.time()
         if not force and (now - self._last_status_emit_ts) < self._status_emit_interval_s:
-            # tick_emit가 아닌 외부 호출에서 스팸 방지
-            pass
+            return
 
         st = ProcessStatus(
             phase=self._phase,
@@ -683,6 +988,8 @@ class ProcessEngine:
                 "pressure": self._get_pressure(),
                 "thickness_A": self._get_thickness(),
                 "rate_Aps": self._get_rate(),
+                "dac1": getattr(self, "_last_dac_power_1", 0),
+                "dac2": getattr(self, "_last_dac_power_2", 0),
             })
         except Exception:
             # 텔레메트리 실패해도 공정은 계속
@@ -693,21 +1000,36 @@ class ProcessEngine:
     # --------------------------------------------------------
     def _do_minimal_shutdown(self, mode: StopMode) -> None:
         """
-        장비마다 '진짜 안전정지'가 달라서 엔진에서 함부로 모든 밸브/유틸을 끄면 오히려 위험할 수 있음.
-        그래서 기본은 최소 OFF만 수행.
-
-        현재 구현(보수적):
-        - POWER_1_SW, POWER_2_SW OFF 시도
-        - GAS_1_SW, GAS_2_SW OFF 시도
-        (실패해도 예외 삼킴)
-
-        나중에 사용자가 원하는 안전 시퀀스가 정해지면:
-        - 엔진에 shutdown recipe(steps)나 안전정지 함수 훅을 추가하는 방식으로 확장 권장
+        STOP/ABORT/ERROR 시에도 최소한의 안전정지:
+        - MAIN_SHUTTER close
+        - DAC 0
+        - POWER off
+        - (기존) GAS off
         """
-        to_off = ["POWER_1_SW", "POWER_2_SW", "GAS_1_SW", "GAS_2_SW"]
-        for coil in to_off:
+        tag = f"SHUTDOWN_{mode.value}"
+
+        # 1) shutter close
+        try:
+            self.plc.enqueue_write_coil("MAIN_SHUTTER_SW", False, tag=tag)
+        except Exception:
+            pass
+
+        # 2) dac 0
+        try:
+            self.plc.enqueue_write_reg("DAC_POWER_1", 0, tag=tag)
+            self._last_dac_power_1 = 0
+        except Exception:
+            pass
+        try:
+            self.plc.enqueue_write_reg("DAC_POWER_2", 0, tag=tag)
+            self._last_dac_power_2 = 0
+        except Exception:
+            pass
+
+        # 3) power off + gas off
+        for coil in ["POWER_1_SW", "POWER_2_SW", "GAS_1_SW", "GAS_2_SW"]:
             try:
-                self.plc.enqueue_write_coil(coil, False, tag=f"SHUTDOWN_{mode.value}")
+                self.plc.enqueue_write_coil(coil, False, tag=tag)
             except Exception:
                 pass
 

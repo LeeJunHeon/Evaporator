@@ -712,7 +712,16 @@ class Ui_Form(object):
         self.allstopBtn.setCheckable(False)
         self.allstopBtn.setStyleSheet(ALLSTOP_QSS)
 
-        # ✅ processBtn / hmiBtn 은 기본 스타일 유지 (건드리지 않음)
+        # ✅ processBtn / configBtn / vacuumOnBtn : 기본 스타일 유지 + 글자만 키움
+        top_font = self.processBtn.font()
+        top_font.setPointSize(12)
+        self.processBtn.setFont(top_font)
+        self.configBtn.setFont(top_font)
+
+        # "Vacuum\nON"은 2줄이라 너무 크게 하면 잘릴 수 있어서 살짝 작게(원하면 16으로 동일하게 올려도 됨)
+        vac_font = self.vacuumOnBtn.font()
+        vac_font.setPointSize(12)
+        self.vacuumOnBtn.setFont(vac_font)
 
         # ---- frames (pipes) ----
         pipe_frames = [

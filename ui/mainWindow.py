@@ -598,7 +598,7 @@ class Ui_Form(object):
         self.processBtn.setText(QCoreApplication.translate("Form", "Process", None))
         self.configBtn.setText(QCoreApplication.translate("Form", "Config", None))
         self.vacuumOnBtn.setText(QCoreApplication.translate("Form", "Vacuum\nON", None))
-        self.vvBtn.setText(QCoreApplication.translate("Form", "V / V", None))
+        self.vvBtn.setText(QCoreApplication.translate("Form", "Vent", None))
         self.doorBtn.setText(QCoreApplication.translate("Form", "Door", None))
         self.ms2shutterBtn.setText(QCoreApplication.translate("Form", "M.S 2\nShutter", None))
         self.ms1shutterBtn.setText(QCoreApplication.translate("Form", "M.S 1\nShutter", None))

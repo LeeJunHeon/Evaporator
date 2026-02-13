@@ -333,12 +333,14 @@ class ProcessEngine:
             return
 
         if t == StepType.WAIT_THICKNESS_GEQ:
-            target = float(step.thickness_target_a)
+            target = float(step.thickness_target)
             self._wait_condition(
                 recipe=recipe,
                 step=step,
                 cond_fn=lambda: self._get_thickness_ok_geq(target),
-                cond_desc=f"thickness >= {target}A",
+                cond_desc=f"thickness >= {target}",
+                sensor_value_fn=self._get_thickness,
+                sensor_label="STM thickness",
             )
             return
 
@@ -725,57 +727,55 @@ class ProcessEngine:
         step: ProcessStep,
         cond_fn: Callable[[], bool],
         cond_desc: str,
+        sensor_value_fn: Optional[Callable[[], Optional[float]]] = None,
+        sensor_label: str = "",
+        sensor_missing_abort_s: Optional[float] = None,
     ) -> None:
-        """
-        cond_fn이 True가 될 때까지 대기.
-        - timeout_s: 제한 시간
-        - stable_s: stable 동안 연속 True면 성공
-        - poll_s: 재확인 주기
-        - on_timeout: 정책(ABORT/CONTINUE/ERROR)
-        """
-        poll = self._get_poll_s(recipe, step, fallback=recipe.default_poll_s)
-        timeout_s = float(step.timeout_s) if step.timeout_s is not None else None
-        stable_s = float(step.stable_s) if step.stable_s is not None else 0.0
-
-        t_start = time.time()
-        deadline = (t_start + timeout_s) if timeout_s is not None else None
-
         stable_start: Optional[float] = None
+        deadline: Optional[float] = None
+        if step.timeout_s is not None:
+            deadline = time.time() + float(step.timeout_s)
+
+        poll_s = max(0.05, float(step.poll_s or 0.2))
+
+        # None 감시(기본 10초)
+        missing_abort_s = sensor_missing_abort_s
+        if sensor_value_fn is not None and missing_abort_s is None:
+            missing_abort_s = float(getattr(self, "_sensor_missing_abort_s", 10.0) or 10.0)
+        last_valid_ts = time.time()
 
         while True:
             self._check_stop_pause(recipe, step)
+            self._tick_emit(recipe, step)
+
             now = time.time()
 
-            ok = False
-            try:
-                ok = bool(cond_fn())
-            except Exception as e:
-                # 조건 평가 중 예외는 센서/스냅샷 None 같은 경우가 많음 -> ok=False로 계속 대기
-                self._log_warn(f"condition eval error ignored: {e!r}", tag="ENGINE", also_ui=False)
-                ok = False
+            # ✅ 센서 None 지속 감시
+            if sensor_value_fn is not None and missing_abort_s is not None and missing_abort_s > 0:
+                try:
+                    v = sensor_value_fn()
+                except Exception:
+                    v = None
 
+                if v is not None:
+                    last_valid_ts = now
+                elif (now - last_valid_ts) >= missing_abort_s:
+                    lab = sensor_label or "sensor"
+                    raise EngineFailed(step.name, f"{lab}=None 지속 {missing_abort_s:.0f}s 초과(연결 끊김/미보고)")
+
+            if deadline is not None and now >= deadline:
+                raise EngineTimeout(step.name, f"timeout waiting {cond_desc}")
+
+            ok = bool(cond_fn())
             if ok:
-                if stable_s <= 0:
-                    self._log_info(f"WAIT OK: {cond_desc}", tag="ENGINE", also_ui=False)
-                    return
                 if stable_start is None:
                     stable_start = now
-                elif (now - stable_start) >= stable_s:
-                    self._log_info(f"WAIT OK(stable {stable_s}s): {cond_desc}", tag="ENGINE", also_ui=False)
+                if step.stable_s is None or (now - stable_start) >= float(step.stable_s):
                     return
             else:
                 stable_start = None
 
-            # timeout 검사
-            if deadline is not None and now >= deadline:
-                detail = f"{cond_desc} (timeout={timeout_s}s, stable={stable_s}s)"
-                self._handle_timeout(step, detail)
-                return  # CONTINUE인 경우 여기 도달
-
-            # 주기 상태/텔레메트리 emit
-            self._tick_emit(recipe, step)
-
-            time.sleep(poll)
+            time.sleep(poll_s)
 
     def _handle_timeout(self, step: ProcessStep, detail: str) -> None:
         policy = step.on_timeout

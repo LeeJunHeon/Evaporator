@@ -20,33 +20,11 @@ from ui.mainWindow import Ui_Form
 from ui.config_dialog import ConfigDialog
 from config.plc_config import load_plc_settings
 from controller.hmi_plc_binder import HmiPlcBinder
-from utils.device_manager import DeviceManager
 from ui.material_catalog_dialog import MaterialCatalogDialog
-
-
-# ============================================================
-# (선택) 신규 공정/서비스 import
-# - 없으면 기존 main.py처럼 HMI/PLC만 돌아가도록 자동 fallback
-# ============================================================
-try:
-    from controller.process_controller import ProcessController  # type: ignore
-except ImportError:
-    ProcessController = None  # type: ignore
-
-try:
-    from services.log_service import LogService  # type: ignore
-except ImportError:
-    LogService = None  # type: ignore
-
-try:
-    from services.stm_service import STMService  # type: ignore
-except ImportError:
-    STMService = None  # type: ignore
-
-try:
-    from services.acs_service import ACSService  # type: ignore
-except ImportError:
-    ACSService = None  # type: ignore
+from controller.process_controller import ProcessController
+from services.log_service import LogService
+from services.stm_service import STMService
+from services.acs_service import ACSService
 
 
 # ============================================================
@@ -165,7 +143,6 @@ class HmiWindow(QWidget):
         # ✅ Config / runtime objects (기존 유지)
         self._ini_path = _BASE_DIR / "config" / "devices.ini"
         self._plc_binder: HmiPlcBinder | None = None
-        self._dev_mgr: DeviceManager | None = None
 
         # ✅ 신규 공정/서비스 (있으면 주입)
         self._process_controller: Any = None
@@ -207,7 +184,6 @@ class HmiWindow(QWidget):
     def set_runtime_objects(
         self,
         plc_binder: HmiPlcBinder,
-        dev_mgr: Optional[DeviceManager],
         ini_path: Path,
         *,
         process_controller: Any = None,
@@ -217,7 +193,6 @@ class HmiWindow(QWidget):
     ) -> None:
         """main()에서 만든 런타임 객체 주입(PLC/센서 재연결에 사용)"""
         self._plc_binder = plc_binder
-        self._dev_mgr = dev_mgr
         self._ini_path = Path(ini_path)
 
         self._process_controller = process_controller
@@ -351,7 +326,11 @@ class ProcessWindow(QWidget):
     def set_hmi_window(self, hmi_window: HmiWindow):
         self.hmi_window = hmi_window
 
-    def set_runtime_objects(self, *, process_controller: Any, log_service: Any, stm_service: Any, acs_service: Any) -> None:
+    def set_runtime_objects(self, plc_binder, ini_path: Path, *, process_controller=None, log_service=None,
+                            stm_service=None, acs_service=None) -> None:
+        self._plc_binder = plc_binder
+        self._ini_path = Path(ini_path)
+
         self._process_controller = process_controller
         self._log_service = log_service
         self._stm_service = stm_service
@@ -418,71 +397,47 @@ class ProcessWindow(QWidget):
         except Exception:
             self._last_thickness = None
 
-    def _ensure_sensors_connected_fresh(self) -> None:
-        """Start에서 호출: STM/ACS가 없으면 '새로 생성하고 연결(start)'"""
-        if self.hmi_window is None:
-            return
+    def _ensure_sensors_connected_fresh(self) -> bool:
         ini_path = self.hmi_window._ini_path
 
-        if (self._stm_service is not None) or (self._acs_service is not None) or (self.hmi_window._dev_mgr is not None):
-            _append_text(self.ui.logWindow, "[DEV] existing sensors/dev_mgr detected -> release & recreate")
-            self._shutdown_sensors_and_release_memory()   # ✅ 싹 정리
-            # 정리 후 아래 신규 생성 로직으로 계속 진행(= return 하지 않음)
+        # 이전 인스턴스 정리
+        self._shutdown_sensors_and_release_memory()
 
-        # 1) 신규 서비스(STMService/ACSService)가 있으면: Start에서 생성+start()
-        if (STMService is not None) and (ACSService is not None):
-            try:
-                stm = STMService.from_ini(ini_path) if hasattr(STMService, "from_ini") else STMService(ini_path)
-                acs = ACSService.from_ini(ini_path) if hasattr(ACSService, "from_ini") else ACSService(ini_path)
-
-                # ✅ 연결은 Start에서만
-                stm.start()
-                acs.start()
-                self._bind_stm_ui(stm)
-
-                self._stm_service = stm
-                self._acs_service = acs
-                self.hmi_window._stm_service = stm
-                self.hmi_window._acs_service = acs
-
-                # ✅ ProcessController에 새 STM/ACS 주입
-                self.hmi_window._set_process_controller_devices(stm, acs)
-
-                _append_text(self.ui.logWindow, "[DEV] STM/ACS connected (fresh instance).")
-                return
-            except Exception as e:
-                _append_text(self.ui.logWindow, f"[DEV][WARN] STM/ACS start failed: {e!r}")
-                self._stm_service = None
-                self._acs_service = None
-                self.hmi_window._stm_service = None
-                self.hmi_window._acs_service = None
-
-        # 2) fallback: DeviceManager로 연결(서비스가 없을 때만)
         try:
-            dev_mgr = DeviceManager.from_ini(ini_path)
-            errs = dev_mgr.reload_from_ini(ini_path, connect=True)
+            stm = STMService(ini_path=ini_path)
+            acs = ACSService(ini_path=ini_path)
 
-            # 여기서 HMI에 dev_mgr를 “연결된 상태로” 잠깐 보관했다가 Stop에서 제거
-            self.hmi_window._dev_mgr = dev_mgr
+            stm.start()
+            acs.start()
 
-            if errs:
-                _append_text(self.ui.logWindow, "[DEV][WARN] DeviceManager connect errors:")
-                for k, v in errs.items():
-                    _append_text(self.ui.logWindow, f"  - {k}: {v}")
-            else:
-                _append_text(self.ui.logWindow, "[DEV] STM/ACS connected (DeviceManager).")
+            self._stm_service = stm
+            self._acs_service = acs
+
+            self.hmi_window._stm_service = stm
+            self.hmi_window._acs_service = acs
+            self.hmi_window._set_process_controller_devices(stm, acs)
+
+            _append_text(self.ui.logWindow, "[DEV] STM/ACS connected (fresh instance).")
+            return True
+
         except Exception as e:
-            _append_text(self.ui.logWindow, f"[DEV][WARN] DeviceManager connect exception: {e!r}")
+            _append_text(self.ui.logWindow, f"[DEV][ERR] STM/ACS start failed: {e!r}")
+            self._stm_service = None
+            self._acs_service = None
+            self.hmi_window._stm_service = None
+            self.hmi_window._acs_service = None
+            return False
 
     def _shutdown_sensors_and_release_memory(self) -> None:
         """Stop에서 호출: STM/ACS 연결 해제 + 객체 해제 + gc.collect()"""
+
         # ✅ 먼저 UI 시그널 해제
         try:
             self._unbind_stm_ui()
         except Exception:
             pass
 
-        # 1) 서비스 기반이면 stop()만 호출 (후보 3개 금지)
+        # 1) 서비스 기반이면 stop()만 호출
         if self._stm_service is not None:
             try:
                 self._stm_service.stop()
@@ -497,14 +452,6 @@ class ProcessWindow(QWidget):
             except Exception as e:
                 _append_text(self.ui.logWindow, f"[DEV][WARN] ACS stop failed: {e!r}")
 
-        # 2) DeviceManager fallback이면 close_all()만 호출
-        if self.hmi_window is not None and self.hmi_window._dev_mgr is not None:
-            try:
-                self.hmi_window._dev_mgr.close_all()
-                _append_text(self.ui.logWindow, "[DEV] DeviceManager.close_all() called")
-            except Exception as e:
-                _append_text(self.ui.logWindow, f"[DEV][WARN] DeviceManager close failed: {e!r}")
-
         # ✅ ProcessController가 stm/acs 참조를 잡고 있으면 같이 끊어줘야 메모리 정리가 확실함
         try:
             pc = self._process_controller
@@ -516,52 +463,48 @@ class ProcessWindow(QWidget):
         except Exception:
             pass
 
-        # 3) 참조 제거 → 메모리 회수
+        # 2) 참조 제거 → 메모리 회수
         self._stm_service = None
         self._acs_service = None
         if self.hmi_window is not None:
             self.hmi_window._stm_service = None
             self.hmi_window._acs_service = None
-            self.hmi_window._dev_mgr = None
 
-        # 4) GC
+        # 3) GC
         gc.collect()
         _append_text(self.ui.logWindow, "[DEV] sensors released + gc.collect()")
 
     def _on_start_clicked(self) -> None:
         # ✅ Start에서만 STM/ACS 생성/연결
-        self._ensure_sensors_connected_fresh()
+        if not self._ensure_sensors_connected_fresh():
+            QMessageBox.warning(self, "Device", "STM/ACS 연결 실패")
+            return
 
         pc = self._process_controller
         if pc is None:
             QMessageBox.warning(self, "Process", "ProcessController가 연결되지 않았습니다.")
+            self._shutdown_sensors_and_release_memory()
+            return
+
+        run_cfg = self._collect_ui_run_cfg()
+        if run_cfg is None:
+            self._shutdown_sensors_and_release_memory()
+            return
+
+        if not hasattr(pc, "start_from_ui"):
+            QMessageBox.warning(self, "Process", "start_from_ui가 구현되어 있지 않습니다.\nProcessController에 start_from_ui를 추가하세요.")
+            self._rt_stop()
+            self._shutdown_sensors_and_release_memory()
             return
 
         try:
-            run_cfg = self._collect_ui_run_cfg()
-            if run_cfg is None:
-                return
-
-            # ✅ 1초 RT 시작
-            self._rt_start()
-
-            # ✅ ProcessController에 UI 기반 시작 API가 있으면 그걸 사용
-            if hasattr(pc, "start_from_ui"):
-                pc.start_from_ui(run_cfg)
-            else:
-                # 레시피 자동 생성은 금지. 레시피가 없으면 시작 못한다고 알림.
-                r = pc.get_recipe() if hasattr(pc, "get_recipe") else None
-                if r is None:
-                    QMessageBox.warning(self, "Process", "레시피가 없고 start_from_ui도 없습니다.\n(샘플 레시피 자동 생성은 제거됨)")
-                    self._rt_stop()
-                    return
-                pc.start()
-
-            _append_text(self.ui.logWindow, "[UI] 공정 시작 요청")
+            pc.start_from_ui(run_cfg)
         except Exception as e:
-            self._rt_stop()  # ✅ 추가
+            self._rt_stop()
+            self._shutdown_sensors_and_release_memory()
             QMessageBox.warning(self, "Process Start Failed", f"{e!r}")
             _append_text(self.ui.logWindow, f"[START FAIL] {e!r}")
+            return
 
     def _on_stop_clicked(self) -> None:
         # ✅ 1) 제일 먼저 하드웨어 안전종료(셔터→DAC0→파워OFF)
@@ -667,6 +610,16 @@ class ProcessWindow(QWidget):
             _append_text(getattr(self.ui, "logWindow", None), f"[ERROR] {err!r}")
 
     def _on_finished(self, result: Any) -> None:
+        # ✅ UI RT 정지
+        self._rt_stop()
+
+        # (선택) 공정 엔진이 끝에서 셔터/파워를 이미 정리한다면 아래는 생략 가능
+        # 그래도 운영 안전을 위해 “best effort”로 한 번 더 호출하는 걸 권장
+        self._safe_shutdown_plc_best_effort()
+
+        # ✅ 센서/메모리 정리
+        self._shutdown_sensors_and_release_memory()
+
         try:
             ok = bool(getattr(result, "ok", False))
             rid = getattr(result, "run_id", "")
@@ -814,6 +767,13 @@ class ProcessWindow(QWidget):
         if delay_min is None:
             delay_min = 0.0
 
+        if p1 and not self._material_1:
+            QMessageBox.warning(self, "Input", "Power1 사용 시 Material1 선택이 필요합니다.")
+            return None
+        if p2 and not self._material_2:
+            QMessageBox.warning(self, "Input", "Power2 사용 시 Material2 선택이 필요합니다.")
+            return None
+
         cfg: dict[str, Any] = {
             "use_power1": p1,
             "use_power2": p2,
@@ -888,7 +848,6 @@ def main():
     app.aboutToQuit.connect(plc_binder.stop)
 
     # ✅ STM/ACS는 Start에서만 생성/연결한다.
-    dev_mgr: Optional[DeviceManager] = None
     stm_service: Any = None
     acs_service: Any = None
 
@@ -896,35 +855,32 @@ def main():
     # LogService (신규)
     # ------------------------------
     log_service: Any = None
-    if LogService is not None:
+    try:
         try:
-            # 생성자 시그니처 차이 방어
-            try:
-                log_service = LogService(base_dir=_BASE_DIR)
-            except TypeError:
-                log_service = LogService()
-            if hasattr(log_service, "start"):
-                log_service.start()
-        except Exception:
-            log_service = None
+            log_service = LogService(base_dir=_BASE_DIR)
+        except TypeError:
+            log_service = LogService()
+        if hasattr(log_service, "start"):
+            log_service.start()
+    except Exception:
+        log_service = None
 
     # ------------------------------
     # ProcessController (신규)
     # - PLC는 포트 중복 방지를 위해 binder 공유 어댑터로 주입
     # ------------------------------
     process_controller: Any = None
-    if ProcessController is not None:
-        try:
-            plc_for_process = PlcAdapterFromBinder(plc_binder)
-            process_controller = ProcessController(
-                plc=plc_for_process,
-                log=log_service,
-                stm=stm_service,
-                acs=acs_service,
-            )
-        except Exception as e:
-            process_controller = None
-            _append_text(getattr(hmi.ui, "logWindow", None), f"[BOOT][WARN] ProcessController init failed: {e!r}")
+    try:
+        plc_for_process = PlcAdapterFromBinder(plc_binder)
+        process_controller = ProcessController(
+            plc=plc_for_process,
+            log=log_service,
+            stm=stm_service,
+            acs=acs_service,
+        )
+    except Exception as e:
+        process_controller = None
+        _append_text(getattr(hmi.ui, "logWindow", None), f"[BOOT][WARN] ProcessController init failed: {e!r}")
 
     # 종료 시 신규 서비스 정리
     def _shutdown_new_services() -> None:
@@ -946,19 +902,11 @@ def main():
                 except Exception:
                     pass
 
-        # 혹시 DeviceManager가 Start에서 생성되었을 수 있으니 HMI쪽도 정리
-        try:
-            if getattr(hmi, "_dev_mgr", None) is not None:
-                hmi._dev_mgr.close_all()
-        except Exception:
-            pass
-
     app.aboutToQuit.connect(_shutdown_new_services)
 
     # ✅ HMI가 Config 저장 후 재연결할 수 있도록 주입(기존 기능 유지 + 신규 기능 추가)
     hmi.set_runtime_objects(
         plc_binder=plc_binder,
-        dev_mgr=dev_mgr,
         ini_path=ini_path,
         process_controller=process_controller,
         log_service=log_service,

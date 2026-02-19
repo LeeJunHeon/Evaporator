@@ -646,7 +646,7 @@ class ProcessEngine:
             time.sleep(1.0)
 
         # 6) 완료: 안전정지(셔터 close → DAC 0 → power off)
-        self._safe_shutdown_sequence(use_p1=use_p1, use_p2=use_p2, tag="EVAP_DONE")
+        self._safe_shutdown_sequence(tag="EVAP_DONE")
         self._log_info("EVAP deposition done", tag="PROCESS", also_ui=True)
 
 

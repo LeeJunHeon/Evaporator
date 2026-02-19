@@ -231,12 +231,8 @@ class ProcessEngine:
             self._emit_status(message=f"정지 요청 처리중: {e.mode.value}")
             self._log_warn(f"Stop requested: {e.mode.value}", tag="ENGINE", also_ui=True)
 
-            # ✅ STOP/ABORT도 안전정지 시퀀스로 통일
-            self._safe_shutdown_sequence(
-                use_p1=True,
-                use_p2=True,
-                tag=f"SHUTDOWN_{e.mode.value}",
-            )
+            # ✅ EV 안전정지 시퀀스 통일 (셔터닫기 → DAC0 → PowerOff)
+            self._safe_shutdown_sequence(tag=f"STOP_{e.mode.value}")
 
             self._phase = ProcessPhase.FINISHED
             self._emit_status(message="정지 종료")
@@ -253,13 +249,8 @@ class ProcessEngine:
             self._emit_status(message=f"에러: {e!r}")
             self._log_error(f"ENGINE ERROR: {e!r}", tag="ENGINE", also_ui=True)
 
-            # ✅ 에러도 안전정지 시퀀스로 통일
-            self._safe_shutdown_sequence(
-                use_p1=True,
-                use_p2=True,
-                tag="SHUTDOWN_ABORT",
-            )
-
+            # ✅ 에러 시에도 동일한 안전정지 시퀀스
+            self._safe_shutdown_sequence(tag="ERROR_ABORT")
             ok = False
 
         finally:

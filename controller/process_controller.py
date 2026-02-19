@@ -47,12 +47,12 @@ except ImportError:
         ProcessRecipe,
         ProcessError,
         StopMode,
+        ProcessStep,   # ✅ 추가
+        StepType,      # ✅ 추가
     )
     from process.recipe_io import (
         load_recipe,
         save_recipe,
-        write_recipe_csv_template,
-        make_sample_recipe,
     )
     from process.engine import ProcessEngine, EngineResult
     from services.plc_service import PLCService
@@ -183,19 +183,66 @@ class ProcessController(QObject):
         }
 
         steps: list[ProcessStep] = [
-            # 안전 초기화
-            ProcessStep(step=StepType.PLC_WRITE_COIL, name="MAIN_SHUTTER_CLOSE", meta={"coil": "MAIN_SHUTTER_SW", "on": False}),
-            ProcessStep(step=StepType.PLC_WRITE_REG,  name="DAC1_0",              meta={"reg": "DAC_POWER_1", "value": 0}),
-            ProcessStep(step=StepType.PLC_WRITE_REG,  name="DAC2_0",              meta={"reg": "DAC_POWER_2", "value": 0}),
+            # -------------------------
+            # 안전 초기화(시작 시점)
+            # -------------------------
+            ProcessStep(
+                name="MAIN_SHUTTER_CLOSE",
+                type=StepType.PLC_WRITE_COIL,
+                coil="MAIN_SHUTTER_SW",
+                on=False,
+            ),
+            ProcessStep(
+                name="DAC1_0",
+                type=StepType.PLC_WRITE_REG,
+                reg="DAC_POWER_1",
+                value=0,
+            ),
+            ProcessStep(
+                name="DAC2_0",
+                type=StepType.PLC_WRITE_REG,
+                reg="DAC_POWER_2",
+                value=0,
+            ),
 
-            # 파워 스위치 상태를 명확히 세팅(선택 안 했으면 OFF)
-            ProcessStep(step=StepType.PLC_WRITE_COIL, name="POWER1_SET",          meta={"coil": "POWER_1_SW", "on": use_p1}),
-            ProcessStep(step=StepType.PLC_WRITE_COIL, name="POWER2_SET",          meta={"coil": "POWER_2_SW", "on": use_p2}),
+            # -------------------------
+            # POWER 스위치 상태 명확히 세팅(선택 안 했으면 OFF)
+            # -------------------------
+            ProcessStep(
+                name="POWER1_SET",
+                type=StepType.PLC_WRITE_COIL,
+                coil="POWER_1_SW",
+                on=use_p1,
+            ),
+            ProcessStep(
+                name="POWER2_SET",
+                type=StepType.PLC_WRITE_COIL,
+                coil="POWER_2_SW",
+                on=use_p2,
+            ),
 
-            # STM에 film 파라미터 세팅/제로링 같은 건 다음 단계에서 엔진/STMService에 실제 구현 예정
-            ProcessStep(step=StepType.MARK, name="STM_SET_FILM_PARAMS", meta={"density": density, "z_factor": z_factor, "material_name": material}),
-            ProcessStep(step=StepType.MARK, name="STM_ZERO_THICKNESS",  meta={}),
-            ProcessStep(step=StepType.MARK, name="EVAP_DEPOSITION_CONTROL", meta=meta),
+            # -------------------------
+            # STM 관련(다음 단계 구현 예정: 엔진/STMService에서 처리)
+            # -------------------------
+            ProcessStep(
+                name="STM_SET_FILM_PARAMS",
+                type=StepType.MARK,
+                meta={"density": density, "z_factor": z_factor, "material_name": material},
+            ),
+            ProcessStep(
+                name="STM_ZERO_THICKNESS",
+                type=StepType.MARK,
+                meta={},
+            ),
+
+            # -------------------------
+            # EVAP 메인 루프(엔진에서 실행)
+            # -------------------------
+            ProcessStep(
+                name="EVAP_DEPOSITION_CONTROL",
+                type=StepType.MARK,
+                meta=meta,
+            ),
         ]
 
         recipe = ProcessRecipe(
@@ -276,7 +323,6 @@ class ProcessController(QObject):
         else:
             self._ui_info("실행 중 공정 없음 → 안전 출력만 수행")
 
-
     def abort(self) -> None:
         self._issue_safe_stop_outputs(tag="ABORT_BTN")
         if self.is_running():
@@ -291,14 +337,6 @@ class ProcessController(QObject):
             self._request_engine_stop(StopMode.ESTOP)
         else:
             self._ui_info("실행 중 공정 없음 → 안전 출력만 수행")
-
-    def abort(self) -> None:
-        """빠른 중단/에러 대응"""
-        self._request_engine_stop(StopMode.ABORT)
-
-    def estop(self) -> None:
-        """비상정지(개념상). 실제는 PLC/하드웨어 인터락이 우선"""
-        self._request_engine_stop(StopMode.ESTOP)
 
     def pause(self) -> None:
         if not self.is_running():

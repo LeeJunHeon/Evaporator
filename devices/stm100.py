@@ -31,6 +31,24 @@ _CODE_MEANING = {
 }
 
 
+def _fmt_compact_float(x: float, *, max_decimals: int = 3) -> str:
+    """
+    STM-100 DATA(최대 10 bytes) 제한을 고려한 compact float 포맷.
+    예) 1.230 -> "1.23", 0.750 -> "0.75"
+    """
+    s = f"{float(x):.{int(max_decimals)}f}"
+    s = s.rstrip("0").rstrip(".")
+    if s == "-0":
+        s = "0"
+    return s
+
+def _ensure_cmd_len(cmd: str) -> None:
+    # build_frame() 제약: DATA 1~10 bytes(ASCII)
+    b = cmd.encode("ascii", errors="replace")
+    if not (1 <= len(b) <= 10):
+        raise ValueError(f"STM-100 cmd too long: {cmd!r} (len={len(b)} bytes, must be 1~10)")
+    
+
 def checksum_data_only(data: bytes) -> int:
     # Sycon STM-100: sum(DATA) & 0xFF
     return sum(data) & 0xFF
@@ -171,25 +189,141 @@ class STM100(BaseSerialDevice):
         s = self.command("S")
         return float(int(s))
 
-    def get_rate_angstrom_per_s(self) -> float:
-        return float(self.command("T"))
+    # ------------------------------------------------------------
+    # Film parameter / Zero helpers (필수: density, z-factor, zero)
+    # ------------------------------------------------------------
+    def zero_thickness(self) -> None:
+        """
+        C : Zeros thickness
+        """
+        self.command("C")
 
-    def shutter(self, on: bool) -> None:
-        self.command("A", modifier="!" if on else "@")
+    def zero_timer_and_thickness(self) -> None:
+        """
+        B : Zeros timer and thickness
+        """
+        self.command("B")
 
-    def shutter_state(self) -> str:
-        return self.command("A", modifier="?")
+    def set_density(self, density_g_cm3: float) -> None:
+        """
+        E= : Set current film density
+        """
+        v = _fmt_compact_float(density_g_cm3, max_decimals=3)
+        cmd = f"E={v}"
+        _ensure_cmd_len(cmd)
+        # token/modifier로도 가능하지만, 길이 체크를 위해 raw를 씀
+        self.query_text(cmd)
 
-    def acknowledge_reset_flag(self) -> None:
-        # L
-        self.command("L")
+    def get_density(self) -> float:
+        """
+        E? : Query current film density
+        """
+        s = self.command("E", modifier="?")
+        return float(s)
 
-    # alias (이전 테스트/코드 호환)
-    def get_firmware_version(self) -> str:
-        return self.get_version()
+    def set_z_factor(self, z: float) -> None:
+        """
+        F= : Set current film Z-Factor
+        """
+        v = _fmt_compact_float(z, max_decimals=3)
+        cmd = f"F={v}"
+        _ensure_cmd_len(cmd)
+        self.query_text(cmd)
 
-    def get_thickness(self) -> float:
-        return self.get_thickness_angstrom()
+    def get_z_factor(self) -> float:
+        """
+        F? : Query current film Z-Factor
+        """
+        s = self.command("F", modifier="?")
+        return float(s)
 
-    def get_rate(self) -> float:
-        return self.get_rate_angstrom_per_s()
+    # ------------------------------------------------------------
+    # Multi-Film (1~9) support (선택: 2개 material 저장/전환용)
+    # ------------------------------------------------------------
+    def set_current_film(self, film_no: int) -> None:
+        """
+        iN : Sets the current film to number N (1..9)
+        예) i5
+        """
+        n = int(film_no)
+        if not (1 <= n <= 9):
+            raise ValueError("film_no must be 1..9")
+        cmd = f"i{n}"
+        _ensure_cmd_len(cmd)
+        self.query_text(cmd)
+
+    def set_film_density(self, film_no: int, density_g_cm3: float) -> None:
+        """
+        jN=val : Sets density for film N (1..9)
+        예) j6=0.75
+        """
+        n = int(film_no)
+        if not (1 <= n <= 9):
+            raise ValueError("film_no must be 1..9")
+        v = _fmt_compact_float(density_g_cm3, max_decimals=3)
+        cmd = f"j{n}={v}"
+        _ensure_cmd_len(cmd)
+        self.query_text(cmd)
+
+    def get_film_density(self, film_no: int) -> float:
+        """
+        jN? : Query density for film N (1..9)
+        """
+        n = int(film_no)
+        if not (1 <= n <= 9):
+            raise ValueError("film_no must be 1..9")
+        cmd = f"j{n}?"
+        _ensure_cmd_len(cmd)
+        s = self.query_text(cmd)
+        return float(s)
+
+    def set_film_z_factor(self, film_no: int, z: float) -> None:
+        """
+        kN=val : Sets Z-Factor for film N (1..9)
+        예) k5=0.5
+        """
+        n = int(film_no)
+        if not (1 <= n <= 9):
+            raise ValueError("film_no must be 1..9")
+        v = _fmt_compact_float(z, max_decimals=3)
+        cmd = f"k{n}={v}"
+        _ensure_cmd_len(cmd)
+        self.query_text(cmd)
+
+    def get_film_z_factor(self, film_no: int) -> float:
+        """
+        kN? : Query Z-Factor for film N (1..9)
+        """
+        n = int(film_no)
+        if not (1 <= n <= 9):
+            raise ValueError("film_no must be 1..9")
+        cmd = f"k{n}?"
+        _ensure_cmd_len(cmd)
+        s = self.query_text(cmd)
+        return float(s)
+
+    def apply_material_params(
+        self,
+        *,
+        density_g_cm3: float,
+        z_factor: float,
+        film_no: int | None = None,
+        do_zero_thickness: bool = False,
+    ) -> None:
+        """
+        공정에서 쓰기 좋은 “한 방” API
+        - film_no가 있으면 멀티필름(j/k)로 저장(또는 전환)
+        - film_no가 없으면 현재 film(E/F)에 적용
+        - 필요 시 thickness zero까지
+        """
+        if film_no is None:
+            self.set_density(density_g_cm3)
+            self.set_z_factor(z_factor)
+        else:
+            self.set_film_density(film_no, density_g_cm3)
+            self.set_film_z_factor(film_no, z_factor)
+            # 바로 해당 필름을 current로 쓰고 싶으면:
+            self.set_current_film(film_no)
+
+        if do_zero_thickness:
+            self.zero_thickness()

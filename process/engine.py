@@ -231,8 +231,12 @@ class ProcessEngine:
             self._emit_status(message=f"정지 요청 처리중: {e.mode.value}")
             self._log_warn(f"Stop requested: {e.mode.value}", tag="ENGINE", also_ui=True)
 
-            # 여기서 “안전정지 시퀀스”를 넣을 수도 있음(장비마다 다르므로 기본은 최소화)
-            self._do_minimal_shutdown(e.mode)
+            # ✅ STOP/ABORT도 안전정지 시퀀스로 통일
+            self._safe_shutdown_sequence(
+                use_p1=True,
+                use_p2=True,
+                tag=f"SHUTDOWN_{e.mode.value}",
+            )
 
             self._phase = ProcessPhase.FINISHED
             self._emit_status(message="정지 종료")
@@ -249,8 +253,13 @@ class ProcessEngine:
             self._emit_status(message=f"에러: {e!r}")
             self._log_error(f"ENGINE ERROR: {e!r}", tag="ENGINE", also_ui=True)
 
-            # 에러 시에도 최소 안전조치
-            self._do_minimal_shutdown(StopMode.ABORT)
+            # ✅ 에러도 안전정지 시퀀스로 통일
+            self._safe_shutdown_sequence(
+                use_p1=True,
+                use_p2=True,
+                tag="SHUTDOWN_ABORT",
+            )
+
             ok = False
 
         finally:
@@ -463,7 +472,7 @@ class ProcessEngine:
             time.sleep(0.2)
 
         # 1) 안전 초기화: 셔터 닫기 → DAC 0 → 선택 power ON
-        self._safe_shutdown_sequence(use_p1=use_p1, use_p2=use_p2, tag="EVAP_INIT")
+        self._safe_shutdown_sequence(tag="EVAP_INIT")
         self._plc_write_coil("POWER_1_SW", bool(use_p1), tag="EVAP_POWER1_ON" if use_p1 else "EVAP_POWER1_OFF")
         self._plc_write_coil("POWER_2_SW", bool(use_p2), tag="EVAP_POWER2_ON" if use_p2 else "EVAP_POWER2_OFF")
 
@@ -715,10 +724,9 @@ class ProcessEngine:
             step = min(int(step_dn), int(base))
             return int(max(0, dac - step))
 
-
-    def _safe_shutdown_sequence(self, *, use_p1: bool, use_p2: bool, tag: str) -> None:
+    def _safe_shutdown_sequence(self, *, tag: str) -> None:
         """
-        요구사항 안전 시퀀스:
+        요구사항 안전 시퀀스(통일):
         1) MAIN_SHUTTER close
         2) DAC 0
         3) POWER off
@@ -730,7 +738,7 @@ class ProcessEngine:
         except Exception:
             pass
 
-        # 2) dac 0 (선택 채널이든 아니든 둘 다 0으로 떨어뜨려도 안전)
+        # 2) dac 0
         try:
             self._plc_write_reg("DAC_POWER_1", 0, tag=f"{tag}_DAC1_0")
             self._last_dac_power_1 = 0
@@ -1080,44 +1088,6 @@ class ProcessEngine:
         except Exception:
             # 텔레메트리 실패해도 공정은 계속
             pass
-
-    # --------------------------------------------------------
-    # Minimal shutdown (기본은 최소화)
-    # --------------------------------------------------------
-    def _do_minimal_shutdown(self, mode: StopMode) -> None:
-        """
-        STOP/ABORT/ERROR 시에도 최소한의 안전정지:
-        - MAIN_SHUTTER close
-        - DAC 0
-        - POWER off
-        - (기존) GAS off
-        """
-        tag = f"SHUTDOWN_{mode.value}"
-
-        # 1) shutter close
-        try:
-            self.plc.enqueue_write_coil("MAIN_SHUTTER_SW", False, tag=tag)
-        except Exception:
-            pass
-
-        # 2) dac 0
-        try:
-            self.plc.enqueue_write_reg("DAC_POWER_1", 0, tag=tag)
-            self._last_dac_power_1 = 0
-        except Exception:
-            pass
-        try:
-            self.plc.enqueue_write_reg("DAC_POWER_2", 0, tag=tag)
-            self._last_dac_power_2 = 0
-        except Exception:
-            pass
-
-        # 3) power off + gas off
-        for coil in ["POWER_1_SW", "POWER_2_SW", "GAS_1_SW", "GAS_2_SW"]:
-            try:
-                self.plc.enqueue_write_coil(coil, False, tag=tag)
-            except Exception:
-                pass
 
     # --------------------------------------------------------
     # Logging wrappers

@@ -188,6 +188,20 @@ class STM100(BaseSerialDevice):
         # S -> "-0001595" 같은 정수 문자열
         s = self.command("S")
         return float(int(s))
+    
+    def get_rate_angstrom_per_s(self) -> float:
+        """
+        T : deposition rate (Å/s)
+        메뉴얼 형식: leading space 또는 '-' + NNN.N 형태가 흔함.
+        command()는 body를 strip하므로 float 변환만 안정적으로 처리.
+        """
+        s = self.command("T")  # body(str), strip됨
+        if not s:
+            raise STM100ProtocolError("STM-100: empty rate response")
+        try:
+            return float(s)
+        except ValueError as e:
+            raise STM100ProtocolError(f"STM-100: invalid rate response: {s!r}") from e
 
     # ------------------------------------------------------------
     # Film parameter / Zero helpers (필수: density, z-factor, zero)

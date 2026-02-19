@@ -119,7 +119,7 @@ class STM100(BaseSerialDevice):
     STM-100 / MF (Sycon) RS-232 Sycon Protocol 드라이버.
 
     - 명령 문자열: "토큰 1글자" + "modifier(선택)" + "data(선택)"
-      예)  "T", "A?", "A!", "E=1.23"
+    예)  "T", "S", "@", "E=1.23", "F=1.234", "i5", "j5=0.75", "k5=0.50"
     """
 
     def exchange(self, cmd: str, timeout_s: float = 1.0) -> STMReply:

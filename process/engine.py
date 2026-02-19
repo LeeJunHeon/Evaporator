@@ -20,6 +20,7 @@ ProcessEngine
 
 from __future__ import annotations
 
+import contextlib
 import time
 import uuid
 from dataclasses import dataclass
@@ -289,12 +290,13 @@ class ProcessEngine:
             return
 
         if t == StepType.MARK:
-            # ✅ 특정 MARK는 엔진 제어 루프를 수행
-            if str(step.name) == "EVAP_DEPOSITION_CONTROL":
-                self._evap_deposition_control(recipe, step)
+            # ✅ EVAP 증착 제어 루프(특수 MARK)
+            # - process_controller에서 step.name="EVAP_DEPOSITION_CONTROL" 로 넣어주면 여기로 들어온다.
+            if step.name == "EVAP_DEPOSITION_CONTROL":
+                self._evap_deposition_control(recipe, step)  # ✅ 함수명 일치
                 return
 
-            # (지금 단계에서는 다른 MARK는 그대로 로그만)
+            # UI trace용 마커(기본)
             self._log_info(f"MARK: {step.name}", tag="PROCESS", also_ui=False)
             return
 
@@ -352,6 +354,8 @@ class ProcessEngine:
                 step=step,
                 cond_fn=lambda: self._get_rate_ok_in_range(mn, mx),
                 cond_desc=f"rate in [{mn}, {mx}] A/s",
+                sensor_value_fn=self._get_rate,   # ✅ 추가
+                sensor_label="STM rate",          # ✅ 추가
             )
             return
 
@@ -373,17 +377,19 @@ class ProcessEngine:
     # --------------------------------------------------------
     def _evap_deposition_control(self, recipe: ProcessRecipe, step: ProcessStep) -> None:
         """
-        EVAP 증착 제어 루프
-        요구사항 반영:
-        - DAC 0~1000: 1초에 100씩 상승
-        - 1000 이후: 100씩 조정 + 10초 동안 1초 주기로 dep.rate 확인
+        EVAP 증착 제어 루프 (요구사항 반영)
+
+        - DAC 0~1000: 1초에 100씩 상승(FAST)
+        - 1000 이후: 기본 100 단위로 조정 + 10초 동안 1Hz로 dep.rate 확인
+          단, 목표 근접 시 step을 자동으로 줄여 미세조정
         - target_rate 도달 → delay_min(분, 소수 가능) 유지 → MAIN_SHUTTER OPEN
         - target_thickness 도달까지 rate 유지(동적 보정)
-        - rate가 기준 대비 50% 이하로 급락하면 즉시 안전정지 후 실패 처리
+        - dep.rate이 기준 대비 50% 이하로 급락하면 즉시 안전정지 후 실패 처리
+        - dep.rate/thickness가 None 상태가 10초 지속되면 실패 처리(재연결 기회 제공)
         """
         meta: dict[str, Any] = {}
         meta.update(getattr(recipe, "meta", None) or {})
-        meta.update(getattr(step, "meta", None) or {})  # step.meta가 우선
+        meta.update(getattr(step, "meta", None) or {})  # step.meta 우선
 
         use_p1 = bool(meta.get("use_power1", False))
         use_p2 = bool(meta.get("use_power2", False))
@@ -404,7 +410,7 @@ class ProcessEngine:
         if self.stm is None:
             raise EngineFailed(step.name, "STMService가 None입니다(증착 rate/thickness 읽기 불가).")
 
-        # --- 튜닝 파라미터(필요 시 meta로 외부에서 덮어쓸 수 있게 해도 됨) ---
+        # --- 튜닝 파라미터 ---
         DAC_MAX = int(meta.get("dac_max", 4000) or 4000)
         DAC_FAST_LIMIT = int(meta.get("dac_fast_limit", 1000) or 1000)
         DAC_FAST_STEP = int(meta.get("dac_fast_step", 100) or 100)
@@ -414,7 +420,34 @@ class ProcessEngine:
         DROP_RATIO = float(meta.get("rate_drop_ratio", 0.5) or 0.5)  # 50% 급락
         DROP_COUNT = int(meta.get("rate_drop_count", 3) or 3)        # 3회 연속이면 abort
 
+        SENSOR_NONE_ABORT_S = float(meta.get("sensor_none_abort_s", 10.0) or 10.0)
         delay_s = max(0.0, delay_min * 60.0)
+
+        # --- rate/thickness None 10초 감시 ---
+        last_rate_valid_ts = time.time()
+        last_th_valid_ts = time.time()
+
+        def read_rate_or_abort() -> Optional[float]:
+            nonlocal last_rate_valid_ts
+            rt = self._get_rate()
+            now = time.time()
+            if rt is not None:
+                last_rate_valid_ts = now
+                return float(rt)
+            if (now - last_rate_valid_ts) >= SENSOR_NONE_ABORT_S:
+                raise EngineFailed(step.name, f"STM rate=None 지속 {SENSOR_NONE_ABORT_S:.0f}s 초과")
+            return None
+
+        def read_th_or_abort() -> Optional[float]:
+            nonlocal last_th_valid_ts
+            th = self._get_thickness()
+            now = time.time()
+            if th is not None:
+                last_th_valid_ts = now
+                return float(th)
+            if (now - last_th_valid_ts) >= SENSOR_NONE_ABORT_S:
+                raise EngineFailed(step.name, f"STM thickness=None 지속 {SENSOR_NONE_ABORT_S:.0f}s 초과")
+            return None
 
         # 0) STM 연결 확인(짧게)
         t0 = time.time()
@@ -429,9 +462,8 @@ class ProcessEngine:
                 raise EngineFailed(step.name, "STM 연결 실패/미연결(5s timeout).")
             time.sleep(0.2)
 
-        # 1) 안전 초기화: 셔터 닫기 → DAC 0 → power coil 세팅(선택된 것만 ON)
-        self._safe_shutdown_sequence(use_p1=use_p1, use_p2=use_p2, tag="EVAP_INIT")  # shutter close + dac0 + power off
-        # 선택된 파워만 ON
+        # 1) 안전 초기화: 셔터 닫기 → DAC 0 → 선택 power ON
+        self._safe_shutdown_sequence(use_p1=use_p1, use_p2=use_p2, tag="EVAP_INIT")
         self._plc_write_coil("POWER_1_SW", bool(use_p1), tag="EVAP_POWER1_ON" if use_p1 else "EVAP_POWER1_OFF")
         self._plc_write_coil("POWER_2_SW", bool(use_p2), tag="EVAP_POWER2_ON" if use_p2 else "EVAP_POWER2_OFF")
 
@@ -439,59 +471,82 @@ class ProcessEngine:
         dac = 0
         self._evap_apply_dac(use_p1, use_p2, dac, tag="EVAP_DAC_SET_0")
 
-        # rate 급락 감지는 “셔터 open 이후”에 본격 적용(그 전에는 불안정 구간이 많아서)
-        drop_count = 0
+        def in_band(v: float) -> bool:
+            tol = abs(target_rate) * RATE_TOL
+            return abs(v - target_rate) <= tol
 
-        # ---- 2-A) 0~1000(FAST): 1초마다 +100 ----
+        # ---- 2-A) 0~1000: 1초마다 +100 (요구사항 그대로) ----
         while True:
             self._check_stop_pause(recipe, step)
             self._tick_emit(recipe, step)
 
-            rt = self._get_rate()
-            if rt is not None and float(rt) >= target_rate:
+            rt = read_rate_or_abort()
+            if rt is not None and rt >= target_rate:
                 break
-
             if dac >= DAC_FAST_LIMIT:
                 break
 
             dac = min(DAC_FAST_LIMIT, dac + DAC_FAST_STEP)
             self._evap_apply_dac(use_p1, use_p2, dac, tag=f"EVAP_DAC_FAST_{dac}")
 
-            # 1초 동안 1Hz로 모니터링
-            for _ in range(1):
+            # 1초 대기(0.1s x 10) - stop/pause 반응성 확보
+            for _ in range(10):
                 self._check_stop_pause(recipe, step)
                 self._tick_emit(recipe, step)
-                rt = self._get_rate()
-                self._emit_status(message=f"EVAP RAMP_FAST dac={dac} rate={rt}")
-                if rt is not None and float(rt) >= target_rate:
-                    break
-                time.sleep(1.0)
+                time.sleep(0.1)
 
-            if rt is not None and float(rt) >= target_rate:
+            rt2 = read_rate_or_abort()
+            self._emit_status(message=f"EVAP RAMP_FAST dac={dac} rate={rt2}")
+            if rt2 is not None and rt2 >= target_rate:
                 break
 
-        # ---- 2-B) 1000 이후(SLOW): 필요 시 ±100 조정, 10초 동안 1Hz로 확인 ----
+        # ---- 2-B) 1000 이후: 10초/1Hz 기반 + 근접 시 미세조정 + overshoot 시 내림 ----
         while True:
             self._check_stop_pause(recipe, step)
             self._tick_emit(recipe, step)
 
-            rt = self._get_rate()
-            if rt is not None and float(rt) >= target_rate:
+            rt = read_rate_or_abort()
+
+            # 센서 잠깐 None이면(재연결 중) DAC는 건드리지 말고 기다림
+            if rt is None:
+                time.sleep(0.2)
+                continue
+
+            if in_band(rt) or rt >= target_rate:
                 break
 
-            # 아직 목표 미달이면 +100 (상한 체크)
-            dac = min(DAC_MAX, dac + DAC_SLOW_STEP)
+            err = target_rate - rt
+            ratio = abs(err) / max(abs(target_rate), 1e-9)
+
+            # 멀면 100/10초, 가까우면 50/5초, 20/3초, 10/2초
+            if ratio >= 0.30:
+                step_sz, dwell_s = 100, 10.0
+            elif ratio >= 0.15:
+                step_sz, dwell_s = 50, 5.0
+            elif ratio >= 0.08:
+                step_sz, dwell_s = 20, 3.0
+            else:
+                step_sz, dwell_s = 10, 2.0
+
+            step_sz = int(min(int(DAC_SLOW_STEP), step_sz))  # 기본 slow_step(100) 이상은 못가게 제한
+
+            if err > 0:
+                dac = min(DAC_MAX, dac + step_sz)
+            else:
+                dac = max(0, dac - step_sz)
+
             self._evap_apply_dac(use_p1, use_p2, dac, tag=f"EVAP_DAC_SLOW_{dac}")
 
-            # 10초 동안 1Hz로 rate 확인, 도달하면 조기 종료
+            n = max(1, int(round(dwell_s)))
             reached = False
-            for i in range(10):
+            for i in range(n):
                 self._check_stop_pause(recipe, step)
                 self._tick_emit(recipe, step)
 
-                rt = self._get_rate()
-                self._emit_status(message=f"EVAP RAMP_SLOW dac={dac} t={i+1}/10 rate={rt}")
-                if rt is not None and float(rt) >= target_rate:
+                rt2 = read_rate_or_abort()
+                self._emit_status(message=f"EVAP RAMP_SLOW dac={dac} t={i+1}/{n} rate={rt2}")
+
+                if rt2 is not None and (in_band(rt2) or rt2 >= target_rate):
                     reached = True
                     break
                 time.sleep(1.0)
@@ -499,11 +554,10 @@ class ProcessEngine:
             if reached:
                 break
 
-            # 안전: dac가 max까지 갔는데도 도달 못하면 엔진 실패
-            if dac >= DAC_MAX:
+            if dac >= DAC_MAX and rt < target_rate:
                 raise EngineFailed(step.name, f"target_rate 미도달: dac={dac} rate={rt}")
 
-        # 3) delay(셔터 닫힌 상태에서 안정화 시간). 이 구간에서도 rate 유지(미세 보정)
+        # 3) delay 구간(셔터 닫힌 상태): rate 유지(미세 보정)
         if delay_s > 0:
             t_end = time.time() + delay_s
             self._emit_status(message=f"EVAP delay start: {delay_s:.1f}s (keep rate)")
@@ -512,16 +566,20 @@ class ProcessEngine:
                 self._check_stop_pause(recipe, step)
                 self._tick_emit(recipe, step)
 
-                rt = self._get_rate()
-                # delay 구간에서도 너무 떨어지면(목표의 50%↓) 바로 abort
-                if rt is not None and float(rt) < (target_rate * DROP_RATIO):
+                rt = read_rate_or_abort()
+                if rt is not None and rt < (target_rate * DROP_RATIO):
                     raise EngineFailed(step.name, f"rate drop(before shutter open): rate={rt} < {target_rate*DROP_RATIO}")
 
-                # 미세 보정
-                new_dac = self._evap_adjust_dac(dac, rt, target_rate, tol_ratio=RATE_TOL, step_up=50, step_dn=50, dac_max=DAC_MAX)
-                if new_dac != dac:
-                    dac = new_dac
-                    self._evap_apply_dac(use_p1, use_p2, dac, tag=f"EVAP_DAC_FINE_{dac}")
+                if rt is not None:
+                    new_dac = self._evap_adjust_dac(
+                        dac, rt, target_rate,
+                        tol_ratio=RATE_TOL,
+                        step_up=50, step_dn=50,
+                        dac_max=DAC_MAX
+                    )
+                    if new_dac != dac:
+                        dac = new_dac
+                        self._evap_apply_dac(use_p1, use_p2, dac, tag=f"EVAP_DAC_FINE_{dac}")
 
                 time.sleep(1.0)
 
@@ -529,55 +587,61 @@ class ProcessEngine:
         self._plc_write_coil("MAIN_SHUTTER_SW", True, tag="EVAP_SHUTTER_OPEN")
         self._emit_status(message="EVAP shutter opened")
 
-        # thickness는 “셔터 오픈 시점 기준 delta”로 계산(제로링 없어도 동작)
-        th0 = self._get_thickness()
-        th0 = float(th0) if th0 is not None else 0.0
+        # thickness baseline: 셔터 오픈 시점 thickness가 None이면 10초 내 확보
+        th0 = read_th_or_abort()
+        if th0 is None:
+            t_th0 = time.time()
+            while True:
+                self._check_stop_pause(recipe, step)
+                self._tick_emit(recipe, step)
 
-        # 급락 기준은 “셔터 오픈 직후 baseline_rate 또는 target_rate”
+                th0 = read_th_or_abort()
+                if th0 is not None:
+                    break
+                if (time.time() - t_th0) >= SENSOR_NONE_ABORT_S:
+                    raise EngineFailed(step.name, "thickness baseline 확보 실패")
+                time.sleep(0.2)
+
         baseline_rate: Optional[float] = None
         drop_count = 0
 
-        # 5) target_thickness 도달까지 rate 유지(동적 보정) + 급락 abort
+        # 5) target_thickness 도달까지 rate 유지 + 급락 abort
         while True:
             self._check_stop_pause(recipe, step)
             self._tick_emit(recipe, step)
 
-            rt = self._get_rate()
-            th = self._get_thickness()
+            rt = read_rate_or_abort()
+            th = read_th_or_abort()
 
-            # baseline_rate 캡처(처음 안정된 값)
-            if baseline_rate is None and rt is not None and float(rt) >= (target_rate * 0.8):
+            if baseline_rate is None and rt is not None and rt >= (target_rate * 0.8):
                 baseline_rate = float(rt)
 
-            # thickness 종료
             if th is not None:
-                dep_th = float(th) - th0
+                dep_th = float(th) - float(th0)
                 self._emit_status(message=f"EVAP deposit: dac={dac} rate={rt} dth={dep_th:.1f}/{target_th:.1f}A")
                 if dep_th >= target_th:
                     break
             else:
                 self._emit_status(message=f"EVAP deposit: dac={dac} rate={rt} thickness=None")
 
-            # rate 급락 감지(연속 DROP_COUNT회면 abort)
             if rt is not None:
                 ref = baseline_rate if baseline_rate is not None else target_rate
-                if float(rt) < (float(ref) * DROP_RATIO):
+                if rt < (float(ref) * DROP_RATIO):
                     drop_count += 1
                 else:
                     drop_count = 0
                 if drop_count >= DROP_COUNT:
                     raise EngineFailed(step.name, f"rate drop detected: rate={rt} ref={ref} (x{DROP_COUNT})")
 
-            # rate 유지 보정(셔터 오픈 후에는 조금 더 타이트하게)
-            new_dac = self._evap_adjust_dac(
-                dac, rt, target_rate,
-                tol_ratio=RATE_TOL,
-                step_up=50, step_dn=50,
-                dac_max=DAC_MAX,
-            )
-            if new_dac != dac:
-                dac = new_dac
-                self._evap_apply_dac(use_p1, use_p2, dac, tag=f"EVAP_DAC_HOLD_{dac}")
+                new_dac = self._evap_adjust_dac(
+                    dac, rt, target_rate,
+                    tol_ratio=RATE_TOL,
+                    step_up=50, step_dn=50,
+                    dac_max=DAC_MAX
+                )
+                if new_dac != dac:
+                    dac = new_dac
+                    self._evap_apply_dac(use_p1, use_p2, dac, tag=f"EVAP_DAC_HOLD_{dac}")
 
             time.sleep(1.0)
 
@@ -609,25 +673,47 @@ class ProcessEngine:
         dac_max: int,
     ) -> int:
         """
-        간단한 피드백: 목표 ±tol_ratio 범위면 유지.
-        - rate가 없으면 변경하지 않음(0 반환 X)
+        ✅ 목표 근접 시 미세 조정용 DAC 보정기
+        - rate None이면 DAC 변경하지 않음(센서 끊김 동안 power 흔들지 않기)
+        - 목표보다 낮으면 올림 / 목표보다 높으면 내림
+        - 목표에 가까울수록 step을 자동으로 줄임
         """
+        dac = int(dac)
         if rate is None:
-            return int(dac)
+            return dac
 
-        r = float(rate)
         tr = float(target_rate)
         if tr <= 0:
-            return int(dac)
+            return dac
 
+        r = float(rate)
         tol = abs(tr) * float(tol_ratio)
-        if abs(r - tr) <= tol:
-            return int(dac)
+        err = tr - r
 
-        if r < tr:
-            return int(min(int(dac_max), int(dac) + int(step_up)))
+        # ✅ 허용밴드면 유지
+        if abs(err) <= tol:
+            return dac
+
+        ratio = abs(err) / max(abs(tr), 1e-9)  # 목표 대비 오차 비율
+
+        # ✅ 멀면 크게 / 가까우면 작게
+        if ratio >= 0.50:
+            base = 100
+        elif ratio >= 0.25:
+            base = 50
+        elif ratio >= 0.12:
+            base = 20
+        elif ratio >= 0.06:
+            base = 10
         else:
-            return int(max(0, int(dac) - int(step_dn)))
+            base = 5
+
+        if err > 0:
+            step = min(int(step_up), int(base))
+            return int(min(int(dac_max), dac + step))
+        else:
+            step = min(int(step_dn), int(base))
+            return int(max(0, dac - step))
 
 
     def _safe_shutdown_sequence(self, *, use_p1: bool, use_p2: bool, tag: str) -> None:
@@ -915,7 +1001,6 @@ class ProcessEngine:
         now = time.time()
 
         if (now - self._last_status_emit_ts) >= self._status_emit_interval_s:
-            self._last_status_emit_ts = now
             self._emit_status(step_idx=self._current_step_idx, step_name=self._current_step_name)
 
         tele_int = float(recipe.telemetry_interval_s or 0.5)
@@ -937,6 +1022,7 @@ class ProcessEngine:
         now = time.time()
         if not force and (now - self._last_status_emit_ts) < self._status_emit_interval_s:
             return
+        self._last_status_emit_ts = now  # ✅ 여기서 갱신
 
         st = ProcessStatus(
             phase=self._phase,

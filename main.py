@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import gc
 import sys
+import time
 from pathlib import Path
 from typing import Optional, Any
 
@@ -50,79 +51,6 @@ def _append_text(widget: Any, text: str) -> None:
             return
     except Exception:
         pass
-
-
-# ============================================================
-# 공정용 PLC 어댑터
-# - HMI 버튼 동작(미연결 팝업/원복)은 기존처럼 HmiPlcBinder가 계속 담당
-# - 공정 엔진은 PLC 포트를 새로 열지 않고 Binder의 워커 큐를 "공유"해서 사용
-# ============================================================
-class PlcAdapterFromBinder:
-    def __init__(self, binder: HmiPlcBinder):
-        self._binder = binder
-
-    def start(self) -> None:
-        # binder.start()는 main에서 이미 하지만, 중복 호출 방어
-        try:
-            self._binder.start()
-        except Exception:
-            pass
-
-    def stop(self) -> None:
-        try:
-            self._binder.stop()
-        except Exception:
-            pass
-
-    def is_running(self) -> bool:
-        try:
-            w = getattr(self._binder, "_worker", None)
-            return bool(w and w.isRunning())
-        except Exception:
-            return False
-
-    def is_connected(self) -> bool:
-        try:
-            return bool(self._binder.is_connected())
-        except Exception:
-            return False
-
-    # --- 공정에서 상태 조회가 필요할 때(폴링 캐시 기반) ---
-    def get_states(self) -> dict[str, bool]:
-        try:
-            return dict(self._binder.get_states() or {})
-        except Exception:
-            return {}
-
-    def read_coil(self, coil_name: str, default: bool = False) -> bool:
-        try:
-            return bool(self.get_states().get(str(coil_name), bool(default)))
-        except Exception:
-            return bool(default)
-
-    # --- 공정에서 write ---
-    def enqueue_write(self, coil_name: str, on: bool, momentary: bool = False) -> None:
-        # ✅ Binder가 제공하는 연결체크/방어 로직을 그대로 타게 함
-        self._binder.enqueue_write(str(coil_name), bool(on), momentary=bool(momentary))
-
-    # alias(엔진 구현 차이 방어)
-    def write_coil(self, coil_name: str, on: bool) -> None:
-        self.enqueue_write(coil_name, on, momentary=False)
-
-    def set_coil(self, coil_name: str, on: bool) -> None:
-        self.enqueue_write(coil_name, on, momentary=False)
-
-    def pulse_coil(self, coil_name: str) -> None:
-        self.enqueue_write(coil_name, True, momentary=True)
-
-    # --- DAC write ---
-    def enqueue_write_reg(self, reg_name: str, value: int) -> None:
-        # ✅ binder에 구현된 reg write를 그대로 사용
-        self._binder.enqueue_write_reg(str(reg_name), int(value))
-
-    # alias(엔진 구현 차이 방어)
-    def write_reg(self, reg_name: str, value: int) -> None:
-        self.enqueue_write_reg(reg_name, value)
 
 
 # ============================================================
@@ -226,7 +154,7 @@ class HmiWindow(QWidget):
     def _apply_config_and_reconnect(self) -> None:
         errors: list[str] = []
 
-        # ✅ 1) PLC만 즉시 재연결
+        # ✅ 1) PLC 즉시 재연결
         try:
             if self._plc_binder:
                 new_plc_settings = load_plc_settings(self._ini_path)
@@ -234,16 +162,26 @@ class HmiWindow(QWidget):
         except Exception as e:
             errors.append(f"PLC reconnect failed: {e}")
 
-        # ✅ 2) STM/ACS는 여기서 절대 재연결/재생성하지 않음
-        #     (Stop→메모리해제, Start→재생성 규칙 유지)
+        # ✅ 2) ACS는 "항상 켜져있는 장비"이므로 config 저장 시 즉시 reload 적용
+        try:
+            if self._acs_service is not None:
+                # devices.ini 반영
+                if hasattr(self._acs_service, "reload_from_ini"):
+                    self._acs_service.reload_from_ini(self._ini_path)
+                # CON 모드 유지(1초)
+                if hasattr(self._acs_service, "set_stream_mode"):
+                    self._acs_service.set_stream_mode(stream=True, stream_interval_a=1)
+        except Exception as e:
+            errors.append(f"ACS reconnect failed: {e}")
 
+        # ✅ 3) STM은 Start에서만(F.T.M ON 후) 연결 (기존 규칙 유지)
         if errors:
             QMessageBox.warning(self, "Reconnect", "일부 장비 재연결 실패:\n" + "\n".join(errors))
         else:
             QMessageBox.information(
                 self,
                 "Reconnect",
-                "저장 완료. (PLC만 즉시 적용)\nSTM/ACS는 다음 Start에서 새로 생성/연결됩니다.",
+                "저장 완료. (PLC/ACS 즉시 적용)\nSTM은 다음 Start에서 FTM ON 후 새로 연결됩니다.",
             )
 
     def _confirm_exit(self) -> bool:
@@ -402,36 +340,48 @@ class ProcessWindow(QWidget):
     def _ensure_sensors_connected_fresh(self) -> bool:
         ini_path = self.hmi_window._ini_path
 
-        # 이전 인스턴스 정리
+        # ✅ 이전 STM만 정리 (ACS는 유지)
         self._shutdown_sensors_and_release_memory()
 
         try:
-            stm = STMService(ini_path=ini_path)
-            acs = ACSService(ini_path=ini_path)
+            # ✅ 1) FTM 먼저 ON (STM 연결 선행 조건)
+            binder = getattr(self.hmi_window, "_plc_binder", None)
+            if binder is not None:
+                binder.enqueue_write("FTM_SW", True)
+                _append_text(self.ui.logWindow, "[DEV] FTM_SW -> ON (before STM connect)")
+            else:
+                _append_text(self.ui.logWindow, "[DEV][WARN] plc_binder is None (cannot turn on FTM_SW)")
 
+            # ✅ 2) 잠깐 대기(장비 전원/통신 준비)
+            time.sleep(1.5)
+
+            # ✅ 3) STM 연결(폴링 시작)
+            stm = STMService(ini_path=ini_path)
             stm.start()
-            acs.start()
 
             self._stm_service = stm
-            self._acs_service = acs
-
             self.hmi_window._stm_service = stm
-            self.hmi_window._acs_service = acs
-            self.hmi_window._set_process_controller_devices(stm, acs)
 
-            _append_text(self.ui.logWindow, "[DEV] STM/ACS connected (fresh instance).")
+            # ✅ 4) ACS는 main()에서 이미 실행 중인 인스턴스를 그대로 사용
+            self._acs_service = getattr(self.hmi_window, "_acs_service", None)
+
+            # ✅ 5) ProcessController 장치 참조 갱신
+            self.hmi_window._set_process_controller_devices(stm, self._acs_service)
+
+            _append_text(self.ui.logWindow, "[DEV] STM connected (ACS kept alive).")
             return True
 
         except Exception as e:
-            _append_text(self.ui.logWindow, f"[DEV][ERR] STM/ACS start failed: {e!r}")
+            _append_text(self.ui.logWindow, f"[DEV][ERR] STM start failed: {e!r}")
             self._stm_service = None
-            self._acs_service = None
             self.hmi_window._stm_service = None
-            self.hmi_window._acs_service = None
+            # ✅ ACS는 유지 (절대 None으로 덮지 않음)
             return False
 
     def _shutdown_sensors_and_release_memory(self) -> None:
-        """Stop에서 호출: STM/ACS 연결 해제 + 객체 해제 + gc.collect()"""
+        """Stop에서 호출: STM 연결 해제 + 객체 해제 + gc.collect()
+        ✅ ACS는 항상 켜져있는 장비이므로 여기서 stop하지 않는다.
+        """
 
         # ✅ 먼저 UI 시그널 해제
         try:
@@ -439,7 +389,7 @@ class ProcessWindow(QWidget):
         except Exception:
             pass
 
-        # 1) 서비스 기반이면 stop()만 호출
+        # ✅ 1) STM만 stop()
         if self._stm_service is not None:
             try:
                 self._stm_service.stop()
@@ -447,38 +397,27 @@ class ProcessWindow(QWidget):
             except Exception as e:
                 _append_text(self.ui.logWindow, f"[DEV][WARN] STM stop failed: {e!r}")
 
-        if self._acs_service is not None:
-            try:
-                self._acs_service.stop()
-                _append_text(self.ui.logWindow, "[DEV] ACS stop() called")
-            except Exception as e:
-                _append_text(self.ui.logWindow, f"[DEV][WARN] ACS stop failed: {e!r}")
-
-        # ✅ ProcessController가 stm/acs 참조를 잡고 있으면 같이 끊어줘야 메모리 정리가 확실함
+        # ✅ 2) ProcessController에서 STM 참조만 끊는다(ACS는 유지)
         try:
             pc = self._process_controller
             if pc is not None:
                 if hasattr(pc, "stm"): setattr(pc, "stm", None)
-                if hasattr(pc, "acs"): setattr(pc, "acs", None)
                 if hasattr(pc, "_stm"): setattr(pc, "_stm", None)
-                if hasattr(pc, "_acs"): setattr(pc, "_acs", None)
         except Exception:
             pass
 
-        # 2) 참조 제거 → 메모리 회수
+        # ✅ 3) 참조 제거(ACS는 건드리지 않음)
         self._stm_service = None
-        self._acs_service = None
         if self.hmi_window is not None:
             self.hmi_window._stm_service = None
-            self.hmi_window._acs_service = None
 
-        # 3) GC
+        # 4) GC
         gc.collect()
-        _append_text(self.ui.logWindow, "[DEV] sensors released + gc.collect()")
+        _append_text(self.ui.logWindow, "[DEV] STM released + gc.collect() (ACS kept alive)")
 
     def _on_start_clicked(self) -> None:
         if not self._ensure_sensors_connected_fresh():
-            QMessageBox.warning(self, "Device", "STM/ACS 연결 실패")
+            QMessageBox.warning(self, "Device", "STM 연결 실패")
             return
 
         # ✅ (추가) STM UI 바인딩 + RT 시작
@@ -757,17 +696,20 @@ class ProcessWindow(QWidget):
             return None
 
     def _collect_ui_run_cfg(self) -> Optional[dict[str, Any]]:
-        # Power 선택(동시 가능)
+        # ✅ Power 선택(현재 단계: 1개만 허용)
         p1 = bool(getattr(getattr(self.ui, "sourcePower1", None), "isChecked", lambda: False)())
         p2 = bool(getattr(getattr(self.ui, "sourcePower2", None), "isChecked", lambda: False)())
         if not (p1 or p2):
             QMessageBox.warning(self, "Input", "Power1/Power2 중 최소 1개는 선택해야 합니다.")
             return None
+        if p1 and p2:
+            QMessageBox.warning(self, "Input", "현재 단계에서는 Power는 1개만 선택해야 합니다.")
+            return None
 
         # 입력값
-        target_rate = self._read_float("depositionRateEdit")  # UI objectName이 다르면 여기만 맞춰주면 됨
-        target_thk  = self._read_float("thicknessEdit")       # "
-        delay_min   = self._read_float("delayEdit")           # 분, 소수 허용
+        target_rate = self._read_float("depositionRateEdit")
+        target_thk  = self._read_float("thicknessEdit")
+        delay_min   = self._read_float("delayEdit")
 
         if target_rate is None:
             QMessageBox.warning(self, "Input", "Target Dep.rate를 입력하세요.")
@@ -778,6 +720,8 @@ class ProcessWindow(QWidget):
         if delay_min is None:
             delay_min = 0.0
 
+        # ✅ 선택된 Power에 대응하는 Material만 사용
+        active_mat = self._material_1 if p1 else self._material_2
         if p1 and not self._material_1:
             QMessageBox.warning(self, "Input", "Power1 사용 시 Material1 선택이 필요합니다.")
             return None
@@ -785,14 +729,31 @@ class ProcessWindow(QWidget):
             QMessageBox.warning(self, "Input", "Power2 사용 시 Material2 선택이 필요합니다.")
             return None
 
+        mat_name = str((active_mat or {}).get("material", "")).strip()
+        den = float((active_mat or {}).get("density_g_cm3", 0.0) or 0.0)
+        zf  = float((active_mat or {}).get("z_factor", 0.0) or 0.0)
+
+        if not mat_name:
+            QMessageBox.warning(self, "Input", "Material 이름이 비어있습니다. Material을 다시 선택하세요.")
+            return None
+        if den <= 0 or zf <= 0:
+            QMessageBox.warning(self, "Input", "Material density/z-factor 값이 올바르지 않습니다.")
+            return None
+
+        # ✅ ProcessController.build_recipe_from_ui()가 기대하는 키로 정합
         cfg: dict[str, Any] = {
             "use_power1": p1,
             "use_power2": p2,
-            "material_1": self._material_1,
-            "material_2": self._material_2,
-            "target_dep_rate": float(target_rate),
+            "material_name": mat_name,
+            "density": den,
+            "z_factor": zf,
+            "target_rate": float(target_rate),
             "target_thickness": float(target_thk),
             "delay_min": float(delay_min),
+
+            # (참고용으로 남겨도 무방)
+            "material_1": self._material_1,
+            "material_2": self._material_2,
         }
         return cfg
     # ================== UI 값 파싱 ==================
@@ -858,9 +819,45 @@ def main():
     plc_binder.start()
     app.aboutToQuit.connect(plc_binder.stop)
 
-    # ✅ STM/ACS는 Start에서만 생성/연결한다.
+    # ✅ STM은 Start에서(FTM ON 후) 연결한다.
     stm_service: Any = None
+
+    # ✅ ACS는 프로그램 부팅 즉시 연결 + CON(1초) 스트리밍
     acs_service: Any = None
+    try:
+        acs_service = ACSService(
+            ini_path=ini_path,
+            poll_s=0.25,                # 워커 루프(읽기 템포). 스트림은 장비가 1초마다 보냄
+            reconnect_interval_s=1.0,   # 실패 시 재시도 템포
+            use_stream=True,            # ✅ CON 모드
+            stream_interval_a=1,        # ✅ 1초
+        )
+
+        # UI 표시: HMI 페이지 pressureValue 업데이트(없으면 무시)
+        def _update_pressure(v: object) -> None:
+            try:
+                if v is None:
+                    txt = "---"
+                else:
+                    txt = f"{float(v):.3e}"
+                w = getattr(hmi.ui, "pressureValue", None)
+                if w is not None and hasattr(w, "setText"):
+                    w.setText(txt)
+            except Exception:
+                pass
+
+        def _acs_connected(ok: bool) -> None:
+            if not ok:
+                _update_pressure(None)
+
+        acs_service.sig_pressure.connect(_update_pressure)
+        acs_service.sig_connected.connect(_acs_connected)
+        acs_service.sig_error.connect(lambda s: _append_text(getattr(hmi.ui, "logWindow", None), s))
+
+        acs_service.start()
+    except Exception as e:
+        acs_service = None
+        _append_text(getattr(hmi.ui, "logWindow", None), f"[BOOT][WARN] ACSService init failed: {e!r}")
 
     # ------------------------------
     # LogService (신규)
@@ -878,16 +875,14 @@ def main():
 
     # ------------------------------
     # ProcessController (신규)
-    # - PLC는 포트 중복 방지를 위해 binder 공유 어댑터로 주입
     # ------------------------------
     process_controller: Any = None
     try:
-        plc_for_process = PlcAdapterFromBinder(plc_binder)
         process_controller = ProcessController(
-            plc=plc_for_process,
+            plc=getattr(plc_binder, "_plc"),
             log=log_service,
-            stm=stm_service,
-            acs=acs_service,
+            stm=None,          # STM은 Start에서 붙임
+            acs=acs_service,   # ✅ ACS는 부팅부터 유지
         )
     except Exception as e:
         process_controller = None
@@ -922,7 +917,7 @@ def main():
         process_controller=process_controller,
         log_service=log_service,
         stm_service=stm_service,
-        acs_service=acs_service,
+        acs_service=acs_service,   # ✅ 부팅에서 만든 ACSService 주입
     )
 
     # ✅ HMI 표시 (기존 유지)

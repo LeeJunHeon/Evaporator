@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import time
-from typing import Optional, Tuple
+from typing import Optional
 
 from utils.base_serial import BaseSerialDevice, SerialDeviceError
 
@@ -13,7 +13,13 @@ class ACS2000ProtocolError(SerialDeviceError):
 
 def _eom_bytes(eom: Optional[str]) -> bytes:
     """
-    config: "CR" or "CRLF" (권장: CR)
+    TX(PC→ACS2000) 종단문자.
+
+    ✅ 권장:
+      - PC가 장비로 명령 보낼 때는 CR(0x0D) 고정이 가장 안정적인 경우가 많습니다.
+      - 장비 패널의 'CR / CRLF' 설정은 보통 "장비가 보내는 응답" 끝에 LF를 붙일지 여부로 동작합니다.
+        (즉, 장비를 CRLF로 바꿔도 PC 송신은 CR로 두고, 수신에서 LF만 제거하면 됨)
+      - PC가 CRLF로 송신하면 ERR_01000(Transmission error)처럼 "전송 프레임 오류"가 뜰 수 있습니다.
     """
     if not eom:
         return b"\r"
@@ -39,41 +45,81 @@ class ACS2000(BaseSerialDevice):
 
     - STX: '$'
     - Command: <STX><COMMAND>[,PARAM1]...[EOM]
-    - Reply  : <STX><DATA><EOM>[LF]
-    - EOM: 기본 CR
+    - Reply  : <STX><DATA><EOM>[LF]   ← 장비 설정에 따라 LF가 "추가"될 수 있음
+    - EOM: CR(0x0D)
     """
 
     def __init__(self, *, eom: str = "CR", **kwargs):
         super().__init__(**kwargs)
         self._eom = _eom_bytes(eom)
 
-    def _read_until_cr(self, timeout_s: float) -> bytes:
+        # CR 뒤에 따라붙은 LF(또는 CR-only 응답에서 다음 프레임 첫 바이트)를 안전하게 처리하기 위한 프리패치
+        self._rx_prefetch = bytearray()
+
+    # -------------------------
+    # Low-level RX helpers
+    # -------------------------
+    def _read1_unlocked(self) -> bytes:
+        """caller가 lock을 잡고 있어야 함."""
+        if self._rx_prefetch:
+            b = bytes(self._rx_prefetch[:1])
+            del self._rx_prefetch[:1]
+            return b
+        ser = self._require()
+        return ser.read(1)
+
+    def _consume_optional_lf_unlocked(self) -> None:
         """
-        CR까지 읽는다. (CR 뒤에 LF가 올 수 있음)
+        CR 다음에 LF가 있으면 소비(버림).
+        LF가 아니면(또는 timeout으로 빈 바이트면) 그대로 유지(프리패치로 되돌림).
         """
-        with self._lock:
-            ser = self._require()
+        ser = self._require()
+        old_to = ser.timeout
+        try:
+            ser.timeout = 0.02  # 아주 짧게만 확인
+            b = ser.read(1)
+        finally:
+            ser.timeout = old_to
+
+        if not b:
+            return
+        if b == b"\n":
+            return
+        # LF가 아니면 다음 프레임의 첫 바이트일 가능성이 있으므로 프리패치로 되돌림
+        self._rx_prefetch += b
+
+    def _read_until_cr_unlocked(self, timeout_s: float) -> bytes:
+        """
+        CR(0x0D)까지 읽는다. (CR 뒤에 LF가 올 수 있음 → 있으면 제거)
+        caller가 lock을 잡고 있어야 함.
+        """
+        ser = self._require()
+        old_to = ser.timeout
+        try:
+            # 1바이트 read가 너무 오래 막히지 않도록 짧게 폴링
+            ser.timeout = 0.05
             t0 = time.time()
             buf = bytearray()
 
             while time.time() - t0 < timeout_s:
-                b = ser.read(1)
+                b = self._read1_unlocked()
                 if not b:
                     continue
                 buf += b
                 if b == b"\r":
-                    # optional LF discard
-                    old_to = ser.timeout
-                    ser.timeout = 0.05
-                    _ = ser.read(1)
-                    ser.timeout = old_to
+                    self._consume_optional_lf_unlocked()
                     break
 
             return bytes(buf)
+        finally:
+            ser.timeout = old_to
 
+    # -------------------------
+    # TX/RX
+    # -------------------------
     def _txrx(self, payload_no_eom: str, rx_timeout_s: float = 0.8) -> str:
         """
-        payload_no_eom 예: "$VER", "$PRD,1"
+        payload_no_eom 예: "$VER", "$PRD", "$CON,1"
         """
         if not payload_no_eom.startswith("$"):
             raise ValueError("ACS2000 payload must start with '$'")
@@ -82,11 +128,16 @@ class ACS2000(BaseSerialDevice):
 
         with self._lock:
             ser = self._require()
+
+            # 이전에 남아있던 LF/잔여 바이트 제거
+            self._rx_prefetch.clear()
+
             ser.reset_input_buffer()
             ser.reset_output_buffer()
             ser.write(tx)
             ser.flush()
-            rx = self._read_until_cr(timeout_s=rx_timeout_s)
+
+            rx = self._read_until_cr_unlocked(timeout_s=rx_timeout_s)
 
         if not rx:
             raise ACS2000ProtocolError(f"no response for '{payload_no_eom}'")
@@ -95,15 +146,22 @@ class ACS2000(BaseSerialDevice):
 
     # ✅ 매뉴얼의 "모든 명령"을 커버하는 범용 RAW
     def raw(self, command: str, *params: str, rx_timeout_s: float = 0.8) -> str:
-        cmd = command.strip().upper()
+        cmd = command.strip()
         if not cmd:
             raise ValueError("command empty")
 
-        parts = ["$" + cmd]
-        if params:
-            parts.extend(str(p) for p in params)
+        # "$VER" 같이 이미 $가 들어오면 그대로 사용
+        if cmd.startswith("$"):
+            payload = cmd
+            if params:
+                payload = ",".join([payload] + [str(p) for p in params])
+        else:
+            cmd_u = cmd.upper()
+            parts = ["$" + cmd_u]
+            if params:
+                parts.extend(str(p) for p in params)
+            payload = ",".join(parts)
 
-        payload = ",".join(parts)
         reply = self._txrx(payload, rx_timeout_s=rx_timeout_s)
 
         # reply도 '$'로 시작하므로 data만 반환
@@ -111,15 +169,23 @@ class ACS2000(BaseSerialDevice):
             reply = reply[1:]
         return reply.strip()
 
-    # 기존 스타일 유지(통합 프로그램에서 자주 쓰는 최소 셋)
+    # -------------------------
+    # Convenience wrappers
+    # -------------------------
     def query_version(self) -> str:
         return self.raw("VER")
 
     def query_pressure(self, channel: int = 1) -> float:
-        if channel not in (1, 2):
-            raise ValueError("ACS2000 channel must be 1 or 2")
+        """
+        PRD: 단일 채널 장비는 channel=1이 사실상 기본.
+        - channel=1이면 "$PRD"로 보내고
+        - channel!=1이면 "$PRD,<channel>"로 보냄
+        """
+        if channel < 1:
+            raise ValueError("ACS2000 channel must be >= 1")
 
-        raw = self._txrx(f"$PRD,{channel}", rx_timeout_s=0.8)
+        payload = "$PRD" if channel == 1 else f"$PRD,{channel}"
+        raw = self._txrx(payload, rx_timeout_s=0.8)
         s = raw.replace("$", "").strip()
 
         tokens = [t.strip() for t in s.split(",") if t.strip()]
@@ -128,7 +194,7 @@ class ACS2000(BaseSerialDevice):
         try:
             return float(cand)
         except ValueError:
-            for t in reversed(s.split()):
+            for t in reversed(s.replace(",", " ").split()):
                 try:
                     return float(t)
                 except ValueError:
@@ -139,24 +205,19 @@ class ACS2000(BaseSerialDevice):
         return self._txrx(f"$CON,{interval_a}", rx_timeout_s=0.8)
 
     def read_stream_line(self, timeout_s: float = 2.0) -> str:
-        rx = self._read_until_cr(timeout_s=timeout_s)
+        with self._lock:
+            rx = self._read_until_cr_unlocked(timeout_s=timeout_s)
         if not rx:
             raise ACS2000ProtocolError("stream timeout/no data")
         return rx.decode("ascii", errors="replace").strip()
 
     def stop_stream_safe(self) -> None:
+        # ⚠ CON 스트리밍 자체를 장비에서 멈추는 명령은 보통 없고(전면 패널 버튼으로 종료),
+        # 여기서는 통신 포트를 닫는 "안전 종료"만 제공
         self.close()
 
-    # 자주 쓰는 추가 명령(필요할 때만 래핑)
     def query_errors(self) -> str:
         return self.raw("ERR")
-
-    def set_continuous(self, interval_a: int = 1) -> str:
-        return self.raw("CON", str(interval_a))
-
-    def set_baudrate(self, baud: int) -> str:
-        # 주의: 적용 즉시 통신 끊길 수 있음
-        return self.raw("BAU", str(baud))
 
     # alias
     def get_version(self) -> str:

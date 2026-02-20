@@ -836,13 +836,34 @@ def main():
         # UI 표시: HMI 페이지 pressureValue 업데이트(없으면 무시)
         def _update_pressure(v: object) -> None:
             try:
-                if v is None:
-                    txt = "---"
-                else:
-                    txt = f"{float(v):.3e}"
                 w = getattr(hmi.ui, "pressureValue", None)
-                if w is not None and hasattr(w, "setText"):
-                    w.setText(txt)
+                if w is None or not hasattr(w, "setText"):
+                    return
+
+                # 연결 끊김/값 없음
+                if v is None:
+                    w.setText("--- Torr")
+                    return
+
+                # 숫자 타입이면 그대로 포맷
+                if isinstance(v, (int, float)):
+                    w.setText(f"{float(v):.3e} Torr")
+                    return
+
+                # 문자열/기타 타입이면 숫자 파싱 시도
+                s = str(v).strip()
+                if not s:
+                    w.setText("--- Torr")
+                    return
+
+                # "1.2e-6", "1.2e-6 Torr" 같은 케이스 처리
+                token = s.split()[0]
+                try:
+                    w.setText(f"{float(token):.3e} Torr")
+                except Exception:
+                    # "OR", "OVR", "ERR..." 같은 비정상/상태 문자열은 그대로 표시
+                    w.setText(s)
+
             except Exception:
                 pass
 

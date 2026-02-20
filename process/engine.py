@@ -378,7 +378,7 @@ class ProcessEngine:
     def _stm_wait_connected(self, recipe: ProcessRecipe, step: ProcessStep, *, timeout_s: float = 5.0) -> None:
         """STMService가 connected=True가 될 때까지 대기."""
         if self.stm is None:
-            raise EngineFailed(where=step.name, message="STM 서비스가 주입되지 않았습니다(stm=None).")
+            raise EngineFailed(step.name, "STM 서비스가 주입되지 않았습니다(stm=None).")
 
         t0 = time.time()
         while (time.time() - t0) < float(timeout_s):
@@ -390,7 +390,7 @@ class ProcessEngine:
                 return
             time.sleep(0.1)
 
-        raise EngineFailed(where=step.name, message=f"STM 연결 대기 timeout: {timeout_s:.1f}s")
+        raise EngineFailed(step.name, f"STM 연결 대기 timeout: {timeout_s:.1f}s")
 
 
     def _stm_apply_material_params(
@@ -403,11 +403,6 @@ class ProcessEngine:
     ) -> None:
         """STM-100에 density/z-factor 적용 (필요 시)."""
         if self.stm is None:
-            return
-
-        # STMService에 submit_apply_material_params()를 추가한 버전을 기준으로 동작
-        if not hasattr(self.stm, "submit_apply_material_params"):
-            self._log_warn("STMService에 submit_apply_material_params()가 없어 film params 적용을 스킵합니다.", tag="ENGINE")
             return
 
         self._stm_wait_connected(recipe, step, timeout_s=5.0)
@@ -424,10 +419,6 @@ class ProcessEngine:
     def _stm_zero_thickness(self, recipe: ProcessRecipe, step: ProcessStep) -> None:
         """STM-100 thickness zero (C)."""
         if self.stm is None:
-            return
-
-        if not hasattr(self.stm, "submit_zero_thickness"):
-            self._log_warn("STMService에 submit_zero_thickness()가 없어 thickness zero를 스킵합니다.", tag="ENGINE")
             return
 
         self._stm_wait_connected(recipe, step, timeout_s=5.0)
@@ -462,19 +453,21 @@ class ProcessEngine:
 
         use_p1 = bool(meta.get("use_power1", False))
         use_p2 = bool(meta.get("use_power2", False))
-        if not (use_p1 or use_p2):
-            raise EngineFailed(where=step.name, message="EVAP: use_power1/use_power2 둘 중 하나는 True여야 합니다.")
+
+        # ✅ power는 1개만
+        if (use_p1 and use_p2) or (not use_p1 and not use_p2):
+            raise EngineFailed(step.name, "EVAP: use_power1/use_power2는 정확히 하나만 True여야 합니다.")
 
         target_rate = float(meta.get("target_rate", 0.0) or 0.0)        # Å/s
         target_th = float(meta.get("target_thickness", 0.0) or 0.0)     # Å
         delay_min = float(meta.get("delay_min", 0.0) or 0.0)            # min
 
         if target_rate <= 0:
-            raise EngineFailed(where=step.name, message="EVAP: target_rate must be > 0")
+            raise EngineFailed(step.name, "EVAP: target_rate must be > 0")
         if target_th <= 0:
-            raise EngineFailed(where=step.name, message="EVAP: target_thickness must be > 0")
+            raise EngineFailed(step.name, "EVAP: target_thickness must be > 0")
         if delay_min < 0:
-            raise EngineFailed(where=step.name, message="EVAP: delay_min must be >= 0")
+            raise EngineFailed(step.name, "EVAP: delay_min must be >= 0")
 
         # --- 공정 파라미터(기본값은 요구사항 기준) ---
         pre_rate = float(meta.get("pre_rate", 0.4) or 0.4)                  # Å/s
@@ -539,7 +532,7 @@ class ProcessEngine:
                     return float(rt)
 
                 if (time.time() - t0) >= sensor_none_abort_s:
-                    raise EngineFailed(where=step.name, message=f"EVAP: rate 센서 None 지속 {sensor_none_abort_s}s")
+                    raise EngineFailed(step.name, f"EVAP: rate 센서 None 지속 {sensor_none_abort_s}s")
 
                 time.sleep(0.1)
 
@@ -554,7 +547,7 @@ class ProcessEngine:
                     return float(th)
 
                 if (time.time() - t0) >= sensor_none_abort_s:
-                    raise EngineFailed(where=step.name, message=f"EVAP: thickness 센서 None 지속 {sensor_none_abort_s}s")
+                    raise EngineFailed(step.name, f"EVAP: thickness 센서 None 지속 {sensor_none_abort_s}s")
 
                 time.sleep(0.1)
 
@@ -575,10 +568,10 @@ class ProcessEngine:
                 break
 
             if (time.time() - t_ramp0) > ramp_timeout_s:
-                raise EngineFailed(where=step.name, message=f"EVAP: pre_rate ramp timeout {ramp_timeout_s}s (rt={rt:.3f})")
+                raise EngineFailed(step.name, f"EVAP: pre_rate ramp timeout {ramp_timeout_s}s (rt={rt:.3f})")
 
             if dac >= dac_max:
-                raise EngineFailed(where=step.name, message=f"EVAP: DAC_MAX({dac_max}) 도달했지만 pre_rate 미도달 (rt={rt:.3f})")
+                raise EngineFailed(step.name, f"EVAP: DAC_MAX({dac_max}) 도달했지만 pre_rate 미도달 (rt={rt:.3f})")
 
             dac = min(dac_max, dac + ramp_step_dac)
             apply_dac()
@@ -595,8 +588,8 @@ class ProcessEngine:
                 # pre_rate 근처 유지(미세 조정)
                 new_dac = self._evap_adjust_dac(
                     dac=dac,
-                    rt=rt,
-                    target=pre_rate,
+                    rate=rt,
+                    target_rate=pre_rate,
                     tol_ratio=pre_tol_ratio,
                     step_up=max(1, fine_step_dac // 2),
                     step_dn=max(1, fine_step_dac // 2),
@@ -619,10 +612,10 @@ class ProcessEngine:
                 break
 
             if (time.time() - t_ramp1) > ramp_timeout_s:
-                raise EngineFailed(where=step.name, message=f"EVAP: target_rate ramp timeout {ramp_timeout_s}s (rt={rt:.3f})")
+                raise EngineFailed(step.name, f"EVAP: target_rate ramp timeout {ramp_timeout_s}s (rt={rt:.3f})")
 
             if dac >= dac_max:
-                raise EngineFailed(where=step.name, message=f"EVAP: DAC_MAX({dac_max}) 도달했지만 target_rate 미도달 (rt={rt:.3f})")
+                raise EngineFailed(step.name, f"EVAP: DAC_MAX({dac_max}) 도달했지만 target_rate 미도달 (rt={rt:.3f})")
 
             dac = min(dac_max, dac + ramp_step_dac)
             apply_dac()
@@ -639,12 +632,12 @@ class ProcessEngine:
                 break
 
             if (time.time() - t_tune0) > tune_timeout_s:
-                raise EngineFailed(where=step.name, message=f"EVAP: target_rate fine tune timeout {tune_timeout_s}s (rt={rt:.3f})")
+                raise EngineFailed(step.name, f"EVAP: target_rate fine tune timeout {tune_timeout_s}s (rt={rt:.3f})")
 
             new_dac = self._evap_adjust_dac(
                 dac=dac,
-                rt=rt,
-                target=target_rate,
+                rate=rt,
+                target_rate=target_rate,  # ✅ 목표 dep.rate로 맞춤
                 tol_ratio=rate_tol_ratio,
                 step_up=fine_step_dac,
                 step_dn=fine_step_dac,
@@ -665,12 +658,12 @@ class ProcessEngine:
 
                 # rate 급감 감지(소스 부족 등) - 셔터 열기 전에도 감지
                 if rt < target_rate * rate_drop_ratio:
-                    raise EngineFailed(where=step.name, message=f"EVAP: dep.rate 급감(셔터 전) rt={rt:.3f} < {target_rate*rate_drop_ratio:.3f}")
+                    raise EngineFailed(step.name, f"EVAP: dep.rate 급감(셔터 전) rt={rt:.3f} < {target_rate*rate_drop_ratio:.3f}")
 
                 new_dac = self._evap_adjust_dac(
                     dac=dac,
-                    rt=rt,
-                    target=target_rate,
+                    rate=rt,
+                    target_rate=target_rate,  # ✅ 여기
                     tol_ratio=rate_tol_ratio,
                     step_up=fine_step_dac,
                     step_dn=fine_step_dac,
@@ -682,13 +675,16 @@ class ProcessEngine:
 
                 _sleep_with_checks(0.5)
 
-        # 8) delay 종료 → STM zero + MAIN_SHUTTER open
+        # 8) delay 종료 → STM zero
         self._emit_status(message="EVAP: STM zero + MAIN_SHUTTER open")
         self._stm_zero_thickness(recipe, step)
-        self._plc_write_coil("MAIN_SHUTTER_SW", True, tag="EVAP_MAIN_SHUTTER_OPEN")
-
+        
         # zero 직후 thickness baseline 확보(소프트웨어 기준)
         th0 = read_th_or_abort()
+
+        #  MAIN_SHUTTER open
+        self._plc_write_coil("MAIN_SHUTTER_SW", True, tag="EVAP_MAIN_SHUTTER_OPEN")
+
         self._emit_status(message=f"EVAP: thickness baseline th0={th0:.1f} Å")
 
         # 9) 증착 루프
@@ -714,15 +710,15 @@ class ProcessEngine:
             if baseline_rate > 0 and rt < baseline_rate * rate_drop_ratio:
                 drop_hits += 1
                 if drop_hits >= rate_drop_count:
-                    raise EngineFailed(where=step.name, message=f"EVAP: dep.rate 급감 감지 → 중단 (rt={rt:.3f}, base={baseline_rate:.3f})")
+                    raise EngineFailed(step.name, f"EVAP: dep.rate 급감 감지 → 중단 (rt={rt:.3f}, base={baseline_rate:.3f})")
             else:
                 drop_hits = 0
 
             # rate 유지
             new_dac = self._evap_adjust_dac(
                 dac=dac,
-                rt=rt,
-                target=target_rate,
+                rate=rt,
+                target_rate=target_rate,  # ✅ 여기
                 tol_ratio=rate_tol_ratio,
                 step_up=fine_step_dac,
                 step_dn=fine_step_dac,
@@ -875,14 +871,11 @@ class ProcessEngine:
         _ = self._wait_future(fut, timeout_s=self._plc_cmd_timeout_s, where=f"PLC_SET_DAC_MA ch={ch} ma={ma}")
 
     @staticmethod
-    def _wait_future(fut: Any, *, timeout_s: float, where: str) -> Any:
-        """
-        PLCService.submit_*()가 반환하는 Future를 기다림.
-        """
+    def _wait_future(fut: Any, *, timeout_s: float, where: str, msg: str = "") -> Any:
         try:
             return fut.result(timeout=float(timeout_s))
         except Exception as e:
-            raise EngineFailed(where, f"future failed/timeout: {e!r}")
+            raise EngineFailed(where, f"{msg + ': ' if msg else ''}future failed/timeout: {e!r}")
 
     # --------------------------------------------------------
     # WAIT helpers

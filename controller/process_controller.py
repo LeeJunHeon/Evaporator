@@ -144,116 +144,134 @@ class ProcessController(QObject):
         return self._recipe
     
     def build_recipe_from_ui(self, run_cfg: dict[str, Any]) -> ProcessRecipe:
-        """
-        UI 입력(run_cfg)을 ProcessRecipe로 변환.
-        - 실제 '동적 DAC/dep.rate 제어'는 다음 단계에서 engine.py가 수행
-        - 여기서는 엔진이 실행 가능한 형태로 '스켈레톤 레시피'를 만든다.
-        """
-        use_p1 = bool(run_cfg.get("use_power1", False))
-        use_p2 = bool(run_cfg.get("use_power2", False))
-        if not (use_p1 or use_p2):
-            raise ValueError("Power1/Power2 중 최소 1개는 선택되어야 합니다.")
+            """
+            UI 입력(run_cfg)을 ProcessRecipe로 변환.
 
-        material = str(run_cfg.get("material_name", "")).strip() or "UNKNOWN"
-        density = float(run_cfg.get("density", 0.0) or 0.0)
-        z_factor = float(run_cfg.get("z_factor", 0.0) or 0.0)
+            ✅ 요구사항 반영
+            - Power는 1개만 선택(POWER_1 또는 POWER_2)
+            - Source Shutter(선택 채널) open + FTM ON 이후 1.5초 대기
+            - 실제 램프/dep.rate 제어는 engine.py의 _evap_deposition_control()이 수행
+            """
+            use_p1 = bool(run_cfg.get("use_power1", False))
+            use_p2 = bool(run_cfg.get("use_power2", False))
 
-        target_rate = float(run_cfg.get("target_rate", 0.0) or 0.0)
-        target_th = float(run_cfg.get("target_thickness", 0.0) or 0.0)
-        delay_min = float(run_cfg.get("delay_min", 0.0) or 0.0)
+            # ✅ Power는 하나만
+            if use_p1 == use_p2:
+                raise ValueError("Power1 또는 Power2 중 '하나만' 선택되어야 합니다. (현재: 둘 다 선택 또는 둘 다 해제)")
 
-        if target_rate <= 0:
-            raise ValueError("target_rate는 0보다 커야 합니다.")
-        if target_th <= 0:
-            raise ValueError("target_thickness는 0보다 커야 합니다.")
-        if delay_min < 0:
-            raise ValueError("delay_min은 0 이상이어야 합니다.")
+            material = str(run_cfg.get("material_name", "")).strip()
+            if not material:
+                raise ValueError("material_name은 필수입니다.")
 
-        # ✅ 엔진에서 사용할 파라미터는 meta로 넘겨둔다.
-        meta = {
-            "ui_run": True,
-            "material_name": material,
-            "density": density,
-            "z_factor": z_factor,
-            "use_power1": use_p1,
-            "use_power2": use_p2,
-            "target_rate": target_rate,
-            "target_thickness": target_th,
-            "delay_min": delay_min,
-        }
+            density = float(run_cfg.get("density", 0.0) or 0.0)
+            z_factor = float(run_cfg.get("z_factor", 0.0) or 0.0)
+            if density <= 0 or z_factor <= 0:
+                raise ValueError("density / z_factor 값이 올바르지 않습니다. (0보다 커야 함)")
 
-        steps: list[ProcessStep] = [
-            # -------------------------
-            # 안전 초기화(시작 시점)
-            # -------------------------
-            ProcessStep(
-                name="MAIN_SHUTTER_CLOSE",
-                type=StepType.PLC_WRITE_COIL,
-                coil="MAIN_SHUTTER_SW",
-                on=False,
-            ),
-            ProcessStep(
-                name="DAC1_0",
-                type=StepType.PLC_WRITE_REG,
-                reg="DAC_POWER_1",
-                value=0,
-            ),
-            ProcessStep(
-                name="DAC2_0",
-                type=StepType.PLC_WRITE_REG,
-                reg="DAC_POWER_2",
-                value=0,
-            ),
+            target_rate = float(run_cfg.get("target_rate", 0.0) or 0.0)
+            target_th = float(run_cfg.get("target_thickness", 0.0) or 0.0)
+            delay_min = float(run_cfg.get("delay_min", 0.0) or 0.0)
 
-            # -------------------------
-            # POWER 스위치 상태 명확히 세팅(선택 안 했으면 OFF)
-            # -------------------------
-            ProcessStep(
-                name="POWER1_SET",
-                type=StepType.PLC_WRITE_COIL,
-                coil="POWER_1_SW",
-                on=use_p1,
-            ),
-            ProcessStep(
-                name="POWER2_SET",
-                type=StepType.PLC_WRITE_COIL,
-                coil="POWER_2_SW",
-                on=use_p2,
-            ),
+            if target_rate <= 0:
+                raise ValueError("target_rate는 0보다 커야 합니다.")
+            if target_th <= 0:
+                raise ValueError("target_thickness는 0보다 커야 합니다.")
+            if delay_min < 0:
+                raise ValueError("delay_min은 0 이상이어야 합니다.")
 
-            # -------------------------
-            # STM 관련(다음 단계 구현 예정: 엔진/STMService에서 처리)
-            # -------------------------
-            ProcessStep(
-                name="STM_SET_FILM_PARAMS",
-                type=StepType.MARK,
-                meta={"density": density, "z_factor": z_factor, "material_name": material},
-            ),
-            ProcessStep(
-                name="STM_ZERO_THICKNESS",
-                type=StepType.MARK,
-                meta={},
-            ),
+            # ✅ 선택된 파워에 대응하는 source shutter
+            source_shutter_coil = "SHUTTER_1_SW" if use_p1 else "SHUTTER_2_SW"
 
-            # -------------------------
-            # EVAP 메인 루프(엔진에서 실행)
-            # -------------------------
-            ProcessStep(
-                name="EVAP_DEPOSITION_CONTROL",
-                type=StepType.MARK,
-                meta=meta,
-            ),
-        ]
+            meta = {
+                "ui_run": {
+                    "use_power1": use_p1,
+                    "use_power2": use_p2,
+                    "material_name": material,
+                    "density": density,
+                    "z_factor": z_factor,
+                    "target_rate": target_rate,
+                    "target_thickness": target_th,
+                    "delay_min": delay_min,
+                },
 
-        recipe = ProcessRecipe(
-            recipe_name=f"UI_{material}",
-            version=1,
-            meta=meta,
-            steps=steps,
-        )
-        recipe.validate(strict=True)
-        return recipe
+                # --- 공정 기본 ---
+                "use_power1": use_p1,
+                "use_power2": use_p2,
+                "material_name": material,
+                "density": density,
+                "z_factor": z_factor,
+                "target_rate": target_rate,
+                "target_thickness": target_th,
+                "delay_min": delay_min,
 
+                # --- 요구사항 기반 제어 파라미터 ---
+                # 1초에 DAC 100씩
+                "dac_fast_step": 100,
+                "dac_slow_step": 100,
+
+                # 목표 dep.rate ±5% 이내면 delay 시작
+                "rate_tol_ratio": 0.05,
+
+                # dep.rate 70% 이상 급감(= 현재가 기준의 30% 미만) 시 abort
+                "rate_drop_ratio": 0.30,
+                "rate_drop_count": 3,
+
+                # dep.rate 0.4 도달 후 2분 대기 → target_rate 램프
+                # (※ engine.py도 이 키를 읽도록 수정해야 실제로 동작)
+                "pre_rate": 0.4,
+                "pre_hold_s": 120.0,
+
+                # FTM ON 이후 STM 안정화 대기(요구사항 1.5초)
+                "wait_after_ftm_on_s": 1.5,
+
+                "source_shutter_coil": source_shutter_coil,
+            }
+
+            steps: list[ProcessStep] = [
+                # 0) 안전 초기화
+                ProcessStep(name="MAIN_SHUTTER_CLOSE", type=StepType.PLC_WRITE_COIL, coil="MAIN_SHUTTER_SW", on=False),
+                ProcessStep(name="SHUTTER_1_CLOSE_INIT", type=StepType.PLC_WRITE_COIL, coil="SHUTTER_1_SW", on=False),
+                ProcessStep(name="SHUTTER_2_CLOSE_INIT", type=StepType.PLC_WRITE_COIL, coil="SHUTTER_2_SW", on=False),
+                ProcessStep(name="FTM_OFF_INIT", type=StepType.PLC_WRITE_COIL, coil="FTM_SW", on=False),
+
+                # 1) DAC 0
+                ProcessStep(name="DAC1_ZERO", type=StepType.PLC_WRITE_REG, reg="DAC_POWER_1", value=0),
+                ProcessStep(name="DAC2_ZERO", type=StepType.PLC_WRITE_REG, reg="DAC_POWER_2", value=0),
+
+                # 2) 선택된 파워 ON
+                ProcessStep(name="POWER1_SET", type=StepType.PLC_WRITE_COIL, coil="POWER_1_SW", on=use_p1),
+                ProcessStep(name="POWER2_SET", type=StepType.PLC_WRITE_COIL, coil="POWER_2_SW", on=use_p2),
+
+                # 3) source shutter open + FTM ON
+                ProcessStep(name="SOURCE_SHUTTER_OPEN", type=StepType.PLC_WRITE_COIL, coil=source_shutter_coil, on=True),
+                ProcessStep(name="FTM_ON", type=StepType.PLC_WRITE_COIL, coil="FTM_SW", on=True),
+
+                # 4) 1.5초 대기
+                ProcessStep(name="WAIT_FTM_STM", type=StepType.WAIT_SECONDS, seconds=float(meta["wait_after_ftm_on_s"])),
+
+                # 5) deposition 제어(엔진 내부 루프)
+                ProcessStep(name="EVAP_DEPOSITION_CONTROL", type=StepType.MARK, meta=meta),
+
+                # 6) 후처리(best-effort): source shutter/FTM OFF
+                ProcessStep(name="SOURCE_SHUTTER_CLOSE", type=StepType.PLC_WRITE_COIL, coil=source_shutter_coil, on=False),
+                ProcessStep(name="FTM_OFF", type=StepType.PLC_WRITE_COIL, coil="FTM_SW", on=False),
+            ]
+
+            recipe = ProcessRecipe(
+                recipe_name=f"EVAP_{material}",
+                steps=steps,
+                telemetry_interval_s=1.0,  # ✅ 요구사항: 매초 기록
+                meta={
+                    "material_name": material,
+                    "target_rate": target_rate,
+                    "target_thickness": target_th,
+                    "delay_min": delay_min,
+                    "use_power1": use_p1,
+                    "use_power2": use_p2,
+                },
+            )
+            recipe.validate(strict=True)
+            return recipe
 
     def start_from_ui(self, run_cfg: dict[str, Any], *, run_id: Optional[str] = None) -> None:
         """
@@ -360,36 +378,50 @@ class ProcessController(QObject):
     # Internal helpers
     # --------------------------------------------------------
     def _issue_safe_stop_outputs(self, *, tag: str = "SAFE_STOP") -> None:
-        """
-        안전 출력:
-        1) MAIN_SHUTTER close
-        2) DAC 0
-        3) POWER off
-        - UI thread에서도 blocking 없이 enqueue로만 수행
-        """
-        # 서비스가 안 떠 있으면 올려둔다(큐가 살아 있어야 명령이 들어감)
-        try:
-            self._ensure_services_running()
-        except Exception:
-            pass
+            """
+            안전 출력(best-effort, enqueue만 사용):
+            1) MAIN_SHUTTER close
+            2) SOURCE SHUTTER close (1/2)
+            3) DAC 0
+            4) POWER off
+            5) FTM off
+            """
+            try:
+                self._ensure_services_running()
+            except Exception:
+                pass
 
-        # ✅ 요청 순서 보장: enqueue는 워커 큐 순서를 그대로 탄다.
-        try:
-            self.plc.enqueue_write_coil("MAIN_SHUTTER_SW", False, tag=tag)
-        except Exception as e:
-            self._ui_warn(f"MAIN_SHUTTER close 실패(enqueue): {e!r}")
+            # 1) Shutters close
+            try:
+                self.plc.enqueue_write_coil("MAIN_SHUTTER_SW", False, tag=tag)
+            except Exception as e:
+                self._ui_warn(f"MAIN_SHUTTER close 실패(enqueue): {e!r}")
 
-        try:
-            self.plc.enqueue_write_reg("DAC_POWER_1", 0, tag=tag)
-            self.plc.enqueue_write_reg("DAC_POWER_2", 0, tag=tag)
-        except Exception as e:
-            self._ui_warn(f"DAC=0 실패(enqueue): {e!r}")
+            for coil in ("SHUTTER_1_SW", "SHUTTER_2_SW"):
+                try:
+                    self.plc.enqueue_write_coil(coil, False, tag=tag)
+                except Exception as e:
+                    self._ui_warn(f"{coil} close 실패(enqueue): {e!r}")
 
-        try:
-            self.plc.enqueue_write_coil("POWER_1_SW", False, tag=tag)
-            self.plc.enqueue_write_coil("POWER_2_SW", False, tag=tag)
-        except Exception as e:
-            self._ui_warn(f"POWER OFF 실패(enqueue): {e!r}")
+            # 2) DAC=0
+            try:
+                self.plc.enqueue_write_reg("DAC_POWER_1", 0, tag=tag)
+                self.plc.enqueue_write_reg("DAC_POWER_2", 0, tag=tag)
+            except Exception as e:
+                self._ui_warn(f"DAC 0 실패(enqueue): {e!r}")
+
+            # 3) Power off
+            try:
+                self.plc.enqueue_write_coil("POWER_1_SW", False, tag=tag)
+                self.plc.enqueue_write_coil("POWER_2_SW", False, tag=tag)
+            except Exception as e:
+                self._ui_warn(f"POWER off 실패(enqueue): {e!r}")
+
+            # 4) FTM off
+            try:
+                self.plc.enqueue_write_coil("FTM_SW", False, tag=tag)
+            except Exception as e:
+                self._ui_warn(f"FTM off 실패(enqueue): {e!r}")
 
     def _request_engine_stop(self, mode: StopMode) -> None:
         if not self.is_running():

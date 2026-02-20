@@ -168,6 +168,8 @@ class HmiWindow(QWidget):
 
             # ✅ 신규 공정/로그/센서 주입
             self.process_window.set_runtime_objects(
+                self._plc_binder,           # ✅ positional 1
+                self._ini_path,             # ✅ positional 2
                 process_controller=self._process_controller,
                 log_service=self._log_service,
                 stm_service=self._stm_service,
@@ -475,19 +477,28 @@ class ProcessWindow(QWidget):
         _append_text(self.ui.logWindow, "[DEV] sensors released + gc.collect()")
 
     def _on_start_clicked(self) -> None:
-        # ✅ Start에서만 STM/ACS 생성/연결
         if not self._ensure_sensors_connected_fresh():
             QMessageBox.warning(self, "Device", "STM/ACS 연결 실패")
             return
 
+        # ✅ (추가) STM UI 바인딩 + RT 시작
+        try:
+            if self._stm_service is not None:
+                self._bind_stm_ui(self._stm_service)
+        except Exception:
+            pass
+        self._rt_start()
+
         pc = self._process_controller
         if pc is None:
             QMessageBox.warning(self, "Process", "ProcessController가 연결되지 않았습니다.")
+            self._rt_stop()
             self._shutdown_sensors_and_release_memory()
             return
 
         run_cfg = self._collect_ui_run_cfg()
         if run_cfg is None:
+            self._rt_stop()
             self._shutdown_sensors_and_release_memory()
             return
 

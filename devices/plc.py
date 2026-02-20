@@ -75,10 +75,10 @@ PLC_COIL_MAP: Dict[str, int] = {
     "DOOR_SW": 12,         # M0000C
 
     # --- Utilities / Gas ---
-    "AIR_SW": 32,    # M00020
-    "WATER_SW": 33,  # M00021
-    "GAS_1_SW": 34,  # M00022
-    "GAS_2_SW": 35,  # M00023
+    "AIR_SW": 32,      # M00020
+    "WATER_SW": 33,    # M00021
+    "GAUGE_1_SW": 34,  # M00022
+    "GAUGE_2_SW": 35,  # M00023
 }
 
 PLC_REG_MAP: Dict[str, int] = {
@@ -583,8 +583,8 @@ class AsyncPLC:
 
         syn[norm("AIR")] = "AIR_SW"
         syn[norm("WATER")] = "WATER_SW"
-        syn[norm("G1")] = "GAS_1_SW"
-        syn[norm("G2")] = "GAS_2_SW"
+        syn[norm("G1")] = "GAUGE_1_SW"
+        syn[norm("G2")] = "GAUGE_2_SW"
 
         syn[norm("DAC1")] = "DAC_POWER_1"
         syn[norm("DAC2")] = "DAC_POWER_2"

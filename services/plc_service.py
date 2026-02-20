@@ -178,6 +178,7 @@ class PlcServiceWorker(QThread):
     async def _main(self) -> None:
         plc = AsyncPLC(
             port=self._settings.port,
+            method=self._settings.method,  # ✅ 설정값 그대로 사용
             baudrate=self._settings.baudrate,
             bytesize=self._settings.bytesize,
             parity=self._settings.parity,

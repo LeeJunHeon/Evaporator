@@ -2,50 +2,31 @@
 """
 controller/hmi_plc_binder.py
 
-HMI(UI) ↔ PLC(Modbus RTU / RS-232) 연결 바인더
+HMI(UI) ↔ PLC 연결 바인더 (깔끔 버전)
 
-구조(중요)
-1) UI 스레드: 버튼 클릭/램프 표시만 처리 (절대 블로킹 금지)
-2) PlcWorker(QThread): PLC 폴링(read) + 명령(write)을 전담
-3) PlcWorker 내부에서 asyncio loop를 돌려 devices.plc.AsyncPLC를 그대로 사용
-   - qasync 같은 추가 의존성 없이, 기존 프로젝트 스타일 유지
-
-동작 흐름
-- HmiPlcBinder.start() → PlcWorker.start()
-- PlcWorker:
-  - (재)연결 시도 → connect + ping 성공하면 CONNECTED emit
-  - poll_interval_s 주기로 필요한 코일 블록(0~12, 32~35)을 읽어서 UI 업데이트 emit
-  - 버튼이 눌리면 enqueue_write로 들어온 명령을 큐에서 꺼내 PLC에 write
-
-버튼은 "래치(toggle)"로 동작(ON/OFF 유지).
-
-[추가(중요)]
-- 공정(ProcessEngine)에서도 이 binder를 PLC 게이트웨이처럼 쓰기 위해
-  public API(is_connected/get_states/read_coil/enqueue_write/pulse_coil)를 추가했다.
-- 단, "팝업"은 UI 버튼 클릭 시에만 띄운다(공정 중 팝업 금지).
+원칙
+- PLC I/O는 services/plc_service.PLCService 가 "단일 워커/단일 연결"로 독점 처리
+- 이 바인더는 UI 갱신/버튼 이벤트만 담당
+- UI 스레드 블로킹 금지: 모든 write는 PLCService.enqueue_* 로 비동기 큐잉만 수행
 """
 
 from __future__ import annotations
 
-import asyncio
 import threading
 import time
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Optional, Tuple
 
-from PySide6.QtCore import QObject, QSignalBlocker, QThread, Qt, QTimer, Signal
+from PySide6.QtCore import QObject, QSignalBlocker, Qt, QTimer
 from PySide6.QtWidgets import QMessageBox
 
 from config.plc_config import PLCSettings
-from devices.plc import AsyncPLC
+from services.plc_service import PLCService
 
 
 # ------------------------------------------------------------
 # UI 위젯 <-> PLC 코일 매핑
-#  - widget_name: Qt Designer에서 지정한 objectName
-#  - coil_name  : devices/plc.py 의 PLC_COIL_MAP 키(=canonical)
 # ------------------------------------------------------------
-
 @dataclass(frozen=True)
 class ButtonBinding:
     widget_name: str
@@ -53,263 +34,8 @@ class ButtonBinding:
     momentary: bool = False  # 기본: 래치(유지). 펄스가 필요하면 True
 
 
-class PlcWorker(QThread):
-    """PLC 폴링 + 쓰기를 담당하는 워커 스레드."""
-
-    sig_connected = Signal(bool)    # True/False
-    sig_error = Signal(str)         # 에러 문자열
-    sig_states = Signal(object)     # dict[str,bool] (coil_name -> state)
-
-    def __init__(self, settings: PLCSettings, parent: Optional[QObject] = None):
-        super().__init__(parent)
-        self._settings = settings
-
-        self._stop_evt = threading.Event()
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
-        self._q: Optional[asyncio.Queue] = None
-
-        # start() 이전에 enqueue된 명령은 임시 저장 (큐 1개로 통합)
-        self._pending: List[tuple] = []
-        self._pending_lock = threading.Lock()
-
-
-    # -------------------------------
-    # public API (UI thread)
-    # -------------------------------
-    def stop(self) -> None:
-        self._stop_evt.set()
-        if self._loop:
-            def _poke():
-                try:
-                    if self._q:
-                        self._q.put_nowait(("__STOP__",))
-                except Exception:
-                    pass
-            try:
-                self._loop.call_soon_threadsafe(_poke)
-            except Exception:
-                pass
-
-    def enqueue_write_reg(self, reg_name: str, value: int) -> None:
-        item = ("reg", str(reg_name), int(value))
-
-        if self._loop and self._q:
-            try:
-                asyncio.run_coroutine_threadsafe(self._q.put(item), self._loop)
-                return
-            except Exception:
-                pass
-
-        with self._pending_lock:
-            self._pending.append(item)
-
-    def enqueue_write(self, coil_name: str, on: bool, momentary: bool = False) -> None:
-        item = ("coil", str(coil_name), bool(on), bool(momentary))
-
-        if self._loop and self._q:
-            try:
-                asyncio.run_coroutine_threadsafe(self._q.put(item), self._loop)
-                return
-            except Exception:
-                pass
-
-        with self._pending_lock:
-            self._pending.append(item)
-
-    # -------------------------------
-    # QThread entry
-    # -------------------------------
-    def run(self) -> None:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        self._loop = loop
-        self._q = asyncio.Queue()
-
-        with self._pending_lock:
-            for item in self._pending:
-                try:
-                    self._q.put_nowait(item)
-                except Exception:
-                    pass
-            self._pending.clear()
-
-        try:
-            loop.run_until_complete(self._main())
-        finally:
-            try:
-                loop.stop()
-                loop.close()
-            except Exception:
-                pass
-
-    # -------------------------------
-    # internal async logic
-    # -------------------------------
-    async def _main(self) -> None:
-        plc = AsyncPLC(
-            port=self._settings.port,
-            method=self._settings.method,
-            baudrate=self._settings.baudrate,
-            bytesize=self._settings.bytesize,
-            parity=self._settings.parity,
-            stopbits=self._settings.stopbits,
-            unit=self._settings.unit,
-            timeout_s=self._settings.timeout_s,
-            pulse_ms=self._settings.pulse_ms,
-
-            # DAC
-            dac_full_scale_code=self._settings.dac_full_scale_code,
-            dac_offset_code=self._settings.dac_offset_code,
-            dac_current_min_ma=self._settings.dac_current_min_ma,
-            dac_current_max_ma=self._settings.dac_current_max_ma,
-        )
-
-        connected = False
-
-        def emit_connected(v: bool) -> None:
-            nonlocal connected
-            v = bool(v)
-            if connected != v:
-                connected = v
-                self.sig_connected.emit(v)
-
-        async def connect_loop() -> None:
-            """끊겨도 계속 재시도."""
-            while not self._stop_evt.is_set():
-                try:
-                    await plc.connect()
-                    await plc.ping()
-                    emit_connected(True)
-                    return
-                except Exception as e:
-                    emit_connected(False)
-                    self.sig_error.emit(f"PLC connect failed: {e!r}")
-                    try:
-                        await plc.close()
-                    except Exception:
-                        pass
-                    await asyncio.sleep(max(0.2, float(self._settings.reconnect_interval_s)))
-
-        await connect_loop()
-
-        consecutive_fail = 0
-        max_consecutive_fail = 3  # 연속 실패 N회면 재연결
-
-        while not self._stop_evt.is_set():
-            try:
-                # 1) 큐에 쌓인 명령 먼저 처리(버튼 반응성을 올림)
-                await self._drain_commands(plc)
-
-                # 2) 상태 읽기
-                states = await self._read_hmi_states(plc)
-                self.sig_states.emit(states)
-
-                consecutive_fail = 0
-
-                # 3) poll_interval 동안 "명령이 오면 즉시 처리" (없으면 타임아웃)
-                await self._wait_or_handle_one_command(plc, float(self._settings.poll_interval_s))
-
-            except Exception as e:
-                consecutive_fail += 1
-                self.sig_error.emit(f"PLC polling error: {e!r}")
-
-                if consecutive_fail < max_consecutive_fail:
-                    # 일시적 타임아웃/노이즈로 보고 짧게 텀
-                    await asyncio.sleep(0.05)
-                    continue
-
-                # N회 연속 실패 → 재연결
-                emit_connected(False)
-                try:
-                    await plc.close()
-                except Exception:
-                    pass
-                await connect_loop()
-                consecutive_fail = 0
-
-        # 종료
-        try:
-            await plc.close()
-        except Exception:
-            pass
-        emit_connected(False)
-
-    async def _drain_commands(self, plc: AsyncPLC) -> None:
-        if not self._q:
-            return
-        while not self._q.empty():
-            msg = self._q.get_nowait()
-            await self._handle_one(plc, msg)
-
-    async def _handle_one(self, plc: AsyncPLC, msg: tuple) -> None:
-        if not msg:
-            return
-        if msg[0] == "__STOP__":
-            return
-
-        kind = msg[0]
-        if kind == "coil":
-            _, coil_name, on, momentary = msg
-            await plc.write_switch(str(coil_name), bool(on), momentary=bool(momentary))
-            return
-
-        if kind == "reg":
-            _, reg_name, value = msg
-            reg_name = str(reg_name)
-            value = int(value)
-
-            if reg_name == "DAC_POWER_1":
-                await plc.set_dac_power(1, value)
-            elif reg_name == "DAC_POWER_2":
-                await plc.set_dac_power(2, value)
-            else:
-                await plc.write_reg_name(reg_name, value)
-            return
-
-    async def _wait_or_handle_one_command(self, plc: AsyncPLC, seconds: float) -> None:
-        if seconds <= 0:
-            await asyncio.sleep(0)
-            return
-        if not self._q:
-            await asyncio.sleep(seconds)
-            return
-
-        try:
-            msg = await asyncio.wait_for(self._q.get(), timeout=seconds)
-        except asyncio.TimeoutError:
-            return
-
-        await self._handle_one(plc, msg)
-        await self._drain_commands(plc)
-
-    async def _read_hmi_states(self, plc: AsyncPLC) -> Dict[str, bool]:
-        """HMI에서 필요한 코일만 읽어서 dict로 반환."""
-        block0 = await plc.read_coils_block(0, 13)  # 0..12
-        block1 = await plc.read_coils_block(32, 4)  # 32..35
-
-        return {
-            "R_P_SW": bool(block0[0]),
-            "R_V_SW": bool(block0[1]),
-            "F_V_SW": bool(block0[2]),
-            "M_V_SW": bool(block0[3]),
-            "V_V_SW": bool(block0[4]),
-            "TMP_SW": bool(block0[5]),
-            "SHUTTER_1_SW": bool(block0[6]),
-            "SHUTTER_2_SW": bool(block0[7]),
-            "MAIN_SHUTTER_SW": bool(block0[8]),
-            "POWER_1_SW": bool(block0[9]),
-            "POWER_2_SW": bool(block0[10]),
-            "FTM_SW": bool(block0[11]),
-            "DOOR_SW": bool(block0[12]),
-            "AIR_SW": bool(block1[0]),
-            "WATER_SW": bool(block1[1]),
-            "GAS_1_SW": bool(block1[2]),
-            "GAS_2_SW": bool(block1[3]),
-        }
-
-
 class HmiPlcBinder(QObject):
-    """UI(HMI) ↔ PLC 연결을 담당."""
+    """UI(HMI) ↔ PLCService 연결을 담당."""
 
     # ✅ 여기 코일명이 plc.py의 PLC_COIL_MAP key와 1:1로 맞아야 함
     BUTTONS: Tuple[ButtonBinding, ...] = (
@@ -328,9 +54,8 @@ class HmiPlcBinder(QObject):
         ButtonBinding("ms2powerBtn", "POWER_2_SW"),
     )
 
+    # ✅ EV 기준: GAS 제거, AIR/WATER만 유지
     INDICATORS: Dict[str, str] = {
-        "g1": "GAS_1_SW",
-        "g2": "GAS_2_SW",
         "air": "AIR_SW",
         "water": "WATER_SW",
     }
@@ -340,7 +65,7 @@ class HmiPlcBinder(QObject):
         self.ui = ui
         self.settings = settings
 
-        # thread-safe state (공정/다른 스레드에서 읽을 수 있음)
+        # thread-safe state (다른 스레드에서도 읽을 수 있음)
         self._state_lock = threading.Lock()
         self._last_states: Dict[str, bool] = {}
         self._connected: bool = False
@@ -351,9 +76,11 @@ class HmiPlcBinder(QObject):
         self._door_busy_timer.setSingleShot(True)
         self._door_busy_timer.timeout.connect(self._end_door_busy)
 
-        # PLC worker
-        self._worker: Optional[PlcWorker] = None
-        self._reset_worker(settings)
+        # ✅ 단일 PLC 게이트웨이
+        self._plc = PLCService(settings=settings, parent=self)
+        self._plc.sig_connected.connect(self._on_connected)
+        self._plc.sig_error.connect(self._on_error)
+        self._plc.sig_coils.connect(self._apply_states)  # PLCService는 coils dict를 emit
 
         self._wire_ui()
 
@@ -361,9 +88,30 @@ class HmiPlcBinder(QObject):
         self._wire_dac_controls()
 
     # ============================================================
-    # Public API (공정에서도 사용 가능)
-    # - 팝업은 절대 띄우지 않는다(공정 중 팝업 금지)
+    # Public API
     # ============================================================
+    def start(self) -> None:
+        self._plc.start()
+
+    def stop(self) -> None:
+        # PLCService 내부 워커 종료
+        self._plc.stop()
+
+    def reload_settings(self, new_settings: PLCSettings) -> None:
+        # ✅ 깔끔하게: 기존 서비스 종료 후 새로 생성
+        try:
+            self._plc.stop()
+        except Exception:
+            pass
+
+        self.settings = new_settings
+        self._plc = PLCService(settings=new_settings, parent=self)
+        self._plc.sig_connected.connect(self._on_connected)
+        self._plc.sig_error.connect(self._on_error)
+        self._plc.sig_coils.connect(self._apply_states)
+
+        self.start()
+
     def is_connected(self) -> bool:
         with self._state_lock:
             return bool(self._connected)
@@ -376,59 +124,23 @@ class HmiPlcBinder(QObject):
         with self._state_lock:
             return bool(self._last_states.get(str(coil_name), bool(default)))
 
+    # 공정/외부 코드에서 사용 가능(팝업 없음)
     def enqueue_write(self, coil_name: str, on: bool, momentary: bool = False) -> None:
-        """
-        공정/외부 코드에서 쓰는 write API.
-        - 연결이 안 되어 있으면 예외로 처리(공정 엔진이 판단하도록)
-        """
         if not self.is_connected():
             raise RuntimeError("PLC not connected")
-        if not self._worker:
-            raise RuntimeError("PLC worker not initialized")
-        self._worker.enqueue_write(str(coil_name), bool(on), momentary=bool(momentary))
+        self._plc.enqueue_write_coil(str(coil_name), bool(on), momentary=bool(momentary), pulse_ms=None)
 
     def pulse_coil(self, coil_name: str) -> None:
         self.enqueue_write(str(coil_name), True, momentary=True)
 
+    def enqueue_write_reg(self, reg_name: str, value: int) -> None:
+        if not self.is_connected():
+            raise RuntimeError("PLC not connected")
+        self._plc.enqueue_write_reg(str(reg_name), int(value))
+
     # ============================================================
-    # internal
+    # UI wiring
     # ============================================================
-    def _reset_worker(self, settings: PLCSettings) -> None:
-        if self._worker is not None:
-            try:
-                self._worker.stop()
-                wait_ms = int(max(3000, (float(settings.timeout_s) + 0.5) * 2000))
-                if not self._worker.wait(wait_ms):
-                    try:
-                        self._worker.terminate()
-                        self._worker.wait(1000)
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-
-        self._worker = PlcWorker(settings=settings)
-        self._worker.sig_connected.connect(self._on_connected)
-        self._worker.sig_error.connect(self._on_error)
-        self._worker.sig_states.connect(self._apply_states)
-
-    def reload_settings(self, new_settings: PLCSettings) -> None:
-        self.settings = new_settings
-        self._reset_worker(new_settings)
-        self.start()
-
-    def start(self) -> None:
-        if self._worker and (not self._worker.isRunning()):
-            self._worker.start()
-
-    def stop(self) -> None:
-        if not self._worker:
-            return
-        self._worker.stop()
-        # settings.timeout_s 반영해서 종료 대기(기존 기능 유지 + 안정성 개선)
-        wait_ms = int(max(2000, (float(self.settings.timeout_s) + 0.5) * 2000))
-        self._worker.wait(wait_ms)
-
     def _wire_ui(self) -> None:
         for b in self.BUTTONS:
             w = getattr(self.ui, b.widget_name, None)
@@ -439,6 +151,7 @@ class HmiPlcBinder(QObject):
                 w.setCheckable(True)
             except Exception:
                 pass
+
             w.toggled.connect(lambda on, bb=b: self._on_button_toggled(bb, on))
 
         all_stop = getattr(self.ui, "allstopBtn", None)
@@ -450,7 +163,7 @@ class HmiPlcBinder(QObject):
             return bool(self._last_states.get(coil, default))
 
     def _on_button_toggled(self, binding: ButtonBinding, on: bool) -> None:
-        # ✅ 기존 기능 유지: 미연결이면 팝업 + 버튼 원복
+        # 미연결이면 팝업 + 버튼 원복
         if not self.is_connected():
             self._popup_warn("PLC 미연결", "PLC가 연결되지 않아 명령을 전송할 수 없습니다.")
             self._revert_button_to_plc(binding, fallback=not bool(on))
@@ -475,8 +188,8 @@ class HmiPlcBinder(QObject):
                 self._revert_button_to_plc(binding, fallback=not bool(on))
                 return
 
-            # ✅ write는 worker로 (기존과 동일하게 래치)
-            self._worker.enqueue_write("DOOR_SW", bool(on), momentary=False)
+            # ✅ write는 PLCService로
+            self._plc.enqueue_write_coil("DOOR_SW", bool(on), momentary=False, pulse_ms=None)
             self._begin_door_busy()
             self._set_hmi_status(f"DOOR_SW <- {int(bool(on))} (moving)")
             return
@@ -488,29 +201,39 @@ class HmiPlcBinder(QObject):
                 self._revert_button_to_plc(binding, fallback=True)
                 return
 
-        # ✅ 기존 기능 유지: 일반 토글은 바로 write
-        self._worker.enqueue_write(binding.coil_name, bool(on), momentary=binding.momentary)
+        # 일반 토글은 바로 write
+        self._plc.enqueue_write_coil(binding.coil_name, bool(on), momentary=binding.momentary, pulse_ms=None)
         self._set_hmi_status(f"{binding.coil_name} <- {int(bool(on))}")
 
     def _on_all_stop_clicked(self) -> None:
-        if not self._worker:
+        if not self.is_connected():
+            self._popup_warn("PLC 미연결", "PLC가 연결되지 않아 ALL STOP을 전송할 수 없습니다.")
             return
 
-        # 1) 모든 코일 OFF
+        # ✅ 안전 순서(권장): MAIN_SHUTTER close → DAC=0 → POWER off → 나머지 off
+        self._plc.enqueue_write_coil("MAIN_SHUTTER_SW", False, tag="ALL_STOP")
+
+        self._plc.enqueue_write_reg("DAC_POWER_1", 0, tag="ALL_STOP")
+        self._plc.enqueue_write_reg("DAC_POWER_2", 0, tag="ALL_STOP")
+
+        self._plc.enqueue_write_coil("POWER_1_SW", False, tag="ALL_STOP")
+        self._plc.enqueue_write_coil("POWER_2_SW", False, tag="ALL_STOP")
+
         for b in self.BUTTONS:
-            self._worker.enqueue_write(b.coil_name, False, momentary=False)
+            if b.coil_name in ("MAIN_SHUTTER_SW", "POWER_1_SW", "POWER_2_SW"):
+                continue
+            self._plc.enqueue_write_coil(b.coil_name, False, tag="ALL_STOP")
 
-        # 2) ✅ DAC도 0으로 (파워를 물리적으로 끊음)
-        self._worker.enqueue_write_reg("DAC_POWER_1", 0)
-        self._worker.enqueue_write_reg("DAC_POWER_2", 0)
+        self._set_hmi_status("ALL STOP sent (MAIN_SHUTTER close + DAC=0 + POWER OFF + others OFF)")
+        self._set_hmi_log("ALL STOP (safe order)")
 
-        self._set_hmi_status("ALL STOP sent (coils OFF + DAC=0)")
-        self._set_hmi_log("ALL STOP (all coils -> OFF, DAC1/2 -> 0)")
-
+    # ============================================================
+    # PLCService signals → UI apply
+    # ============================================================
     def _apply_states(self, states_obj: object) -> None:
+        # PLCService.sig_coils -> Dict[str,bool]
         states: Dict[str, bool] = dict(states_obj or {})
 
-        # thread-safe 저장
         with self._state_lock:
             self._last_states = states
 
@@ -548,9 +271,9 @@ class HmiPlcBinder(QObject):
     def _on_error(self, msg: str) -> None:
         self._set_hmi_log(msg)
 
-    # --------------------------
+    # ============================================================
     # UI helpers
-    # --------------------------
+    # ============================================================
     def _popup_warn(self, title: str, message: str) -> None:
         parent = None
         try:
@@ -568,7 +291,6 @@ class HmiPlcBinder(QObject):
         if w is None:
             return
 
-        # PLC에 이미 상태가 있으면 그 상태로, 없으면 fallback로 원복
         with self._state_lock:
             if binding.coil_name in self._last_states:
                 target = bool(self._last_states.get(binding.coil_name, False))
@@ -581,6 +303,9 @@ class HmiPlcBinder(QObject):
         except Exception:
             pass
 
+    # ============================================================
+    # Door busy
+    # ============================================================
     def _is_door_busy(self) -> bool:
         return time.monotonic() < float(self._door_busy_until or 0.0)
 
@@ -598,6 +323,9 @@ class HmiPlcBinder(QObject):
         self._door_busy_until = 0.0
         self._set_hmi_status("DOOR: move done")
 
+    # ============================================================
+    # HMI log/status
+    # ============================================================
     def _set_hmi_status(self, text: str) -> None:
         w = getattr(self.ui, "processMonitor_HMI", None)
         if w is not None:
@@ -640,16 +368,14 @@ class HmiPlcBinder(QObject):
         except Exception:
             pass
 
-    # ================= DAC 수동 입력 =================
+    # ============================================================
+    # DAC 수동 입력 (PLCService로 write_reg만)
+    # ============================================================
     def _wire_dac_controls(self) -> None:
-        """DAC 수동 입력 UI 연결 (SpinBox 전용)."""
-
-        # ✅ settings 기반 range (offset 포함)
         fs = int(getattr(self.settings, "dac_full_scale_code", 4000))
         off = int(getattr(self.settings, "dac_offset_code", 0))
         lo, hi = off, off + fs
 
-        # ---------- 신규(UI 개선 버전): SpinBox ----------
         self._dac1_spin = getattr(self.ui, "dac1Spin", None)
         self._dac1_set_btn = getattr(self.ui, "dac1SetBtn", None)
         self._dac1_reset_btn = getattr(self.ui, "dac1ResetBtn", None)
@@ -677,7 +403,6 @@ class HmiPlcBinder(QObject):
             self._dac2_reset_btn.clicked.connect(lambda: self._on_reset_dac(2))
 
     def _on_reset_dac(self, ch: int) -> None:
-        """Reset 버튼: DAC 값을 0으로 즉시 write (SpinBox 전용)."""
         sp = self._dac1_spin if int(ch) == 1 else self._dac2_spin
         if sp is None:
             self._popup_warn("UI 오류", "DAC 입력 위젯(QSpinBox)을 찾지 못했습니다.")
@@ -691,7 +416,6 @@ class HmiPlcBinder(QObject):
         self._apply_dac_code(ch, 0)
 
     def _on_apply_dac_code(self, ch: int) -> None:
-        """Apply 버튼: SpinBox 값으로 PLC D레지스터 write."""
         sp = self._dac1_spin if int(ch) == 1 else self._dac2_spin
         if sp is None:
             self._popup_warn("UI 오류", "DAC 입력 위젯(QSpinBox)을 찾지 못했습니다.")
@@ -706,8 +430,7 @@ class HmiPlcBinder(QObject):
         self._apply_dac_code(ch, v)
 
     def _apply_dac_code(self, ch: int, v: int) -> None:
-        """공통: clamp → UI 반영 → enqueue_write_reg."""
-        if not self.is_connected() or not self._worker:
+        if not self.is_connected():
             self._popup_warn("PLC 미연결", "PLC가 연결되지 않아 DAC 값을 전송할 수 없습니다.")
             return
 
@@ -718,7 +441,6 @@ class HmiPlcBinder(QObject):
         v0 = int(v)
         v_clamped = max(lo, min(v0, hi))
 
-        # UI에 clamp 반영
         sp = self._dac1_spin if int(ch) == 1 else self._dac2_spin
         try:
             if sp is not None and v_clamped != int(sp.value()):
@@ -731,20 +453,8 @@ class HmiPlcBinder(QObject):
 
         key = "DAC_POWER_1" if int(ch) == 1 else "DAC_POWER_2"
         try:
-            self._worker.enqueue_write_reg(key, int(v_clamped))
+            self._plc.enqueue_write_reg(key, int(v_clamped), tag=f"DAC{ch}")
             self._set_hmi_status(f"{key} <- {int(v_clamped)}")
             self._set_hmi_log(f"DAC{ch} set: {int(v_clamped)}")
         except Exception as e:
             self._popup_warn("전송 실패", f"DAC 값 전송 실패: {e!r}")
-
-    def enqueue_write_reg(self, reg_name: str, value: int) -> None:
-        """
-        공정/외부 코드에서 쓰는 register write API.
-        - 연결이 안 되어 있으면 예외(공정 엔진이 판단)
-        """
-        if not self.is_connected():
-            raise RuntimeError("PLC not connected")
-        if not self._worker:
-            raise RuntimeError("PLC worker not initialized")
-        self._worker.enqueue_write_reg(str(reg_name), int(value))
-

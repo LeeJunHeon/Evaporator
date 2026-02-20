@@ -19,7 +19,7 @@ import asyncio
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, List, Union
+from typing import Any, Dict, Optional, Union
 
 from PySide6.QtCore import QObject, QThread, Signal
 
@@ -33,9 +33,9 @@ from config.plc_config import PLCSettings
 
 @dataclass
 class _CmdBase:
-    """내부 큐에 들어가는 명령 베이스."""
     tag: str = ""
-    reply: Any = None  # concurrent.futures.Future 또는 None
+    reply: Any = None
+    retries_left: int = 2   # ✅ 기본 2회 재시도(총 3번: 최초+2)
 
 
 @dataclass
@@ -57,14 +57,12 @@ class CmdWriteReg(_CmdBase):
     reg_name: str = ""
     value: int = 0
 
-
-@dataclass
-class CmdSetDacCurrent(_CmdBase):
-    ch: int = 1
-    ma: float = 4.0  # 4~20mA
+PLCCommand = Union[CmdWakeup, CmdWriteCoil, CmdWriteReg]
 
 
-PLCCommand = Union[CmdWakeup, CmdWriteCoil, CmdWriteReg, CmdSetDacCurrent]
+class PLCCommandError(Exception):
+    """PLC 명령 실행 실패(재연결 후 재시도 트리거용)."""
+    pass
 
 
 # ============================================================
@@ -106,9 +104,8 @@ class PlcServiceWorker(QThread):
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._cmd_q: Optional[asyncio.Queue] = None
 
-        # start() 전에 들어온 명령 임시 보관
-        self._pending_cmds: List[PLCCommand] = []
-        self._pending_lock = threading.Lock()
+        # ✅ 실패한 명령을 “순서 보존”하면서 재시도하기 위한 슬롯
+        self._retry_cmd: Optional[PLCCommand] = None
 
         # 마지막 스냅샷(서비스가 조회할 수 있게)
         self._last_snapshot: Optional[PLCSnapshot] = None
@@ -140,15 +137,17 @@ class PlcServiceWorker(QThread):
         """명령을 큐에 넣기(결과 기다리지 않음)."""
         loop = self._loop
         q = self._cmd_q
-        if loop and q:
+        if (not loop) or (not q):
+            raise RuntimeError("PLCServiceWorker not started. Call PLCService.start() before enqueue().")
+
+        # ✅ 가장 단순/가벼운 방식: loop 스레드에서 put_nowait 실행
+        def _put() -> None:
             try:
-                asyncio.run_coroutine_threadsafe(q.put(cmd), loop)
-                return
+                q.put_nowait(cmd)
             except Exception:
                 pass
 
-        with self._pending_lock:
-            self._pending_cmds.append(cmd)
+        loop.call_soon_threadsafe(_put)
 
     # -------------------------------
     # Thread entry
@@ -158,15 +157,6 @@ class PlcServiceWorker(QThread):
         asyncio.set_event_loop(loop)
         self._loop = loop
         self._cmd_q = asyncio.Queue()
-
-        # start 전 들어온 명령 flush
-        with self._pending_lock:
-            for c in self._pending_cmds:
-                try:
-                    self._cmd_q.put_nowait(c)
-                except Exception:
-                    pass
-            self._pending_cmds.clear()
 
         try:
             loop.run_until_complete(self._main())
@@ -195,11 +185,9 @@ class PlcServiceWorker(QThread):
             unit=self._settings.unit,
             timeout_s=self._settings.timeout_s,
             pulse_ms=self._settings.pulse_ms,
-            # DAC
+            # DAC (EV는 코드값 write_reg만 사용)
             dac_full_scale_code=self._settings.dac_full_scale_code,
             dac_offset_code=self._settings.dac_offset_code,
-            dac_current_min_ma=self._settings.dac_current_min_ma,
-            dac_current_max_ma=self._settings.dac_current_max_ma,
         )
 
         connected_flag = False
@@ -244,8 +232,9 @@ class PlcServiceWorker(QThread):
         max_consecutive_fail = 3  # 환경에 따라 2~5 추천
 
         poll_s = float(getattr(self._settings, "poll_interval_s", 0.25) or 0.25)
-        if poll_s < 0:
-            poll_s = 0.0
+        # ✅ 0 허용하면 busy-loop 위험 → 최소 50ms 보장
+        if poll_s < 0.05:
+            poll_s = 0.05
 
         while not self._stop_evt.is_set():
             try:
@@ -277,16 +266,26 @@ class PlcServiceWorker(QThread):
             except asyncio.CancelledError:
                 break
 
+            except PLCCommandError as e:
+                # ✅ 명령 실패는 너 정책대로 "즉시 재연결 후 재시도"가 맞음
+                self.sig_error.emit(f"[PLCService] command error: {e!r}")
+                _emit_connected(False)
+                try:
+                    await plc.close()
+                except Exception:
+                    pass
+                await connect_until_ok()
+                consecutive_fail = 0
+                continue
+
             except Exception as e:
                 consecutive_fail += 1
                 self.sig_error.emit(f"[PLCService] loop error: {e!r}")
 
-                # 잠깐 흔들림이면 잠깐 쉬고 계속
                 if consecutive_fail < max_consecutive_fail:
                     await asyncio.sleep(0.05)
                     continue
 
-                # 연속 실패 -> close + 재연결
                 _emit_connected(False)
                 try:
                     await plc.close()
@@ -306,12 +305,16 @@ class PlcServiceWorker(QThread):
     async def _drain_commands(self, plc: AsyncPLC) -> None:
         """
         큐에 쌓인 명령을 가능한 빨리 처리.
-        - command 실패 시 예외를 올려서 상위 루프에서 재연결하도록 함
-        - reply(Future)가 있으면 성공/실패를 set_result/set_exception으로 반환
+        - 실패 시 PLCCommandError를 올려 상위에서 즉시 재연결하도록 함
         """
         q = self._cmd_q
         if not q:
             return
+
+        # ✅ 재시도 중인 명령이 있으면 “순서 보존”을 위해 가장 먼저 처리
+        if self._retry_cmd is not None:
+            await self._execute_one_command(plc, self._retry_cmd)
+            # 성공하면 _execute_one_command에서 self._retry_cmd를 None으로 정리함
 
         while not self._stop_evt.is_set():
             try:
@@ -319,50 +322,74 @@ class PlcServiceWorker(QThread):
             except asyncio.QueueEmpty:
                 return
 
-            if isinstance(cmd, CmdWakeup):
-                continue
+            await self._execute_one_command(plc, cmd)
 
-            try:
-                if isinstance(cmd, CmdWriteCoil):
-                    await plc.write_switch(
-                        cmd.coil_name,
-                        bool(cmd.on),
-                        momentary=bool(cmd.momentary),
-                        pulse_ms=cmd.pulse_ms,
-                    )
+    async def _execute_one_command(self, plc: AsyncPLC, cmd: PLCCommand) -> Any:
+        """
+        PLCCommand 1개를 실행.
+        - 성공 시 reply가 있으면 set_result
+        - 실패 시:
+          - retries_left > 0 : future는 아직 끝내지 않고, self._retry_cmd에 보관 후 PLCCommandError raise
+          - retries_left == 0: future에 set_exception 후 PLCCommandError raise
+        """
+        if isinstance(cmd, CmdWakeup):
+            return None
 
-                elif isinstance(cmd, CmdWriteReg):
-                    await plc.write_reg_name(cmd.reg_name, int(cmd.value))
+        try:
+            if isinstance(cmd, CmdWriteCoil):
+                await plc.write_switch(
+                    cmd.coil_name,
+                    bool(cmd.on),
+                    momentary=bool(cmd.momentary),
+                    pulse_ms=cmd.pulse_ms,
+                )
+                result: Any = True
 
-                elif isinstance(cmd, CmdSetDacCurrent):
-                    # 반환값은 변환된 DAC code
-                    code = await plc.set_dac_current(int(cmd.ch), float(cmd.ma))
-                    if cmd.reply is not None:
-                        try:
-                            cmd.reply.set_result(code)
-                        except Exception:
-                            pass
-                    continue
+            elif isinstance(cmd, CmdWriteReg):
+                await plc.write_reg_name(cmd.reg_name, int(cmd.value))
+                result = True
 
-                else:
-                    raise RuntimeError(f"Unknown PLCCommand: {cmd!r}")
+            else:
+                raise RuntimeError(f"Unknown PLCCommand: {cmd!r}")
 
-                # 성공 처리
-                if cmd.reply is not None:
-                    try:
-                        cmd.reply.set_result(True)
-                    except Exception:
-                        pass
+            # ✅ 성공: 재시도 슬롯에 있던 명령이면 해제
+            if self._retry_cmd is cmd:
+                self._retry_cmd = None
 
-            except Exception as e:
-                # 실패 처리
-                if cmd.reply is not None:
-                    try:
-                        cmd.reply.set_exception(e)
-                    except Exception:
-                        pass
-                # 상위 루프로 올려 재연결/복구 기회 제공
-                raise
+            if cmd.reply is not None:
+                try:
+                    cmd.reply.set_result(result)
+                except Exception:
+                    pass
+            return result
+
+        except Exception as e:
+            # ✅ 실패한 명령이 retry 슬롯에 있었으면 계속 유지(성공해야만 해제)
+            # ✅ 재시도 남아 있으면: future는 아직 끝내지 말고, 재연결 후 “같은 명령”을 먼저 재시도
+            if getattr(cmd, "retries_left", 0) > 0 and (not self._stop_evt.is_set()):
+                try:
+                    cmd.retries_left -= 1
+                except Exception:
+                    pass
+
+                # 순서 보존: 큐 뒤로 보내지 않고 retry 슬롯에 보관
+                self._retry_cmd = cmd
+
+                # 명령 실패는 “즉시 재연결” 트리거
+                raise PLCCommandError(f"cmd failed, will retry after reconnect: {cmd!r} ({e!r})")
+
+            # ✅ 재시도 소진: 그때만 future에 예외 확정
+            if self._retry_cmd is cmd:
+                self._retry_cmd = None
+
+            if cmd.reply is not None:
+                try:
+                    cmd.reply.set_exception(e)
+                except Exception:
+                    pass
+
+            raise PLCCommandError(f"cmd failed (no retries left): {cmd!r} ({e!r})")
+        
 
     async def _sleep_with_command_break(self, plc: AsyncPLC, seconds: float) -> None:
         """
@@ -380,38 +407,8 @@ class PlcServiceWorker(QThread):
 
         try:
             cmd: PLCCommand = await asyncio.wait_for(q.get(), timeout=seconds)
-            # 받은 cmd 먼저 처리(단, wakeup이면 스킵)
-            if not isinstance(cmd, CmdWakeup):
-                # 다시 "지금 처리"를 위해 앞에서 처리 루틴 재사용(간단히 한개만 직접)
-                # -> 여기서 직접 처리하지 않고 다시 큐에 넣고 drain하면 순서가 꼬일 수 있으니 직접 실행
-                if isinstance(cmd, CmdWriteCoil):
-                    await plc.write_switch(
-                        cmd.coil_name,
-                        bool(cmd.on),
-                        momentary=bool(cmd.momentary),
-                        pulse_ms=cmd.pulse_ms,
-                    )
-                    if cmd.reply is not None:
-                        try:
-                            cmd.reply.set_result(True)
-                        except Exception:
-                            pass
-                elif isinstance(cmd, CmdWriteReg):
-                    await plc.write_reg_name(cmd.reg_name, int(cmd.value))
-                    if cmd.reply is not None:
-                        try:
-                            cmd.reply.set_result(True)
-                        except Exception:
-                            pass
-                elif isinstance(cmd, CmdSetDacCurrent):
-                    code = await plc.set_dac_current(int(cmd.ch), float(cmd.ma))
-                    if cmd.reply is not None:
-                        try:
-                            cmd.reply.set_result(code)
-                        except Exception:
-                            pass
-                else:
-                    raise RuntimeError(f"Unknown PLCCommand: {cmd!r}")
+            # ✅ 받은 cmd 먼저 처리(단, wakeup이면 내부에서 스킵)
+            await self._execute_one_command(plc, cmd)
 
             # 남은 명령도 처리
             await self._drain_commands(plc)
@@ -422,10 +419,10 @@ class PlcServiceWorker(QThread):
     async def _read_coils(self, plc: AsyncPLC) -> Dict[str, bool]:
         """
         HMI/공정에서 공통으로 쓰기 좋은 최소 코일 상태 폴링.
-        - 0..12 / 32..35 영역을 block read로 읽어 요청 횟수 최소화
+        - 0..12 / 32..33 영역을 block read로 읽어 요청 횟수 최소화
         """
         block0 = await plc.read_coils_block(0, 13)   # 0..12
-        block1 = await plc.read_coils_block(32, 4)   # 32..35
+        block1 = await plc.read_coils_block(32, 2)   # 32..33 (AIR/WATER만)
 
         out: Dict[str, bool] = {
             "R_P_SW": bool(block0[0]),
@@ -444,26 +441,17 @@ class PlcServiceWorker(QThread):
 
             "AIR_SW": bool(block1[0]),
             "WATER_SW": bool(block1[1]),
-            "GAS_1_SW": bool(block1[2]),
-            "GAS_2_SW": bool(block1[3]),
         }
         return out
 
     async def _read_regs(self, plc: AsyncPLC) -> Dict[str, int]:
         """
-        현재 프로젝트에서 바로 유용한 레지스터는 DAC 2개뿐이라 여기서 읽는다.
-        (확장 필요하면 여기에 추가하거나 settings로 폴링 레지스터 리스트를 받으면 됨)
+        EV에서 필요한 레지스터: DAC 2개
+        - 실패를 조용히 숨기지 않고, 루프 예외로 올려 끊김 감지/재연결 흐름에 태운다.
         """
         out: Dict[str, int] = {}
-        try:
-            out["DAC_POWER_1"] = int(await plc.read_reg_name("DAC_POWER_1"))
-        except Exception:
-            # 레지스터 폴링은 없어도 되는 정보라 개별 실패는 흡수(전체 루프 실패 방지)
-            pass
-        try:
-            out["DAC_POWER_2"] = int(await plc.read_reg_name("DAC_POWER_2"))
-        except Exception:
-            pass
+        out["DAC_POWER_1"] = int(await plc.read_reg_name("DAC_POWER_1"))
+        out["DAC_POWER_2"] = int(await plc.read_reg_name("DAC_POWER_2"))
         return out
 
     # -------------------------------
@@ -535,9 +523,6 @@ class PLCService(QObject):
     def enqueue_write_reg(self, reg_name: str, value: int, *, tag: str = "") -> None:
         self._worker.enqueue(CmdWriteReg(reg_name=str(reg_name), value=int(value), tag=tag))
 
-    def enqueue_set_dac_current(self, ch: int, ma: float, *, tag: str = "") -> None:
-        self._worker.enqueue(CmdSetDacCurrent(ch=int(ch), ma=float(ma), tag=tag))
-
     # -------------------------------
     # submit (want completion)
     # - 반환 Future는 .result(timeout=...)로 대기 가능
@@ -553,10 +538,4 @@ class PLCService(QObject):
         import concurrent.futures
         fut = concurrent.futures.Future()
         self._worker.enqueue(CmdWriteReg(reg_name=str(reg_name), value=int(value), tag=tag, reply=fut))
-        return fut
-
-    def submit_set_dac_current(self, ch: int, ma: float, *, tag: str = ""):
-        import concurrent.futures
-        fut = concurrent.futures.Future()
-        self._worker.enqueue(CmdSetDacCurrent(ch=int(ch), ma=float(ma), tag=tag, reply=fut))
         return fut

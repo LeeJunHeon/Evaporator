@@ -849,10 +849,17 @@ class AsyncPLC:
     async def vv(self, on: bool = True, *, momentary: bool = False) -> None: await self.write_switch("V/V", on, momentary=momentary)
     async def tmp(self, on: bool = True, *, momentary: bool = False) -> None: await self.write_switch("TMP", on, momentary=momentary)
 
-    async def air(self, on: bool = True, *, momentary: bool = False) -> None: await self.write_switch("AIR", on, momentary=momentary)
-    async def water(self, on: bool = True, *, momentary: bool = False) -> None: await self.write_switch("WATER", on, momentary=momentary)
-    async def gas1(self, on: bool = True, *, momentary: bool = False) -> None: await self.write_switch("G1", on, momentary=momentary)
-    async def gas2(self, on: bool = True, *, momentary: bool = False) -> None: await self.write_switch("G2", on, momentary=momentary)
+    async def air(self) -> bool: 
+        return bool(await self.read_bit("AIR"))
+
+    async def water(self) -> bool:
+        return bool(await self.read_bit("WATER"))
+
+    async def gauge1(self) -> bool:
+        return bool(await self.read_bit("G1"))
+
+    async def gauge2(self) -> bool:
+        return bool(await self.read_bit("G2"))
 
     async def shutter1(self, on: bool = True, *, momentary: bool = False) -> None: await self.write_switch("SHUTTER1", on, momentary=momentary)
     async def shutter2(self, on: bool = True, *, momentary: bool = False) -> None: await self.write_switch("SHUTTER2", on, momentary=momentary)

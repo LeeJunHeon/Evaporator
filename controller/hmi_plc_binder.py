@@ -54,8 +54,10 @@ class HmiPlcBinder(QObject):
         ButtonBinding("ms2powerBtn", "POWER_2_SW"),
     )
 
-    # ✅ EV 기준: GAS 제거, AIR/WATER만 유지
+    # ✅ AIR/WATER/G1/G2
     INDICATORS: Dict[str, str] = {
+        "g1": "GAUGE_1_SW",
+        "g2": "GAUGE_2_SW",
         "air": "AIR_SW",
         "water": "WATER_SW",
     }

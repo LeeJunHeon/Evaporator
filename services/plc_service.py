@@ -428,7 +428,7 @@ class PlcServiceWorker(QThread):
         - 0..12 / 32..33 영역을 block read로 읽어 요청 횟수 최소화
         """
         block0 = await plc.read_coils_block(0, 13)   # 0..12
-        block1 = await plc.read_coils_block(32, 2)   # 32..33 (AIR/WATER만)
+        block1 = await plc.read_coils_block(32, 4)   # 32..35 (AIR/WATER + GAUGE1/2)
 
         out: Dict[str, bool] = {
             "R_P_SW": bool(block0[0]),
@@ -447,6 +447,8 @@ class PlcServiceWorker(QThread):
 
             "AIR_SW": bool(block1[0]),
             "WATER_SW": bool(block1[1]),
+            "GAUGE_1_SW": bool(block1[2]),
+            "GAUGE_2_SW": bool(block1[3]),
         }
         return out
 

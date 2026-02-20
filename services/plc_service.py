@@ -347,7 +347,12 @@ class PlcServiceWorker(QThread):
                 result: Any = True
 
             elif isinstance(cmd, CmdWriteReg):
-                await plc.write_reg_name(cmd.reg_name, int(cmd.value))
+                # ✅ DAC는 clamp 포함된 set_dac_power로 통일
+                if cmd.reg_name in ("DAC_POWER_1", "DAC_POWER_2"):
+                    ch = 1 if cmd.reg_name.endswith("_1") else 2
+                    await plc.set_dac_power(ch, int(cmd.value))
+                else:
+                    await plc.write_reg_name(cmd.reg_name, int(cmd.value))
                 result = True
 
             else:

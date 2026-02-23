@@ -29,7 +29,6 @@ from process.models import (
     ProcessRecipe,
     StepType,
     StopMode,
-    OnTimeout,
     KNOWN_COILS,
 )
 
@@ -108,25 +107,30 @@ def default_safety_plan() -> SafetyPlan:
     - 확실히 안전하다고 단정하기 어려운(밸브/펌프/door/vent 등) 동작은 기본에서 제외.
     - 최소한의 위험 요소(가스/파워)를 끄는 방향으로만 구성.
     """
-    # 기본 OFF 대상 (네 프로젝트 KNOWN_COILS에 존재하는 이름만)
-    gas_off = ["GAS_1_SW", "GAS_2_SW"]
+    # ✅ 엔진의 안전 시퀀스와 통일: shutter close → DAC 0 → power off (+ FTM off)
+    shutter_close = ["MAIN_SHUTTER_SW", "SHUTTER_1_SW", "SHUTTER_2_SW"]
     power_off = ["POWER_1_SW", "POWER_2_SW"]
+    ftm_off = ["FTM_SW"]
 
     stop_steps: List[ProcessStep] = []
     abort_steps: List[ProcessStep] = []
     estop_steps: List[ProcessStep] = []
 
-    # STOP: GAS OFF -> (0.2s) -> POWER OFF
-    stop_steps += _make_log("SAFETY_STOP_BEGIN", "SAFETY", "STOP: GAS OFF -> POWER OFF")
-    stop_steps += _make_off_steps(gas_off, prefix="STOP_GAS_OFF")
+    # STOP: SHUTTER close -> (0.2s) -> DAC 0 -> POWER OFF -> FTM OFF
+    stop_steps += _make_log("SAFETY_STOP_BEGIN", "SAFETY", "STOP: SHUTTER close -> DAC0 -> POWER OFF")
+    stop_steps += _make_off_steps(shutter_close, prefix="STOP_SHUTTER_CLOSE")
     stop_steps += [_make_wait("STOP_WAIT_0P2", 0.2)]
+    stop_steps += _make_write_reg_steps(["DAC_POWER_1", "DAC_POWER_2"], value=0, prefix="STOP_DAC0")
     stop_steps += _make_off_steps(power_off, prefix="STOP_POWER_OFF")
+    stop_steps += _make_off_steps(ftm_off, prefix="STOP_FTM_OFF")
     stop_steps += _make_log("SAFETY_STOP_END", "SAFETY", "STOP safety sequence finished")
 
-    # ABORT: GAS OFF + POWER OFF (빠르게)
-    abort_steps += _make_log("SAFETY_ABORT_BEGIN", "SAFETY", "ABORT: GAS OFF + POWER OFF (fast)")
-    abort_steps += _make_off_steps(gas_off, prefix="ABORT_GAS_OFF")
+    # ABORT: SHUTTER close + DAC 0 + POWER OFF (빠르게)
+    abort_steps += _make_log("SAFETY_ABORT_BEGIN", "SAFETY", "ABORT: SHUTTER close + DAC0 + POWER OFF (fast)")
+    abort_steps += _make_off_steps(shutter_close, prefix="ABORT_SHUTTER_CLOSE")
+    abort_steps += _make_write_reg_steps(["DAC_POWER_1", "DAC_POWER_2"], value=0, prefix="ABORT_DAC0")
     abort_steps += _make_off_steps(power_off, prefix="ABORT_POWER_OFF")
+    abort_steps += _make_off_steps(ftm_off, prefix="ABORT_FTM_OFF")
     abort_steps += _make_log("SAFETY_ABORT_END", "SAFETY", "ABORT safety sequence finished")
 
     # ESTOP: 엔진 개입 최소 (하드웨어/PLC 인터락 우선)
@@ -179,7 +183,7 @@ def build_safety_recipe(
         recipe_name=name,
         steps=steps,
         default_poll_s=0.2,
-        telemetry_interval_s=0.5,
+        telemetry_interval_s=1.0,
         operator="",
         note=f"safety recipe for {mode.value}",
         meta={"mode": mode.value},
@@ -276,6 +280,21 @@ def _make_off_steps(coils: Sequence[str], *, prefix: str) -> List[ProcessStep]:
                 coil=str(c),
                 on=False,
                 meta={"reason": "safety_off"},
+            )
+        )
+    return out
+
+
+def _make_write_reg_steps(regs: Sequence[str], *, value: int, prefix: str) -> List[ProcessStep]:
+    out: List[ProcessStep] = []
+    for i, r in enumerate(regs):
+        out.append(
+            ProcessStep(
+                name=f"{prefix}_{i+1:02d}",
+                type=StepType.PLC_WRITE_REG,
+                reg=str(r),
+                value=int(value),
+                meta={"reason": "safety_reg"},
             )
         )
     return out

@@ -20,6 +20,7 @@ import queue
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Dict, Any
+from configparser import ConfigParser
 from concurrent.futures import Future
 
 from PySide6.QtCore import QObject, QThread, Signal
@@ -91,7 +92,7 @@ class STMServiceWorker(QThread):
         *,
         poll_s: float = 0.25,
         reconnect_interval_s: float = 1.0,
-        max_fail_before_close: int = 2,
+        max_fail_before_close: int = 6,  # ✅ 기본 2 → 6 (io_policy 철학과 정렬)
         parent: Optional[QObject] = None,
     ):
         super().__init__(parent)
@@ -113,6 +114,11 @@ class STMServiceWorker(QThread):
 
         self._fail_count: int = 0
         self._next_try: float = 0.0
+
+        self._conn_backoff_base_s = float(self._reconnect_interval_s)  # ini 로딩 전 임시
+        self._conn_backoff_factor = 1.7
+        self._conn_backoff_max_s = max(self._conn_backoff_base_s, 5.0)
+        self._conn_backoff_s = float(self._reconnect_interval_s)
 
     # ---------- public (main thread) ----------
     def stop(self) -> None:
@@ -214,8 +220,51 @@ class STMServiceWorker(QThread):
 
             # _CmdReload 등은 Future가 없으니 무시
 
+    def _load_io_policy_from_ini(self) -> Dict[str, Any]:
+        """
+        devices.ini:
+        - [stm100]에 값이 있으면 우선
+        - 없으면 [io_policy] fallback
+        """
+        cfg = ConfigParser(interpolation=None)
+        cfg.read(self._ini_path, encoding="utf-8")
+
+        dev = "stm100"
+        io = "io_policy"
+
+        def _get_int(key: str, default: int) -> int:
+            if cfg.has_option(dev, key):
+                return cfg.getint(dev, key)
+            if cfg.has_option(io, key):
+                return cfg.getint(io, key)
+            return default
+
+        def _get_float(key: str, default: float) -> float:
+            if cfg.has_option(dev, key):
+                return cfg.getfloat(dev, key)
+            if cfg.has_option(io, key):
+                return cfg.getfloat(io, key)
+            return default
+
+        return {
+            "io_err_allow": _get_int("io_err_allow", 5),
+            "io_retry_sleep_s": _get_float("io_retry_sleep_s", 0.05),
+            "io_reconnect_max": _get_int("io_reconnect_max", 2),
+            "reconnect_backoff_base_s": _get_float("reconnect_backoff_base_s", 0.6),
+            "reconnect_backoff_factor": _get_float("reconnect_backoff_factor", 1.7),
+            "reconnect_backoff_max_s": _get_float("reconnect_backoff_max_s", 5.0),
+        }
+
     def _build_device_from_ini(self) -> STM100:
         s = load_settings(self._ini_path, "stm100")
+        pol = self._load_io_policy_from_ini()
+
+        # ✅ 서비스의 connect 백오프도 io_policy로 통일
+        self._conn_backoff_base_s = max(0.2, float(pol["reconnect_backoff_base_s"]))
+        self._conn_backoff_factor = max(1.0, float(pol["reconnect_backoff_factor"]))
+        self._conn_backoff_max_s = max(self._conn_backoff_base_s, float(pol["reconnect_backoff_max_s"]))
+        self._conn_backoff_s = self._conn_backoff_base_s  # reset
+
         return STM100(
             port=s.port,
             baudrate=s.baudrate,
@@ -226,6 +275,14 @@ class STMServiceWorker(QThread):
             write_timeout_s=s.write_timeout_s,
             rtscts=s.rtscts,
             dsrdtr=s.dsrdtr,
+
+            # ✅ io_policy (devices.ini [io_policy] 공유)
+            io_err_allow=int(pol["io_err_allow"]),
+            io_retry_sleep_s=float(pol["io_retry_sleep_s"]),
+            io_reconnect_max=int(pol["io_reconnect_max"]),
+            reconnect_backoff_base_s=float(pol["reconnect_backoff_base_s"]),
+            reconnect_backoff_factor=float(pol["reconnect_backoff_factor"]),
+            reconnect_backoff_max_s=float(pol["reconnect_backoff_max_s"]),
         )
 
     def _safe_close(self) -> None:
@@ -250,6 +307,7 @@ class STMServiceWorker(QThread):
         self._set_connected(False)
         self._fail_count = 0
         self._next_try = 0.0
+        self._conn_backoff_s = float(self._conn_backoff_base_s)  # ✅ 추가
         self.sig_error.emit(f"[STMService] reload ini -> {self._ini_path}")
 
     def _ensure_connected_for_cmd(self) -> None:
@@ -346,18 +404,24 @@ class STMServiceWorker(QThread):
                 self._stm = self._build_device_from_ini()
             except Exception as e:
                 self.sig_error.emit(f"[STMService] build device failed: {e!r} (ini={self._ini_path})")
-                self._next_try = now + self._reconnect_interval_s
+                self._next_try = now + float(self._conn_backoff_s)
+                self._conn_backoff_s = min(float(self._conn_backoff_s) * float(self._conn_backoff_factor),
+                                        float(self._conn_backoff_max_s))
                 return
 
         try:
             self._stm.connect()
             self._set_connected(True)
             self._fail_count = 0
+            self._conn_backoff_s = float(self._conn_backoff_base_s)  # ✅ 성공 시 reset
         except Exception as e:
             self._set_connected(False)
             self.sig_error.emit(f"[STMService] connect failed: {e!r}")
             self._safe_close()
-            self._next_try = now + self._reconnect_interval_s
+
+            self._next_try = now + float(self._conn_backoff_s)
+            self._conn_backoff_s = min(float(self._conn_backoff_s) * float(self._conn_backoff_factor),
+                                    float(self._conn_backoff_max_s))
 
     def _poll_once(self, now: float) -> bool:
         """
@@ -394,10 +458,12 @@ class STMServiceWorker(QThread):
             self.sig_error.emit(f"[STMService] poll failed: {e!r} (fail={self._fail_count})")
 
             if self._fail_count >= self._max_fail_before_close:
-                # 완전 끊김으로 보고 close 후 재연결 사이클로
                 self._safe_close()
                 self._set_connected(False)
-                self._next_try = now + self._reconnect_interval_s
+
+                self._next_try = now + float(self._conn_backoff_s)
+                self._conn_backoff_s = min(float(self._conn_backoff_s) * float(self._conn_backoff_factor),
+                                        float(self._conn_backoff_max_s))
 
             return False
 

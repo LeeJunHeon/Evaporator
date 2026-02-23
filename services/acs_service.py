@@ -21,6 +21,7 @@ import queue
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Dict, Any
+from configparser import ConfigParser
 
 from PySide6.QtCore import QObject, QThread, Signal
 
@@ -111,6 +112,11 @@ class ACSServiceWorker(QThread):
         self._fail_count: int = 0
         self._next_try: float = 0.0
 
+        self._conn_backoff_base_s = float(self._reconnect_interval_s)  # ini 로딩 전 임시
+        self._conn_backoff_factor = 1.7
+        self._conn_backoff_max_s = 5.0
+        self._conn_backoff_s = float(self._reconnect_interval_s)
+
     # ---------- public (main thread) ----------
     def stop(self) -> None:
         self._stop_evt.set()
@@ -153,6 +159,15 @@ class ACSServiceWorker(QThread):
     # ---------- internals ----------
     def _build_device_from_ini(self) -> ACS2000:
         s = load_settings(self._ini_path, "acs2000")
+
+        pol = self._load_io_policy_from_ini()
+
+        # ✅ connect 단계 백오프도 동일 정책으로 통일
+        self._conn_backoff_base_s = max(0.2, float(pol["reconnect_backoff_base_s"]))
+        self._conn_backoff_factor = max(1.0, float(pol["reconnect_backoff_factor"]))
+        self._conn_backoff_max_s = max(self._conn_backoff_base_s, float(pol["reconnect_backoff_max_s"]))
+        self._conn_backoff_s = self._conn_backoff_base_s  # reset
+
         return ACS2000(
             port=s.port,
             baudrate=s.baudrate,
@@ -164,7 +179,50 @@ class ACSServiceWorker(QThread):
             rtscts=s.rtscts,
             dsrdtr=s.dsrdtr,
             eom=s.eom or "CR",
+
+            # ✅ io_policy (devices.ini [io_policy] 공유)
+            io_err_allow=int(pol["io_err_allow"]),
+            io_retry_sleep_s=float(pol["io_retry_sleep_s"]),
+            io_reconnect_max=int(pol["io_reconnect_max"]),
+            reconnect_backoff_base_s=float(pol["reconnect_backoff_base_s"]),
+            reconnect_backoff_factor=float(pol["reconnect_backoff_factor"]),
+            reconnect_backoff_max_s=float(pol["reconnect_backoff_max_s"]),
         )
+    
+    def _load_io_policy_from_ini(self) -> Dict[str, Any]:
+        """
+        devices.ini:
+        - [acs2000]에 값이 있으면 우선
+        - 없으면 [io_policy] fallback
+        """
+        cfg = ConfigParser(interpolation=None)
+        cfg.read(self._ini_path, encoding="utf-8")
+
+        dev = "acs2000"
+        io = "io_policy"
+
+        def _get_int(key: str, default: int) -> int:
+            if cfg.has_option(dev, key):
+                return cfg.getint(dev, key)
+            if cfg.has_option(io, key):
+                return cfg.getint(io, key)
+            return default
+
+        def _get_float(key: str, default: float) -> float:
+            if cfg.has_option(dev, key):
+                return cfg.getfloat(dev, key)
+            if cfg.has_option(io, key):
+                return cfg.getfloat(io, key)
+            return default
+
+        return {
+            "io_err_allow": _get_int("io_err_allow", 5),
+            "io_retry_sleep_s": _get_float("io_retry_sleep_s", 0.05),
+            "io_reconnect_max": _get_int("io_reconnect_max", 2),
+            "reconnect_backoff_base_s": _get_float("reconnect_backoff_base_s", 0.6),
+            "reconnect_backoff_factor": _get_float("reconnect_backoff_factor", 1.7),
+            "reconnect_backoff_max_s": _get_float("reconnect_backoff_max_s", 5.0),
+        }
 
     def _safe_close(self) -> None:
         if self._acs is None:
@@ -185,7 +243,7 @@ class ACSServiceWorker(QThread):
     def _apply_stream_mode_if_needed(self) -> None:
         """
         연결 직후 stream 모드 설정이 켜져 있으면 stream 시작.
-        실패하면 query 모드로 자동 폴백.
+        실패하면 close 후 재연결해서 다시 stream을 시도한다(폴백 없음).
         """
         if not self._use_stream:
             return
@@ -196,9 +254,11 @@ class ACSServiceWorker(QThread):
             self._acs.start_pressure_stream(interval_a=self._stream_interval_a)
             self.sig_error.emit(f"[ACSService] stream mode ON (A={self._stream_interval_a})")
         except Exception as e:
-            # stream 실패 -> query 폴백
-            self.sig_error.emit(f"[ACSService] stream start failed -> fallback to query: {e!r}")
-            self._use_stream = False
+            # ✅ 폴백하지 말고, 다음 루프에서 재연결 후 다시 stream 시도
+            self.sig_error.emit(f"[ACSService] stream start failed -> reconnect: {e!r}")
+            self._safe_close()
+            self._set_connected(False)
+            self._next_try = time.time() + 0.1
 
     def _handle_reload(self, ini_path: Path) -> None:
         self._ini_path = Path(ini_path)
@@ -252,19 +312,30 @@ class ACSServiceWorker(QThread):
                 self._acs = self._build_device_from_ini()
             except Exception as e:
                 self.sig_error.emit(f"[ACSService] build device failed: {e!r} (ini={self._ini_path})")
-                self._next_try = now + self._reconnect_interval_s
+
+                self._next_try = now + float(self._conn_backoff_s)
+                self._conn_backoff_s = min(float(self._conn_backoff_s) * float(self._conn_backoff_factor),
+                                        float(self._conn_backoff_max_s))
                 return
 
         try:
             self._acs.connect()
             self._set_connected(True)
             self._fail_count = 0
+
+            # ✅ 성공하면 connect backoff reset
+            self._conn_backoff_s = float(self._conn_backoff_base_s)
+
             self._apply_stream_mode_if_needed()
         except Exception as e:
             self._set_connected(False)
             self.sig_error.emit(f"[ACSService] connect failed: {e!r}")
             self._safe_close()
-            self._next_try = now + self._reconnect_interval_s
+
+            # ✅ 백오프 적용
+            self._next_try = now + float(self._conn_backoff_s)
+            self._conn_backoff_s = min(float(self._conn_backoff_s) * float(self._conn_backoff_factor),
+                                    float(self._conn_backoff_max_s))
 
     @staticmethod
     def _parse_pressure_any(s: str) -> float:
@@ -295,11 +366,43 @@ class ACSServiceWorker(QThread):
 
         try:
             if self._use_stream:
-                # ✅ CON 스트림은 status OK(0)일 때만 pressure 인정
-                pr = float(self._acs.read_stream_pressure_value(timeout_s=1.5))
-            else:
-                pr = float(self._acs.query_pressure(channel=self._channel))
+                sample = self._acs.read_stream_sample(timeout_s=1.5)  # ✅ status 포함 dict
 
+                # ok일 때만 pressure 갱신/emit
+                if sample.get("ok"):
+                    pr = float(sample["pressure"])
+                    self._last_pressure = pr
+                    self.sig_pressure.emit(pr)
+                    pressure_for_snap: Optional[float] = pr
+                else:
+                    # ✅ Or/Ur/NoGauge: 통신 실패 아님. pressure는 None로 기록하고 UI는 이전 표시 유지
+                    pressure_for_snap = None
+
+                snap = ACSSnapshot(
+                    ts=now,
+                    connected=True,
+                    pressure=pressure_for_snap,
+                    meta={
+                        "fail_count": self._fail_count,
+                        "channel": self._channel,
+                        "use_stream": True,
+                        "stream_interval_a": self._stream_interval_a,
+                        "status": sample.get("status"),
+                        "status_text": sample.get("status_text"),
+                        "raw": sample.get("raw"),
+                        "pressure_last": self._last_pressure,
+                        "ok": bool(sample.get("ok")),
+                    },
+                )
+                self._last_snapshot = snap
+                self.sig_snapshot.emit(snap)
+
+                # ✅ bad status는 fail_count 증가시키지 않음
+                self._fail_count = 0
+                return bool(sample.get("ok"))
+
+            # ---- query mode ----
+            pr = float(self._acs.query_pressure(channel=self._channel))
             self._last_pressure = pr
             self.sig_pressure.emit(pr)
 
@@ -310,8 +413,7 @@ class ACSServiceWorker(QThread):
                 meta={
                     "fail_count": self._fail_count,
                     "channel": self._channel,
-                    "use_stream": self._use_stream,
-                    "stream_interval_a": self._stream_interval_a,
+                    "use_stream": False,
                 },
             )
             self._last_snapshot = snap
@@ -321,33 +423,32 @@ class ACSServiceWorker(QThread):
             return True
 
         except Exception as e:
-            # ✅ stream(CON)에서의 에러(예: Or/Ur/NoGauge)는 "통신 실패"가 아닐 수 있음
-            # -> UI는 이전 값 유지(emit 안 함), 로그만 남기고 다음 poll에서 재시도
-            if self._use_stream:
-                self.sig_error.emit(f"[ACSService] stream read failed (keep last): {e!r}")
-                snap = ACSSnapshot(
-                    ts=now,
-                    connected=bool(self._connected),
-                    pressure=self._last_pressure,  # ✅ 이전 값 유지
-                    meta={
-                        "fail_count": self._fail_count,
-                        "channel": self._channel,
-                        "use_stream": self._use_stream,
-                        "stream_interval_a": self._stream_interval_a,
-                        "stream_err": repr(e),
-                    },
-                )
-                self._last_snapshot = snap
-                self.sig_snapshot.emit(snap)
-                return False
-
-            # query 모드 실패는 기존대로 fail count 증가/재연결
+            # ✅ stream/query 공통: "진짜 통신 실패"만 fail_count에 반영
             self._fail_count += 1
             self.sig_error.emit(f"[ACSService] poll failed: {e!r} (fail={self._fail_count})")
+
+            snap = ACSSnapshot(
+                ts=now,
+                connected=bool(self._connected),
+                pressure=self._last_pressure,
+                meta={
+                    "fail_count": self._fail_count,
+                    "channel": self._channel,
+                    "use_stream": self._use_stream,
+                    "stream_interval_a": self._stream_interval_a,
+                    "err": repr(e),
+                },
+            )
+            self._last_snapshot = snap
+            self.sig_snapshot.emit(snap)
+
             if self._fail_count >= self._max_fail_before_close:
                 self._safe_close()
                 self._set_connected(False)
-                self._next_try = now + self._reconnect_interval_s
+
+                self._next_try = now + float(self._conn_backoff_s)
+                self._conn_backoff_s = min(float(self._conn_backoff_s) * float(self._conn_backoff_factor),
+                                        float(self._conn_backoff_max_s))
             return False
 
     def _main_loop(self) -> None:

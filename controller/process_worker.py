@@ -20,8 +20,8 @@ from typing import Optional
 from PySide6.QtCore import QThread, Signal, QObject
 
 # Import (패키지 실행만 지원: python -m Evaporator_Program.main / exe)
-from ..process.engine import ProcessEngine, EngineCallbacks, EngineResult
-from ..process.models import ProcessRecipe, ProcessError, StopMode
+from process.engine import ProcessEngine, EngineCallbacks, EngineResult
+from process.models import ProcessRecipe, ProcessError, StopMode
 
 
 class ProcessWorker(QThread):

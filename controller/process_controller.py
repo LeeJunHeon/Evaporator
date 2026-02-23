@@ -22,20 +22,17 @@ from PySide6.QtCore import QObject, Signal
 # ------------------------------------------------------------
 # Import (패키지 실행만 지원)
 # ------------------------------------------------------------
-from ..process.models import (
+from process.models import (
     ProcessRecipe,
     ProcessError,
     StopMode,
     ProcessStep,
     StepType,
 )
-from ..process.recipe_io import (
-    load_recipe,
-    save_recipe,
-)
-from ..process.engine import ProcessEngine, EngineResult
-from ..services.plc_service import PLCService
-from ..services.log_service import LogService
+from process.recipe_io import load_recipe, save_recipe
+from process.engine import ProcessEngine, EngineResult
+from services.plc_service import PLCService
+from services.log_service import LogService
 
 from .process_worker import ProcessWorker
 

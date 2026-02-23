@@ -346,11 +346,12 @@ class ProcessWindow(QWidget):
         try:
             # ✅ 1) FTM 먼저 ON (STM 연결 선행 조건)
             binder = getattr(self.hmi_window, "_plc_binder", None)
-            if binder is not None:
-                binder.enqueue_write("FTM_SW", True)
-                _append_text(self.ui.logWindow, "[DEV] FTM_SW -> ON (before STM connect)")
-            else:
-                _append_text(self.ui.logWindow, "[DEV][WARN] plc_binder is None (cannot turn on FTM_SW)")
+            if binder is None:
+                _append_text(self.ui.logWindow, "[DEV][ERR] plc_binder is None (cannot turn on FTM_SW) -> abort STM connect")
+                return False
+
+            binder.enqueue_write("FTM_SW", True)
+            _append_text(self.ui.logWindow, "[DEV] FTM_SW -> ON (before STM connect)")
 
             # ✅ 2) 잠깐 대기(장비 전원/통신 준비)
             time.sleep(1.5)
@@ -416,11 +417,22 @@ class ProcessWindow(QWidget):
         _append_text(self.ui.logWindow, "[DEV] STM released + gc.collect() (ACS kept alive)")
 
     def _on_start_clicked(self) -> None:
+        pc = self._process_controller
+        if pc is None:
+            QMessageBox.warning(self, "Process", "ProcessController가 연결되지 않았습니다.")
+            return
+
+        # ✅ 1) UI 입력값 먼저 검증
+        run_cfg = self._collect_ui_run_cfg()
+        if run_cfg is None:
+            return
+
+        # ✅ 2) 그 다음 FTM ON → STM 연결
         if not self._ensure_sensors_connected_fresh():
             QMessageBox.warning(self, "Device", "STM 연결 실패")
             return
 
-        # ✅ (추가) STM UI 바인딩 + RT 시작
+        # ✅ 3) STM UI 바인딩 + RT 시작
         try:
             if self._stm_service is not None:
                 self._bind_stm_ui(self._stm_service)
@@ -428,19 +440,7 @@ class ProcessWindow(QWidget):
             pass
         self._rt_start()
 
-        pc = self._process_controller
-        if pc is None:
-            QMessageBox.warning(self, "Process", "ProcessController가 연결되지 않았습니다.")
-            self._rt_stop()
-            self._shutdown_sensors_and_release_memory()
-            return
-
-        run_cfg = self._collect_ui_run_cfg()
-        if run_cfg is None:
-            self._rt_stop()
-            self._shutdown_sensors_and_release_memory()
-            return
-
+        # ✅ 4) 공정 시작
         if not hasattr(pc, "start_from_ui"):
             QMessageBox.warning(self, "Process", "start_from_ui가 구현되어 있지 않습니다.\nProcessController에 start_from_ui를 추가하세요.")
             self._rt_stop()
@@ -707,7 +707,7 @@ class ProcessWindow(QWidget):
             return None
 
         # 입력값
-        target_rate = self._read_float("depositionRateEdit")
+        target_rate = self._read_float("deprateEdit" if p1 else "deprateEdit2")
         target_thk  = self._read_float("thicknessEdit")
         delay_min   = self._read_float("delayEdit")
 

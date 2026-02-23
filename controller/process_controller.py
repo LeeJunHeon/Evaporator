@@ -20,49 +20,24 @@ from PySide6.QtCore import QObject, Signal
 
 
 # ------------------------------------------------------------
-# Import (패키지/단일 실행 둘 다 대응)
+# Import (패키지 실행만 지원)
 # ------------------------------------------------------------
-try:
-    # 패키지 실행: python -m Evaporator_Program.main 형태
-    from ..process.models import (
-        ProcessRecipe,
-        ProcessError,
-        StopMode,
-        ProcessStep,
-        StepType,
-    )
-    from ..process.recipe_io import (
-        load_recipe,
-        save_recipe,
-    )
-    from ..process.engine import ProcessEngine, EngineResult
-    from ..services.plc_service import PLCService
-    from ..services.log_service import LogService
+from ..process.models import (
+    ProcessRecipe,
+    ProcessError,
+    StopMode,
+    ProcessStep,
+    StepType,
+)
+from ..process.recipe_io import (
+    load_recipe,
+    save_recipe,
+)
+from ..process.engine import ProcessEngine, EngineResult
+from ..services.plc_service import PLCService
+from ..services.log_service import LogService
 
-    from .process_worker import ProcessWorker
-
-except ImportError:
-    # 단일 실행/경로 설정이 다른 경우 fallback
-    from process.models import (
-        ProcessRecipe,
-        ProcessError,
-        StopMode,
-        ProcessStep,   # ✅ 추가
-        StepType,      # ✅ 추가
-    )
-    from process.recipe_io import (
-        load_recipe,
-        save_recipe,
-    )
-    from process.engine import ProcessEngine, EngineResult
-    from services.plc_service import PLCService
-    from services.log_service import LogService
-
-    # 실행 방식에 따라 controller.process_worker 또는 process_worker로 접근될 수 있음
-    try:
-        from controller.process_worker import ProcessWorker
-    except ImportError:
-        from process_worker import ProcessWorker
+from .process_worker import ProcessWorker
 
 
 class ProcessController(QObject):
@@ -197,32 +172,47 @@ class ProcessController(QObject):
                 # --- 공정 기본 ---
                 "use_power1": use_p1,
                 "use_power2": use_p2,
-                "material_name": material,
+                "material_name": material,   # ✅ 중복 제거
                 "density": density,
                 "z_factor": z_factor,
                 "target_rate": target_rate,
                 "target_thickness": target_th,
                 "delay_min": delay_min,
 
-                # --- 요구사항 기반 제어 파라미터 ---
-                # 1초에 DAC 100씩
-                "ramp_step_dac": 100,        # 엔진이 읽는 키
-                "fine_step_dac": 50,         # 엔진이 읽는 키(현재 엔진 기본 50이니 명시해도 좋음)
-                "ramp_interval_s": 1.0,      # 엔진이 읽는 키(현재 기본 1.0)
+                # --- 안전/제한 ---
+                "dac_max": 4000,                 # ✅ DAC 4000 넘지 않도록
+                "sensor_none_abort_s": 5.0,      # ✅ rate/thickness가 None 지속 시 중단(엔진이 사용)
 
-                # 목표 dep.rate ±5% 이내면 delay 시작
-                "rate_tol_ratio": 0.05,
+                # --- 램프업 파라미터(요구사항) ---
+                "ramp_step_dac": 100,
+                "fine_step_dac": 50,
 
-                # dep.rate 70% 이상 급감(= 현재가 기준의 30% 미만) 시 abort
-                "rate_drop_ratio": 0.30,
+                # ✅ DAC 1000 전/후 템포 분리(엔진이 지원하는 경우 사용)
+                "ramp_fast_until_dac": 1000,
+                "ramp_interval_fast_s": 1.0,     # < 1000 : 1초에 100
+                "ramp_interval_slow_s": 10.0,    # >=1000 : 10초에 100
+
+                # ✅ (구 엔진 호환/혹은 단일 템포 필요 시)
+                "ramp_interval_s": 1.0,
+
+                # --- 목표 도달/보정 ---
+                "rate_tol_ratio": 0.05,          # target ±5% 이내면 delay 시작
+                "rate_drop_ratio": 0.30,         # 급락 판단(현재가 기준의 30% 미만)
                 "rate_drop_count": 3,
 
-                # dep.rate 0.4 도달 후 2분 대기 → target_rate 램프
-                # (※ engine.py도 이 키를 읽도록 수정해야 실제로 동작)
+                # --- pre-rate 홀드 ---
                 "pre_rate": 0.4,
                 "pre_hold_s": 120.0,
 
-                # FTM ON 이후 STM 안정화 대기(요구사항 1.5초)
+                # --- stuck 가드(“안 오르는데 무조건 DAC 올리지 않기”) ---
+                "stuck_dac_guard": 1500,
+                "stuck_rate_abs": 0.05,
+                "stuck_time_s": 60.0,
+
+                # --- shutter delay 후 STM zero 모드(두께+타이머) ---
+                "zero_mode": "B",
+
+                # --- FTM/STM 안정화 ---
                 "wait_after_ftm_on_s": 1.5,
 
                 "source_shutter_coil": source_shutter_coil,

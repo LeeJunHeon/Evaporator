@@ -35,7 +35,7 @@ from config.plc_config import PLCSettings
 class _CmdBase:
     tag: str = ""
     reply: Any = None
-    retries_left: int = 2   # ✅ 기본 2회 재시도(총 3번: 최초+2)
+    retries_left: int = 0   # ✅ 디바이스(plc.py)의 io_policy에 맡김 (서비스 기본 재시도는 끔)
 
 
 @dataclass
@@ -184,6 +184,8 @@ class PlcServiceWorker(QThread):
     # -------------------------------
     async def _main(self) -> None:
         plc = AsyncPLC(
+            settings=self._settings,   # ✅ 여기 추가 (io_policy 포함, ini 재로드 방지)
+
             port=self._settings.port,
             method=self._settings.method,  # ✅ 설정값 그대로 사용
             baudrate=self._settings.baudrate,
@@ -208,11 +210,12 @@ class PlcServiceWorker(QThread):
                 self.sig_connected.emit(v)
 
         async def connect_until_ok() -> None:
-            """
-            끊김/미응답 시 재시도 루프.
-            - AsyncPLC.connect() 내부에서 ping 검증까지 수행
-            """
-            retry_s = max(0.2, float(getattr(self._settings, "reconnect_interval_s", 1.0) or 1.0))
+            base = float(getattr(self._settings, "reconnect_backoff_base_s", getattr(self._settings, "reconnect_interval_s", 0.6)) or 0.6)
+            factor = float(getattr(self._settings, "reconnect_backoff_factor", 1.7) or 1.7)
+            max_s = float(getattr(self._settings, "reconnect_backoff_max_s", 5.0) or 5.0)
+
+            backoff = max(0.2, base)
+
             while not self._stop_evt.is_set():
                 try:
                     await plc.connect()
@@ -220,26 +223,26 @@ class PlcServiceWorker(QThread):
                     return
                 except Exception as e:
                     _emit_connected(False)
-                    # ⚠️ sig_error는 반드시 str 1개만 emit
-                    msg = (
+                    self.sig_error.emit(
                         f"[PLCService] connect failed: {e!r} "
                         f"(port={self._settings.port} baud={self._settings.baudrate} "
                         f"8{self._settings.parity}{self._settings.stopbits} unit={self._settings.unit} "
                         f"timeout={float(self._settings.timeout_s):.3f}s)"
                     )
-                    self.sig_error.emit(msg)
                     try:
                         await plc.close()
                     except Exception:
                         pass
-                    await asyncio.sleep(retry_s)
+
+                    await asyncio.sleep(backoff)
+                    backoff = min(backoff * factor, max_s)
 
         await connect_until_ok()
 
         consecutive_fail = 0
         max_consecutive_fail = 3  # 환경에 따라 2~5 추천
 
-        poll_s = float(getattr(self._settings, "poll_interval_s", 0.25) or 0.25)
+        poll_s = float(getattr(self._settings, "poll_interval_s", 1.0) or 1.0)
         # ✅ 0 허용하면 busy-loop 위험 → 최소 50ms 보장
         if poll_s < 0.05:
             poll_s = 0.05

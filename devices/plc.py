@@ -205,7 +205,7 @@ class AsyncPLC:
         baud_v = int(baudrate if baudrate is not None else base.baudrate)
         bytesize_v = int(bytesize if bytesize is not None else base.bytesize)
 
-        parity_raw = parity if parity is not None else getattr(base, "parity", "N")
+        parity_raw = parity if parity is not None else base.parity
         parity_v = self._normalize_parity(parity_raw)
 
         stop_v = int(stopbits if stopbits is not None else base.stopbits)

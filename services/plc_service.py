@@ -144,8 +144,15 @@ class PlcServiceWorker(QThread):
         def _put() -> None:
             try:
                 q.put_nowait(cmd)
-            except Exception:
-                pass
+            except Exception as e:
+                # ✅ submit(reply)인 경우 future가 pending으로 남지 않게 예외 처리
+                fut = getattr(cmd, "reply", None)
+                if fut is not None:
+                    try:
+                        if not fut.done():
+                            fut.set_exception(e)
+                    except Exception:
+                        pass
 
         loop.call_soon_threadsafe(_put)
 
@@ -296,7 +303,12 @@ class PlcServiceWorker(QThread):
                 await connect_until_ok()
                 consecutive_fail = 0
 
-        # 종료 정리
+        # 종료 정리: pending reply future 정리 후 close
+        try:
+            await self._finalize_pending_replies("PLCService stopped")
+        except Exception:
+            pass
+
         try:
             await plc.close()
         except Exception:
@@ -461,6 +473,46 @@ class PlcServiceWorker(QThread):
         out["DAC_POWER_1"] = int(await plc.read_reg_name("DAC_POWER_1"))
         out["DAC_POWER_2"] = int(await plc.read_reg_name("DAC_POWER_2"))
         return out
+    
+    async def _finalize_pending_replies(self, reason: str) -> None:
+        """
+        워커 종료/stop 시 submit(reply Future)들이 pending으로 남지 않도록
+        큐/리트라이 슬롯의 Future를 예외로 완료 처리.
+        """
+        exc = RuntimeError(reason)
+
+        # retry 슬롯 먼저 정리
+        if self._retry_cmd is not None:
+            cmd = self._retry_cmd
+            self._retry_cmd = None
+            fut = getattr(cmd, "reply", None)
+            if fut is not None:
+                try:
+                    if not fut.done():
+                        fut.set_exception(exc)
+                except Exception:
+                    pass
+
+        q = self._cmd_q
+        if not q:
+            return
+
+        while True:
+            try:
+                cmd = q.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+
+            if isinstance(cmd, CmdWakeup):
+                continue
+
+            fut = getattr(cmd, "reply", None)
+            if fut is not None:
+                try:
+                    if not fut.done():
+                        fut.set_exception(exc)
+                except Exception:
+                    pass
 
     # -------------------------------
     # Worker state access

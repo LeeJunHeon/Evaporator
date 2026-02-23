@@ -18,6 +18,12 @@ class STM100CommandError(SerialDeviceError):
 
 STX = 0x02  # Start of Text
 
+_DENSITY_MIN = 0.500
+_DENSITY_MAX = 99.99
+_Z_MIN = 0.100
+_Z_MAX = 9.999
+_Z_FILM_MAX = 99.99
+
 _OK_CODES = {"A", "B"}
 _CODE_MEANING = {
     "A": "OK (No reset)",
@@ -48,6 +54,11 @@ def _ensure_cmd_len(cmd: str) -> None:
     if not (1 <= len(b) <= 10):
         raise ValueError(f"STM-100 cmd too long: {cmd!r} (len={len(b)} bytes, must be 1~10)")
     
+
+def _ensure_range(name: str, v: float, lo: float, hi: float) -> None:
+    fv = float(v)
+    if not (lo <= fv <= hi):
+        raise ValueError(f"{name} out of range: {fv} (allowed {lo}..{hi})")
 
 def checksum_data_only(data: bytes) -> int:
     # Sycon STM-100: sum(DATA) & 0xFF
@@ -122,28 +133,41 @@ class STM100(BaseSerialDevice):
     예)  "T", "S", "@", "E=1.23", "F=1.234", "i5", "j5=0.75", "k5=0.50"
     """
 
-    def exchange(self, cmd: str, timeout_s: float = 1.0) -> STMReply:
+    def exchange(self, cmd: str, timeout_s: float = 1.0, *, retries: int = 2) -> STMReply:
         cmd = cmd.strip()
         if not cmd:
             raise ValueError("cmd empty")
 
         tx = build_frame(cmd)
 
-        with self._lock:
-            ser = self._require()
-            ser.reset_input_buffer()
-            ser.reset_output_buffer()
-            ser.write(tx)
-            ser.flush()
+        last_timeout: Exception | None = None
+        for attempt in range(int(retries) + 1):
+            with self._lock:
+                ser = self._require()
+                ser.reset_input_buffer()
+                ser.reset_output_buffer()
+                ser.write(tx)
+                ser.flush()
 
-            payload, chk_ok = read_frame(ser, timeout_s=timeout_s)
+                try:
+                    payload, chk_ok = read_frame(ser, timeout_s=timeout_s)
+                except TimeoutError as e:
+                    last_timeout = e
+                    # 다음 attempt로 재시도
+                    continue
 
-        if not chk_ok:
-            raise STM100ProtocolError(f"STM-100 checksum mismatch. rx={payload!r}")
+            # 체크섬 불일치도 (노이즈 등)면 재시도
+            if not chk_ok:
+                if attempt < retries:
+                    continue
+                raise STM100ProtocolError(f"STM-100 checksum mismatch. rx={payload!r}")
 
-        code = payload[0] if payload else ""
-        body = payload[1:] if len(payload) > 1 else ""
-        return STMReply(code=code, body=body, raw=payload)
+            code = payload[0] if payload else ""
+            body = payload[1:] if len(payload) > 1 else ""
+            return STMReply(code=code, body=body, raw=payload)
+
+        # 여기까지 오면 전부 timeout
+        raise TimeoutError(f"STM-100 exchange timeout after {retries+1} tries") from last_timeout
 
     # ✅ Table 5.2 전체를 커버하는 범용 API
     def command(
@@ -222,6 +246,7 @@ class STM100(BaseSerialDevice):
         """
         E= : Set current film density
         """
+        _ensure_range("density_g_cm3", density_g_cm3, _DENSITY_MIN, _DENSITY_MAX)
         v = _fmt_compact_float(density_g_cm3, max_decimals=3)
         cmd = f"E={v}"
         _ensure_cmd_len(cmd)
@@ -239,6 +264,7 @@ class STM100(BaseSerialDevice):
         """
         F= : Set current film Z-Factor
         """
+        _ensure_range("z_factor", z, _Z_MIN, _Z_MAX)
         v = _fmt_compact_float(z, max_decimals=3)
         cmd = f"F={v}"
         _ensure_cmd_len(cmd)
@@ -274,6 +300,9 @@ class STM100(BaseSerialDevice):
         n = int(film_no)
         if not (1 <= n <= 9):
             raise ValueError("film_no must be 1..9")
+        
+        _ensure_range("density_g_cm3", density_g_cm3, _DENSITY_MIN, _DENSITY_MAX)
+
         v = _fmt_compact_float(density_g_cm3, max_decimals=3)
         cmd = f"j{n}={v}"
         _ensure_cmd_len(cmd)
@@ -299,6 +328,9 @@ class STM100(BaseSerialDevice):
         n = int(film_no)
         if not (1 <= n <= 9):
             raise ValueError("film_no must be 1..9")
+        
+        _ensure_range("z_factor", z, _Z_MIN, _Z_FILM_MAX)
+
         v = _fmt_compact_float(z, max_decimals=3)
         cmd = f"k{n}={v}"
         _ensure_cmd_len(cmd)

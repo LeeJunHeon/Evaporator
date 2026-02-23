@@ -139,6 +139,20 @@ class HmiPlcBinder(QObject):
 
         self.settings = new_settings
 
+        # ✅ (중요) DAC UI range도 settings에 맞춰 갱신
+        #    - _wire_dac_controls() 재호출은 clicked 시그널 중복 연결 위험이 있으니
+        #      "range만" 안전하게 업데이트
+        try:
+            fs = int(getattr(self.settings, "dac_full_scale_code", 4000))
+            off = int(getattr(self.settings, "dac_offset_code", 0))
+            lo, hi = off, off + fs
+
+            for sp in (getattr(self, "_dac1_spin", None), getattr(self, "_dac2_spin", None)):
+                if sp is not None and hasattr(sp, "setRange"):
+                    sp.setRange(int(lo), int(hi))
+        except Exception:
+            pass
+
         # ✅ 새 서비스 생성/연결
         self._plc = PLCService(settings=new_settings, parent=self)
         self._plc.sig_connected.connect(self._on_connected)

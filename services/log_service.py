@@ -143,6 +143,10 @@ class LogWriterWorker(QThread):
         self._base_dir = Path(base_dir) if base_dir else (Path.cwd() / "_Logs")
         self._fallback_dir = Path.cwd() / f"_Logs_local_{_safe_name(self._app_name)}"
 
+        # ✅ base_dir 접근 테스트 캐시(매 로그마다 write_test 하지 않도록)
+        self._resolved_base_cache: Optional[Path] = None
+        self._resolved_base_checked_ts: float = 0.0
+
         # 파일 핸들
         self._day_log_fp = None             # YYYY-MM-DD/<app>.log
         self._day_log_path: Optional[Path] = None
@@ -158,6 +162,22 @@ class LogWriterWorker(QThread):
 
         # 현재 open된 "날짜 디렉터리" 캐시
         self._current_date_dir: Optional[str] = None
+
+        # ✅ run 메타 (telemetry 기본값 채우기용)
+        self._run_id: str = ""
+        self._run_recipe: str = ""
+        self._run_open_ts: float = 0.0
+        self._run_folder_name: str = ""
+
+        # ✅ telemetry 컬럼 고정(Excel에서 항상 동일 컬럼)
+        self._tele_fieldnames = [
+            "t", "elapsed_s", "step",
+            "pressure_torr",
+            "dac1", "dac2",
+            "rate_Aps", "thickness_A",
+            "run_id", "recipe",
+            "extras_json",
+        ]
 
     # ---------- public (thread-safe) ----------
     def post(self, cmd: _CmdBase) -> None:
@@ -202,9 +222,12 @@ class LogWriterWorker(QThread):
     def _handle_cmd(self, cmd: _CmdBase) -> None:
         if isinstance(cmd, CmdSetBaseDir):
             self._base_dir = Path(cmd.base_dir)
-            # 다음 기록부터 새 base_dir로 기록되도록 파일 핸들 닫기
+
+            # ✅ base_dir 바뀌면 캐시 초기화
+            self._resolved_base_cache = None
+            self._resolved_base_checked_ts = 0.0
+
             self._close_day_log()
-            # run은 유지하되, run_dir은 다음 open_run에서 새로 열도록 권장
             return
 
         if isinstance(cmd, CmdOpenRun):
@@ -233,28 +256,41 @@ class LogWriterWorker(QThread):
             self._close_day_log()
             # 다음 write 시 열도록 lazy open
 
-    def _resolve_base_dir(self) -> Path:
+    def _resolve_base_dir(self, *, force: bool = False) -> Path:
         """
-        base_dir 접근 실패 가능성이 있으므로 폴더 생성 테스트 후 폴백을 선택한다.
+        base_dir 접근 실패 가능성이 있으므로 폴더 생성/쓰기 테스트 후 폴백을 선택한다.
+        ✅ 단, 매번 테스트하면 NAS에 부담 → 캐시(기본 10초) 적용
         """
+        now = time.time()
+        if (not force) and self._resolved_base_cache is not None and (now - self._resolved_base_checked_ts) < 10.0:
+            return self._resolved_base_cache
+
+        self._resolved_base_checked_ts = now
+
+        # 1) base_dir 시도
         try:
             _ensure_dir(self._base_dir)
-            # 쓰기 테스트(폴더 권한/네트워크 문제)
             test_file = self._base_dir / ".write_test"
             with open(test_file, "w", encoding="utf-8") as f:
                 f.write("ok")
             try:
-                test_file.unlink(missing_ok=True)  # py3.8+ compatible in 3.11/3.13
+                test_file.unlink(missing_ok=True)
             except Exception:
                 pass
+
+            self._resolved_base_cache = self._base_dir
             return self._base_dir
         except Exception:
-            try:
-                _ensure_dir(self._fallback_dir)
-            except Exception:
-                # 최후: 현재 작업 디렉터리
-                return Path.cwd()
+            pass
+
+        # 2) fallback 시도
+        try:
+            _ensure_dir(self._fallback_dir)
+            self._resolved_base_cache = self._fallback_dir
             return self._fallback_dir
+        except Exception:
+            self._resolved_base_cache = Path.cwd()
+            return Path.cwd()
 
     def _ensure_day_log_open(self, ts: Optional[float] = None) -> None:
         """
@@ -304,6 +340,11 @@ class LogWriterWorker(QThread):
         rid = _safe_name(run_id, 48) or _safe_name(datetime.now().strftime("%H%M%S"), 48)
         rcp = _safe_name(recipe_name, 48)
         folder_name = f"{rid}_{rcp}" if rcp else rid
+        self._run_folder_name = folder_name
+        self._run_id = str(run_id)
+        self._run_recipe = str(recipe_name)
+        self._run_open_ts = _now_ts(ts)
+
         self._run_dir = runs_dir / folder_name
         _ensure_dir(self._run_dir)
 
@@ -407,45 +448,46 @@ class LogWriterWorker(QThread):
                     pass
 
     def _write_telemetry(self, row: Dict[str, Any], ts: Optional[float]) -> None:
-        """
-        run이 열려 있을 때만 telemetry.csv에 기록한다.
-        row 예시:
-          {
-            "t": "2026-02-04 12:00:01",
-            "step": "PUMPDOWN",
-            "pressure": 1.2e-6,
-            "thickness_A": 120.0,
-            "rate_Aps": 0.8
-          }
-        """
         if not self._run_open or not self._tele_fp:
-            # run 미오픈 상태에서는 텔레메트리 저장하지 않음
             return
 
-        # timestamp column 보장
         row2 = dict(row or {})
-        row2.setdefault("t", _dt_str(ts))
+        now_ts = _now_ts(ts)
 
-        # writer 준비(헤더는 최초 row의 key로 고정)
+        # ✅ 고정 컬럼 기본값 채우기
+        row2.setdefault("t", _dt_str(now_ts))
+        if self._run_open_ts > 0:
+            row2.setdefault("elapsed_s", round(now_ts - self._run_open_ts, 3))
+        else:
+            row2.setdefault("elapsed_s", "")
+
+        row2.setdefault("run_id", self._run_id)
+        row2.setdefault("recipe", self._run_recipe)
+
+        # ✅ 네가 원하는 대표 키를 통일 (pressure/dac/rate/thickness)
+        # engine 쪽이 pressure/dac1/dac2/rate_Aps/thickness_A 로 보내는 것을 권장.
+        # 혹시 pressure 키로 들어오면 pressure_torr로 보정
+        if "pressure_torr" not in row2 and "pressure" in row2:
+            row2["pressure_torr"] = row2.get("pressure")
+
+        # ✅ extras_json: 고정 컬럼 밖의 값은 JSON으로 보관(정보 유실 방지)
+        extras = {k: v for k, v in row2.items() if k not in set(self._tele_fieldnames)}
+        row2["extras_json"] = json.dumps(extras, ensure_ascii=False) if extras else ""
+
+        # ✅ writer 준비(고정 헤더)
         if self._tele_writer is None:
-            fieldnames = list(row2.keys())
-            self._tele_writer = csv.DictWriter(self._tele_fp, fieldnames=fieldnames)
-            # 파일이 비었으면 헤더 작성
+            self._tele_writer = csv.DictWriter(self._tele_fp, fieldnames=self._tele_fieldnames)
             try:
                 if self._tele_fp.tell() == 0:
                     self._tele_writer.writeheader()
-                    self._tele_header_written = True
             except Exception:
-                # tell() 실패하면 그냥 헤더 작성 시도
+                # tell() 실패하면 헤더 작성 시도
                 try:
                     self._tele_writer.writeheader()
-                    self._tele_header_written = True
                 except Exception:
                     pass
 
-        # 만약 새 row에 새로운 key가 들어오면? (운영 중 컬럼이 바뀌면 CSV가 깨짐)
-        # -> 안전하게 "기존 필드만" 기록하고, 추가키는 버린다.
-        filtered = {k: row2.get(k, "") for k in self._tele_writer.fieldnames}
+        filtered = {k: row2.get(k, "") for k in self._tele_fieldnames}
 
         try:
             self._tele_writer.writerow(filtered)

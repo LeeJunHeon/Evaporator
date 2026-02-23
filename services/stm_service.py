@@ -172,10 +172,48 @@ class STMServiceWorker(QThread):
             except Exception:
                 pass
         finally:
+            try:
+                self._cancel_pending_futures("STMService stopped")
+            except Exception:
+                pass
             self._safe_close()
             self._set_connected(False)
 
     # ---------- internals ----------
+    def _cancel_pending_futures(self, reason: str) -> None:
+        """
+        워커 종료 시 큐에 남아있는 명령들의 Future를 예외로 완료 처리.
+        (engine 쪽에서 fut.result(timeout=...) 기다릴 때 깔끔하게 빠지도록)
+        """
+        while True:
+            try:
+                cmd = self._cmd_q.get_nowait()
+            except queue.Empty:
+                return
+
+            if cmd is None:
+                continue
+
+            if isinstance(cmd, _CmdApplyMaterialParams):
+                fut = cmd.future
+                try:
+                    if fut is not None and not fut.done():
+                        fut.set_exception(RuntimeError(reason))
+                except Exception:
+                    pass
+                continue
+
+            if isinstance(cmd, _CmdZeroThickness):
+                fut = cmd.future
+                try:
+                    if fut is not None and not fut.done():
+                        fut.set_exception(RuntimeError(reason))
+                except Exception:
+                    pass
+                continue
+
+            # _CmdReload 등은 Future가 없으니 무시
+
     def _build_device_from_ini(self) -> STM100:
         s = load_settings(self._ini_path, "stm100")
         return STM100(

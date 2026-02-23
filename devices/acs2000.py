@@ -12,22 +12,12 @@ class ACS2000ProtocolError(SerialDeviceError):
 
 
 def _eom_bytes(eom: Optional[str]) -> bytes:
-    """
-    TX(PC→ACS2000) 종단문자.
-
-    ✅ 권장:
-      - PC가 장비로 명령 보낼 때는 CR(0x0D) 고정이 가장 안정적인 경우가 많습니다.
-      - 장비 패널의 'CR / CRLF' 설정은 보통 "장비가 보내는 응답" 끝에 LF를 붙일지 여부로 동작합니다.
-        (즉, 장비를 CRLF로 바꿔도 PC 송신은 CR로 두고, 수신에서 LF만 제거하면 됨)
-      - PC가 CRLF로 송신하면 ERR_01000(Transmission error)처럼 "전송 프레임 오류"가 뜰 수 있습니다.
-    """
+    # ✅ ACS2000 프로토콜의 EOM은 CR. LF는 컨트롤러 설정에 따라 "응답에 추가"될 수 있음.
     if not eom:
         return b"\r"
     e = eom.strip().upper()
-    if e == "CR":
+    if e in ("CR", "CRLF"):
         return b"\r"
-    if e == "CRLF":
-        return b"\r\n"
     raise ValueError(f"Unsupported EOM={eom!r} (use CR or CRLF)")
 
 
@@ -37,6 +27,17 @@ ACS2000_COMMANDS = [
     "LOC", "OFS", "PRD", "PRT", "RMS", "RTY", "SPS", "SP1", "SP2", "TAS",
     "TID", "TPM", "TRS", "UNI", "VER",
 ]
+
+
+CON_STATUS_MAP = {
+    0: "OK",
+    1: "Ur",
+    2: "Or",
+    3: "Err03/Err04",
+    5: "NoGauge",
+    6: "IdErr",
+    7: "ErrHi/ErrLo/Err06/Err07",
+}
 
 
 class ACS2000(BaseSerialDevice):
@@ -55,6 +56,7 @@ class ACS2000(BaseSerialDevice):
 
         # CR 뒤에 따라붙은 LF(또는 CR-only 응답에서 다음 프레임 첫 바이트)를 안전하게 처리하기 위한 프리패치
         self._rx_prefetch = bytearray()
+        self._streaming = False  # ✅ CON 스트리밍 상태
 
     # -------------------------
     # Low-level RX helpers
@@ -121,6 +123,9 @@ class ACS2000(BaseSerialDevice):
         """
         payload_no_eom 예: "$VER", "$PRD", "$CON,1"
         """
+        if self._streaming:
+            raise ACS2000ProtocolError("ACS2000 is in CON streaming mode; stop stream before issuing commands.")
+
         if not payload_no_eom.startswith("$"):
             raise ValueError("ACS2000 payload must start with '$'")
 
@@ -202,7 +207,11 @@ class ACS2000(BaseSerialDevice):
             raise ACS2000ProtocolError(f"cannot parse pressure reply: {raw!r}")
 
     def start_pressure_stream(self, interval_a: int = 1) -> str:
-        return self._txrx(f"$CON,{interval_a}", rx_timeout_s=0.8)
+        if interval_a not in (0, 1, 2):
+            raise ValueError("interval_a must be 0(100ms), 1(1s), or 2(1min)")
+        reply = self._txrx(f"$CON,{interval_a}", rx_timeout_s=0.8)
+        self._streaming = True
+        return reply
 
     def read_stream_line(self, timeout_s: float = 2.0) -> str:
         with self._lock:
@@ -211,9 +220,52 @@ class ACS2000(BaseSerialDevice):
             raise ACS2000ProtocolError("stream timeout/no data")
         return rx.decode("ascii", errors="replace").strip()
 
+    def parse_con_line(self, line: str) -> tuple[int, Optional[float]]:
+        """
+        CON 스트림 라인 파싱.
+        매뉴얼: reply = $b,c,  (b=status, c=pressure)
+        """
+        s = (line or "").strip()
+        if s.startswith("$"):
+            s = s[1:]
+        # trailing comma가 있을 수 있어서 빈 토큰 제거
+        tokens = [t.strip() for t in s.split(",") if t.strip()]
+
+        if len(tokens) < 2:
+            raise ACS2000ProtocolError(f"invalid CON line: {line!r}")
+
+        # b = status
+        try:
+            b = int(tokens[0])
+        except ValueError:
+            raise ACS2000ProtocolError(f"invalid gauge status in CON line: {line!r}")
+
+        # c = pressure (no gauge면 0.00E+00 등)
+        try:
+            p = float(tokens[1])
+        except ValueError:
+            p = None
+
+        return b, p
+
+    def read_stream_pressure(self, timeout_s: float = 2.0) -> tuple[int, Optional[float]]:
+        line = self.read_stream_line(timeout_s=timeout_s)
+        return self.parse_con_line(line)
+
+    def read_stream_pressure_value(self, timeout_s: float = 2.0) -> float:
+        """
+        UI 표시용: status가 OK(0)일 때만 pressure를 float로 반환.
+        """
+        b, p = self.read_stream_pressure(timeout_s=timeout_s)
+        if b != 0:
+            # Or/Ur/Err/NoGauge 등 → UI는 이전 값 유지하고 로그만 남기는 식으로 처리 권장
+            raise ACS2000ProtocolError(f"CON gauge status not OK: {b} ({CON_STATUS_MAP.get(b,'?')})")
+        if p is None:
+            raise ACS2000ProtocolError("CON pressure parse failed")
+        return p
+
     def stop_stream_safe(self) -> None:
-        # ⚠ CON 스트리밍 자체를 장비에서 멈추는 명령은 보통 없고(전면 패널 버튼으로 종료),
-        # 여기서는 통신 포트를 닫는 "안전 종료"만 제공
+        self._streaming = False
         self.close()
 
     def query_errors(self) -> str:

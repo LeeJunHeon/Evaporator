@@ -28,6 +28,7 @@ import queue
 import re
 import time
 import threading
+import math
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -413,6 +414,55 @@ class LogWriterWorker(QThread):
         if tag:
             prefix += f" [{tag}]"
         return f"{prefix} {msg}"
+        
+    def _invalidate_base_cache(self) -> None:
+        self._resolved_base_cache = None
+        self._resolved_base_checked_ts = 0.0
+
+    def _reopen_run_files_in_resolved_base(self) -> None:
+        """
+        run이 열린 상태에서 파일 쓰기 실패 시:
+        - base_dir 재판정(force)
+        - 동일 run_folder_name으로 fallback 위치에 run.log/telemetry.csv 재오픈
+        """
+        if not self._run_open or not self._run_folder_name:
+            return
+
+        # 기존 핸들 닫기
+        try:
+            if self._tele_fp:
+                self._tele_fp.flush()
+                self._tele_fp.close()
+        except Exception:
+            pass
+        self._tele_fp = None
+        self._tele_writer = None
+
+        try:
+            if self._run_log_fp:
+                self._run_log_fp.flush()
+                self._run_log_fp.close()
+        except Exception:
+            pass
+        self._run_log_fp = None
+
+        # 새로운 base 결정(강제)
+        base = self._resolve_base_dir(force=True)
+        date_dir = _date_dir(self._run_open_ts if self._run_open_ts > 0 else None)
+        runs_dir = base / date_dir / "runs"
+        _ensure_dir(runs_dir)
+
+        self._run_dir = runs_dir / self._run_folder_name
+        _ensure_dir(self._run_dir)
+
+        # run.log 재오픈
+        self._run_log_path = self._run_dir / "run.log"
+        self._run_log_fp = open(self._run_log_path, "a", encoding="utf-8", newline="")
+
+        # telemetry.csv 재오픈
+        self._tele_path = self._run_dir / "telemetry.csv"
+        self._tele_fp = open(self._tele_path, "a", encoding="utf-8", newline="")
+        self._tele_writer = None  # 다음 write에서 header 처리        
 
     def _write_log(self, level: str, msg: str, tag: str, also_ui: bool, ts: Optional[float]) -> None:
         line = self._format_line(level, msg, tag, ts)
@@ -435,6 +485,9 @@ class LogWriterWorker(QThread):
                 self.sig_error.emit(f"[LogService] day log write failed: {e!r}")
             except Exception:
                 pass
+            # ✅ 다음 write에서 fallback 선택 가능하도록
+            self._invalidate_base_cache()
+            self._close_day_log()
 
         # run log (열려있을 때만)
         if self._run_open and self._run_log_fp:
@@ -446,6 +499,8 @@ class LogWriterWorker(QThread):
                     self.sig_error.emit(f"[LogService] run log write failed: {e!r}")
                 except Exception:
                     pass
+                self._invalidate_base_cache()
+                self._reopen_run_files_in_resolved_base()
 
     def _write_telemetry(self, row: Dict[str, Any], ts: Optional[float]) -> None:
         if not self._run_open or not self._tele_fp:
@@ -472,7 +527,11 @@ class LogWriterWorker(QThread):
 
         # ✅ extras_json: 고정 컬럼 밖의 값은 JSON으로 보관(정보 유실 방지)
         extras = {k: v for k, v in row2.items() if k not in set(self._tele_fieldnames)}
-        row2["extras_json"] = json.dumps(extras, ensure_ascii=False) if extras else ""
+        try:
+            row2["extras_json"] = json.dumps(extras, ensure_ascii=False, default=str) if extras else ""
+        except Exception:
+            # 최후 수단: repr로라도 남겨서 정보 유실 방지
+            row2["extras_json"] = repr(extras)
 
         # ✅ writer 준비(고정 헤더)
         if self._tele_writer is None:
@@ -487,7 +546,14 @@ class LogWriterWorker(QThread):
                 except Exception:
                     pass
 
-        filtered = {k: row2.get(k, "") for k in self._tele_fieldnames}
+        def _norm_cell(v: Any) -> Any:
+            if v is None:
+                return ""
+            if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+                return ""
+            return v
+
+        filtered = {k: _norm_cell(row2.get(k, "")) for k in self._tele_fieldnames}
 
         try:
             self._tele_writer.writerow(filtered)
@@ -497,6 +563,8 @@ class LogWriterWorker(QThread):
                 self.sig_error.emit(f"[LogService] telemetry write failed: {e!r}")
             except Exception:
                 pass
+            self._invalidate_base_cache()
+            self._reopen_run_files_in_resolved_base()
 
 
 # ============================================================

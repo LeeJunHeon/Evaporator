@@ -40,6 +40,22 @@ CON_STATUS_MAP = {
 }
 
 
+def _extract_err_code(reply: str) -> Optional[str]:
+    s = (reply or "").strip()
+    if s.startswith("$"):
+        s = s[1:]
+    su = s.upper()
+    if not su.startswith("ERR"):
+        return None
+    # 예: "ERR_01000"
+    if "_" in s:
+        return s.split("_", 1)[1].strip() or "UNKNOWN"
+    # 예외적 형식 대비
+    if "," in s:
+        return s.split(",", 1)[1].strip() or "UNKNOWN"
+    return "UNKNOWN"
+
+
 class ACS2000(BaseSerialDevice):
     """
     Adixen/Alcatel ACS-2000 RS-232 드라이버.
@@ -50,13 +66,37 @@ class ACS2000(BaseSerialDevice):
     - EOM: CR(0x0D)
     """
 
-    def __init__(self, *, eom: str = "CR", **kwargs):
+    def __init__(
+        self,
+        *,
+        eom: str = "CR",
+        # ✅ IO 정책(PLC에서 만든 io_policy와 동일 키)
+        io_err_allow: int = 5,
+        io_retry_sleep_s: float = 0.05,
+        io_reconnect_max: int = 2,
+        reconnect_backoff_base_s: float = 0.6,
+        reconnect_backoff_factor: float = 1.7,
+        reconnect_backoff_max_s: float = 5.0,
+        **kwargs,
+    ):
         super().__init__(**kwargs)
         self._eom = _eom_bytes(eom)
 
         # CR 뒤에 따라붙은 LF(또는 CR-only 응답에서 다음 프레임 첫 바이트)를 안전하게 처리하기 위한 프리패치
         self._rx_prefetch = bytearray()
         self._streaming = False  # ✅ CON 스트리밍 상태
+
+        # ✅ 마지막으로 요청한 CON interval 저장(재연결 후 스트림 재시작에 필요)
+        self._con_interval_a: Optional[int] = None
+
+        # ✅ IO policy 저장(나중에 serial_config/acs_service에서 devices.ini [io_policy]로 주입)
+        self._io_err_allow = max(0, int(io_err_allow))
+        self._io_retry_sleep_s = max(0.0, float(io_retry_sleep_s))
+        self._io_reconnect_max = max(0, int(io_reconnect_max))
+
+        self._reconnect_backoff_base_s = max(0.1, float(reconnect_backoff_base_s))
+        self._reconnect_backoff_factor = max(1.0, float(reconnect_backoff_factor))
+        self._reconnect_backoff_max_s = max(self._reconnect_backoff_base_s, float(reconnect_backoff_max_s))
 
     # -------------------------
     # Low-level RX helpers
@@ -119,26 +159,32 @@ class ACS2000(BaseSerialDevice):
     # -------------------------
     # TX/RX
     # -------------------------
-    def _txrx(self, payload_no_eom: str, rx_timeout_s: float = 0.8) -> str:
+    def _txrx(self, payload_no_eom: str, rx_timeout_s: float = 0.8, *, allow_streaming: bool = False) -> str:
         """
         payload_no_eom 예: "$VER", "$PRD", "$CON,1"
         """
-        if self._streaming:
-            raise ACS2000ProtocolError("ACS2000 is in CON streaming mode; stop stream before issuing commands.")
-
         if not payload_no_eom.startswith("$"):
             raise ValueError("ACS2000 payload must start with '$'")
 
         tx = payload_no_eom.encode("ascii", errors="replace") + self._eom
 
+        # ✅ 연결 보장(서비스가 connect 해도 안전하게 한번 더)
+        if not self.is_connected:
+            self.connect()
+
         with self._lock:
+            if self._streaming and not allow_streaming:
+                raise ACS2000ProtocolError(
+                    "ACS2000 is in CON streaming mode; stop stream before issuing commands."
+                )
+
             ser = self._require()
 
             # 이전에 남아있던 LF/잔여 바이트 제거
             self._rx_prefetch.clear()
-
             ser.reset_input_buffer()
             ser.reset_output_buffer()
+
             ser.write(tx)
             ser.flush()
 
@@ -147,7 +193,75 @@ class ACS2000(BaseSerialDevice):
         if not rx:
             raise ACS2000ProtocolError(f"no response for '{payload_no_eom}'")
 
-        return rx.decode("ascii", errors="replace").strip()
+        reply = rx.decode("ascii", errors="replace").strip()
+
+        # ✅ ERR 응답은 정상으로 취급하지 않음
+        err_code = _extract_err_code(reply)
+        if err_code is not None:
+            raise ACS2000ProtocolError(f"ACS2000 error reply: {reply} (code={err_code})")
+
+        return reply
+    
+    def _reconnect_with_backoff(self, backoff_s: float) -> float:
+        # close → sleep → connect
+        try:
+            self.close()
+        except Exception:
+            pass
+
+        time.sleep(backoff_s)
+
+        # connect 재시도
+        self.connect()
+
+        # backoff 업데이트
+        next_backoff = min(backoff_s * self._reconnect_backoff_factor, self._reconnect_backoff_max_s)
+        return next_backoff
+
+
+    def _call_with_policy(self, op: str, fn):
+        """
+        ✅ 정책:
+        - 에러 1~io_err_allow회: 연결 유지 재시도
+        - 그 다음: close→reconnect(backoff) 후 재시도
+        - io_reconnect_max 번의 재연결까지 허용
+        """
+        err_count = 0
+        reconnect_left = self._io_reconnect_max
+        backoff_s = self._reconnect_backoff_base_s
+
+        while True:
+            try:
+                return fn()
+
+            except (ACS2000ProtocolError, SerialDeviceError) as e:
+                err_count += 1
+
+                # 1~5회: 연결 유지 재시도
+                if err_count <= self._io_err_allow:
+                    if self._io_retry_sleep_s > 0:
+                        time.sleep(self._io_retry_sleep_s)
+                    continue
+
+                # 6회째부터: reconnect
+                if reconnect_left <= 0:
+                    raise
+
+                reconnect_left -= 1
+                err_count = 0  # reconnect 후 카운트 리셋
+
+                backoff_s = self._reconnect_with_backoff(backoff_s)
+
+                # ✅ 스트림 모드였다면 재연결 후 스트림 재시작
+                if self._con_interval_a is not None:
+                    try:
+                        self._streaming = False
+                        _ = self._txrx(f"$CON,{self._con_interval_a}", rx_timeout_s=0.8, allow_streaming=True)
+                        self._streaming = True
+                    except Exception:
+                        # ✅ 스트림 재시작이 실패하면, 다음 while 루프에서 다시 정책대로 재시도/재연결
+                        self._streaming = False
+                        continue
 
     # ✅ 매뉴얼의 "모든 명령"을 커버하는 범용 RAW
     def raw(self, command: str, *params: str, rx_timeout_s: float = 0.8) -> str:
@@ -209,16 +323,35 @@ class ACS2000(BaseSerialDevice):
     def start_pressure_stream(self, interval_a: int = 1) -> str:
         if interval_a not in (0, 1, 2):
             raise ValueError("interval_a must be 0(100ms), 1(1s), or 2(1min)")
-        reply = self._txrx(f"$CON,{interval_a}", rx_timeout_s=0.8)
-        self._streaming = True
-        return reply
+
+        self._con_interval_a = int(interval_a)
+
+        def _start_once():
+            # 재시작을 허용하기 위해 streaming 내려놓고 CON 전송
+            self._streaming = False
+            reply = self._txrx(f"$CON,{interval_a}", rx_timeout_s=0.8, allow_streaming=True)
+            # 여기까지 왔으면 ERR이 아니라는 뜻
+            self._streaming = True
+            return reply
+
+        return self._call_with_policy(f"CON({interval_a})", _start_once)
 
     def read_stream_line(self, timeout_s: float = 2.0) -> str:
-        with self._lock:
-            rx = self._read_until_cr_unlocked(timeout_s=timeout_s)
-        if not rx:
-            raise ACS2000ProtocolError("stream timeout/no data")
-        return rx.decode("ascii", errors="replace").strip()
+        def _read_once():
+            with self._lock:
+                rx = self._read_until_cr_unlocked(timeout_s=timeout_s)
+            if not rx:
+                raise ACS2000ProtocolError("stream timeout/no data")
+            line = rx.decode("ascii", errors="replace").strip()
+
+            # 스트림에서도 ERR이 올 가능성 대비
+            err_code = _extract_err_code(line)
+            if err_code is not None:
+                raise ACS2000ProtocolError(f"ACS2000 stream ERR: {line} (code={err_code})")
+
+            return line
+
+        return self._call_with_policy("CON_STREAM_READ", _read_once)
 
     def parse_con_line(self, line: str) -> tuple[int, Optional[float]]:
         """
@@ -264,8 +397,25 @@ class ACS2000(BaseSerialDevice):
             raise ACS2000ProtocolError("CON pressure parse failed")
         return p
 
+    def read_stream_sample(self, timeout_s: float = 2.0) -> dict:
+        """
+        공정/텔레메트리용:
+        - status, status_text, pressure(optional) 같이 반환
+        - status!=0이어도 예외로 끊지 않고 기록 가능
+        """
+        line = self.read_stream_line(timeout_s=timeout_s)
+        b, p = self.parse_con_line(line)
+        return {
+            "status": b,
+            "status_text": CON_STATUS_MAP.get(b, "?"),
+            "pressure": p,
+            "raw": line,
+            "ok": (b == 0 and p is not None),
+        }
+
     def stop_stream_safe(self) -> None:
         self._streaming = False
+        self._con_interval_a = None  # ✅ 자동 스트림 재시작 방지
         self.close()
 
     def query_errors(self) -> str:

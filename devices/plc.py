@@ -191,6 +191,8 @@ class AsyncPLC:
         # 2) merge: 명시 인자 > settings(ini) 우선순위
         port_v = str(port if port is not None else base.port)
         method_v = str(method if method is not None else getattr(base, "method", "rtu")).lower()
+        if method_v not in ("rtu",):
+            raise ValueError(f"Unsupported PLC method={method_v!r} (only 'rtu' supported)")
 
         baud_v = int(baudrate if baudrate is not None else base.baudrate)
         bytesize_v = int(bytesize if bytesize is not None else base.bytesize)
@@ -657,7 +659,8 @@ class AsyncPLC:
 
         # ✅ "D00000" 처럼 'D' 다음이 전부 숫자일 때만 REG로 본다
         up = s.upper()
-        if up.startswith("D") and up[1:].isdigit():
+        tail = up[1:]
+        if up.startswith("D") and tail and all(c in "0123456789ABCDEF" for c in tail):
             return True
 
         return False

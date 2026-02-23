@@ -87,8 +87,11 @@ KNOWN_COILS = {
     "SHUTTER_1_SW", "SHUTTER_2_SW", "MAIN_SHUTTER_SW",
     "POWER_1_SW", "POWER_2_SW",
     "FTM_SW", "DOOR_SW",
-    "AIR_SW", "WATER_SW", "GAS_1_SW", "GAS_2_SW",
+    "AIR_SW", "WATER_SW", "GAUGE_1_SW", "GAUGE_2_SW",
 }
+
+# ✅ UI/PLC 폴링으로 읽기만 하는 인디케이터 코일 (레시피에서 write 금지 권장)
+READ_ONLY_COILS = {"AIR_SW", "WATER_SW", "GAUGE_1_SW", "GAUGE_2_SW"}
 
 KNOWN_REGS = {
     "DAC_POWER_1",
@@ -222,12 +225,14 @@ class ProcessStep:
             _req(isinstance(self.on, bool), prefix + "on(bool) is required")
             if strict:
                 _req(str(self.coil) in KNOWN_COILS, prefix + f"unknown coil: {self.coil!r}")
+                _req(str(self.coil) not in READ_ONLY_COILS, prefix + f"read-only indicator coil cannot be written: {self.coil!r}")
             self.coil = str(self.coil)
 
         elif t == StepType.PLC_PULSE_COIL:
             _req(self.coil is not None and str(self.coil).strip() != "", prefix + "coil is required")
             if strict:
                 _req(str(self.coil) in KNOWN_COILS, prefix + f"unknown coil: {self.coil!r}")
+                _req(str(self.coil) not in READ_ONLY_COILS, prefix + f"read-only indicator coil cannot be pulsed: {self.coil!r}")
             self.coil = str(self.coil)
 
             _req(self.pulse_ms is not None, prefix + "pulse_ms is required")
@@ -259,13 +264,15 @@ class ProcessStep:
 
         elif t == StepType.WAIT_PRESSURE_LEQ:
             _req(self.pressure_target is not None and _is_num(self.pressure_target), prefix + "pressure_target(number) is required")
+            _req(float(self.pressure_target) >= 0, prefix + "pressure_target must be >= 0")
             _req(self.timeout_s is not None, prefix + "timeout_s is required for WAIT_PRESSURE_LEQ")
             _req(float(self.timeout_s) > 0, prefix + "timeout_s must be > 0")
 
         elif t == StepType.WAIT_THICKNESS_GEQ:
             _req(self.thickness_target_a is not None and _is_num(self.thickness_target_a), prefix + "thickness_target_a(number) is required")
-            _req(self.timeout_s is not None, prefix + "timeout_s is required for WAIT_THICKNESS_GEQ")
             _req(float(self.thickness_target_a) >= 0, prefix + "thickness_target_a must be >= 0")
+            _req(self.timeout_s is not None, prefix + "timeout_s is required for WAIT_THICKNESS_GEQ")
+            _req(float(self.timeout_s) > 0, prefix + "timeout_s must be > 0")
 
         elif t == StepType.WAIT_RATE_IN_RANGE:
             _req(self.rate_min_a_s is not None and _is_num(self.rate_min_a_s), prefix + "rate_min_a_s(number) is required")

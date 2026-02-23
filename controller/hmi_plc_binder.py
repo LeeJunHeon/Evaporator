@@ -90,6 +90,35 @@ class HmiPlcBinder(QObject):
         self._wire_dac_controls()
 
     # ============================================================
+    # Public API (Process/Engine에서 사용)
+    # ============================================================
+    def get_plc_service(self) -> PLCService:
+        """Engine/Process에서 PLCService 객체가 필요할 때 사용(내부 _plc 직접 접근 금지용)."""
+        return self._plc
+
+    def submit_write(self, coil_name: str, on: bool, *, momentary: bool = False, pulse_ms: int | None = None, tag: str = ""):
+        """공정(QThread)에서 완료를 기다릴 때 사용: Future 반환"""
+        if not self.is_connected():
+            raise RuntimeError("PLC not connected")
+        return self._plc.submit_write_coil(
+            coil_name=str(coil_name),
+            on=bool(on),
+            momentary=bool(momentary),
+            pulse_ms=pulse_ms,
+            tag=str(tag),
+        )
+
+    def submit_write_reg(self, reg_name: str, value: int, *, tag: str = ""):
+        """공정(QThread)에서 완료를 기다릴 때 사용: Future 반환"""
+        if not self.is_connected():
+            raise RuntimeError("PLC not connected")
+        return self._plc.submit_write_reg(
+            reg_name=str(reg_name),
+            value=int(value),
+            tag=str(tag),
+        )
+
+    # ============================================================
     # Public API
     # ============================================================
     def start(self) -> None:
@@ -100,17 +129,28 @@ class HmiPlcBinder(QObject):
         self._plc.stop()
 
     def reload_settings(self, new_settings: PLCSettings) -> None:
-        # ✅ 깔끔하게: 기존 서비스 종료 후 새로 생성
+        # ✅ 기존 서비스 정리
+        old = getattr(self, "_plc", None)
         try:
-            self._plc.stop()
+            if old is not None:
+                old.stop()
         except Exception:
             pass
 
         self.settings = new_settings
+
+        # ✅ 새 서비스 생성/연결
         self._plc = PLCService(settings=new_settings, parent=self)
         self._plc.sig_connected.connect(self._on_connected)
         self._plc.sig_error.connect(self._on_error)
         self._plc.sig_coils.connect(self._apply_states)
+
+        # ✅ old 객체는 Qt 이벤트루프에서 제거 예약
+        try:
+            if old is not None:
+                old.deleteLater()
+        except Exception:
+            pass
 
         self.start()
 

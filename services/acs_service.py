@@ -94,7 +94,10 @@ class ACSServiceWorker(QThread):
 
         self._channel = int(channel) if int(channel) in (1, 2) else 1
         self._use_stream = bool(use_stream)
-        self._stream_interval_a = max(1, int(stream_interval_a))
+        a = int(stream_interval_a)
+        if a not in (0, 1, 2):
+            a = 1
+        self._stream_interval_a = a
 
         self._stop_evt = threading.Event()
         self._cmd_q: "queue.Queue[object]" = queue.Queue()
@@ -124,7 +127,10 @@ class ACSServiceWorker(QThread):
 
     def request_set_mode(self, *, stream: bool, stream_interval_a: int = 1) -> None:
         try:
-            self._cmd_q.put_nowait(_CmdSetMode(bool(stream), max(1, int(stream_interval_a))))
+            a = int(stream_interval_a)
+            if a not in (0, 1, 2):
+                a = 1
+            self._cmd_q.put_nowait(_CmdSetMode(bool(stream), a))
         except Exception:
             pass
 
@@ -204,7 +210,10 @@ class ACSServiceWorker(QThread):
 
     def _handle_set_mode(self, cmd: _CmdSetMode) -> None:
         self._use_stream = bool(cmd.stream)
-        self._stream_interval_a = max(1, int(cmd.stream_interval_a))
+        a = int(cmd.stream_interval_a)
+        if a not in (0, 1, 2):
+            a = 1
+        self._stream_interval_a = a
 
         # 이미 연결돼 있다면 즉시 적용(연결 상태에서만)
         if self._connected and self._acs is not None:
@@ -286,8 +295,8 @@ class ACSServiceWorker(QThread):
 
         try:
             if self._use_stream:
-                line = self._acs.read_stream_line(timeout_s=1.5)
-                pr = float(self._parse_pressure_any(line))
+                # ✅ CON 스트림은 status OK(0)일 때만 pressure 인정
+                pr = float(self._acs.read_stream_pressure_value(timeout_s=1.5))
             else:
                 pr = float(self._acs.query_pressure(channel=self._channel))
 
@@ -312,14 +321,33 @@ class ACSServiceWorker(QThread):
             return True
 
         except Exception as e:
+            # ✅ stream(CON)에서의 에러(예: Or/Ur/NoGauge)는 "통신 실패"가 아닐 수 있음
+            # -> UI는 이전 값 유지(emit 안 함), 로그만 남기고 다음 poll에서 재시도
+            if self._use_stream:
+                self.sig_error.emit(f"[ACSService] stream read failed (keep last): {e!r}")
+                snap = ACSSnapshot(
+                    ts=now,
+                    connected=bool(self._connected),
+                    pressure=self._last_pressure,  # ✅ 이전 값 유지
+                    meta={
+                        "fail_count": self._fail_count,
+                        "channel": self._channel,
+                        "use_stream": self._use_stream,
+                        "stream_interval_a": self._stream_interval_a,
+                        "stream_err": repr(e),
+                    },
+                )
+                self._last_snapshot = snap
+                self.sig_snapshot.emit(snap)
+                return False
+
+            # query 모드 실패는 기존대로 fail count 증가/재연결
             self._fail_count += 1
             self.sig_error.emit(f"[ACSService] poll failed: {e!r} (fail={self._fail_count})")
-
             if self._fail_count >= self._max_fail_before_close:
                 self._safe_close()
                 self._set_connected(False)
                 self._next_try = now + self._reconnect_interval_s
-
             return False
 
     def _main_loop(self) -> None:

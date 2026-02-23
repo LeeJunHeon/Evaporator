@@ -133,41 +133,111 @@ class STM100(BaseSerialDevice):
     예)  "T", "S", "@", "E=1.23", "F=1.234", "i5", "j5=0.75", "k5=0.50"
     """
 
-    def exchange(self, cmd: str, timeout_s: float = 1.0, *, retries: int = 2) -> STMReply:
+    def __init__(
+        self,
+        *args,
+        # ✅ PLC/ACS와 동일 키(나중에 devices.ini [io_policy]에서 주입)
+        io_err_allow: int = 5,
+        io_retry_sleep_s: float = 0.05,
+        io_reconnect_max: int = 2,
+        reconnect_backoff_base_s: float = 0.6,
+        reconnect_backoff_factor: float = 1.7,
+        reconnect_backoff_max_s: float = 5.0,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+
+        self._io_err_allow = max(0, int(io_err_allow))
+        self._io_retry_sleep_s = max(0.0, float(io_retry_sleep_s))
+        self._io_reconnect_max = max(0, int(io_reconnect_max))
+
+        self._reconnect_backoff_base_s = max(0.1, float(reconnect_backoff_base_s))
+        self._reconnect_backoff_factor = max(1.0, float(reconnect_backoff_factor))
+        self._reconnect_backoff_max_s = max(self._reconnect_backoff_base_s, float(reconnect_backoff_max_s))
+
+    def _ensure_connected(self) -> None:
+        if not self.is_connected:
+            self.connect()
+
+    def _reconnect_with_backoff(self, backoff_s: float) -> float:
+        try:
+            self.close()
+        except Exception:
+            pass
+
+        time.sleep(backoff_s)
+
+        # 재연결
+        self.connect()
+
+        # 다음 backoff
+        return min(backoff_s * self._reconnect_backoff_factor, self._reconnect_backoff_max_s)
+
+    def exchange(self, cmd: str, timeout_s: float = 1.0, *, retries: int | None = None) -> STMReply:
+        """
+        ✅ 정책:
+        - 실패 1~5회(기본): 연결 유지 재시도
+        - 6회째부터: close → reconnect(backoff) 후 재시도
+        - reconnect는 io_reconnect_max 만큼만 허용
+        """
         cmd = cmd.strip()
         if not cmd:
             raise ValueError("cmd empty")
 
         tx = build_frame(cmd)
 
-        last_timeout: Exception | None = None
-        for attempt in range(int(retries) + 1):
-            with self._lock:
-                ser = self._require()
-                ser.reset_input_buffer()
-                ser.reset_output_buffer()
-                ser.write(tx)
-                ser.flush()
+        # retries 인자를 주면 그 값을 우선(호환). None이면 io_policy 값 사용
+        allow = self._io_err_allow if retries is None else max(0, int(retries))
 
-                try:
+        err_count = 0
+        reconnect_left = int(self._io_reconnect_max)
+        backoff_s = float(self._reconnect_backoff_base_s)
+
+        last_err: Exception | None = None
+
+        while True:
+            try:
+                with self._lock:
+                    self._ensure_connected()
+                    ser = self._require()
+                    ser.reset_input_buffer()
+                    ser.reset_output_buffer()
+                    ser.write(tx)
+                    ser.flush()
+
                     payload, chk_ok = read_frame(ser, timeout_s=timeout_s)
-                except TimeoutError as e:
-                    last_timeout = e
-                    # 다음 attempt로 재시도
+
+                # checksum 불일치(노이즈)는 “복구 가능 오류”로 처리
+                if not chk_ok:
+                    raise STM100ProtocolError(f"STM-100 checksum mismatch. rx={payload!r}")
+
+                code = payload[0] if payload else ""
+                body = payload[1:] if len(payload) > 1 else ""
+                return STMReply(code=code, body=body, raw=payload)
+
+            except (TimeoutError, STM100ProtocolError, SerialDeviceError) as e:
+                last_err = e
+                err_count += 1
+
+                # 1~allow회: 연결 유지 재시도
+                if err_count <= allow:
+                    if self._io_retry_sleep_s > 0:
+                        time.sleep(self._io_retry_sleep_s)
                     continue
 
-            # 체크섬 불일치도 (노이즈 등)면 재시도
-            if not chk_ok:
-                if attempt < retries:
-                    continue
-                raise STM100ProtocolError(f"STM-100 checksum mismatch. rx={payload!r}")
+                # allow 초과 → reconnect(backoff)
+                if reconnect_left <= 0:
+                    # 마지막은 안전하게 닫아둠
+                    try:
+                        self.close()
+                    except Exception:
+                        pass
+                    raise TimeoutError(f"STM-100 exchange failed after policy retries. last={last_err!r}") from last_err
 
-            code = payload[0] if payload else ""
-            body = payload[1:] if len(payload) > 1 else ""
-            return STMReply(code=code, body=body, raw=payload)
-
-        # 여기까지 오면 전부 timeout
-        raise TimeoutError(f"STM-100 exchange timeout after {retries+1} tries") from last_timeout
+                reconnect_left -= 1
+                err_count = 0  # reconnect 후 카운트 리셋
+                backoff_s = self._reconnect_with_backoff(backoff_s)
+                continue
 
     # ✅ Table 5.2 전체를 커버하는 범용 API
     def command(

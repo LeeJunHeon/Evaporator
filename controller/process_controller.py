@@ -34,7 +34,7 @@ from process.engine import ProcessEngine, EngineResult
 from services.plc_service import PLCService
 from services.log_service import LogService
 
-from .process_worker import ProcessWorker
+from controller.process_worker import ProcessWorker
 
 
 class ProcessController(QObject):

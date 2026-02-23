@@ -19,17 +19,9 @@ from typing import Optional
 
 from PySide6.QtCore import QThread, Signal, QObject
 
-# ------------------------------------------------------------
-# Import (패키지/단일 실행 둘 다 대응)
-# ------------------------------------------------------------
-try:
-    # 패키지 실행(권장): python -m Evaporator_Program.main
-    from ..process.engine import ProcessEngine, EngineCallbacks, EngineResult
-    from ..process.models import ProcessRecipe, ProcessError, StopMode
-except ImportError:
-    # 단일 실행/경로가 꼬인 경우 fallback
-    from process.engine import ProcessEngine, EngineCallbacks, EngineResult
-    from process.models import ProcessRecipe, ProcessError, StopMode
+# Import (패키지 실행만 지원: python -m Evaporator_Program.main / exe)
+from ..process.engine import ProcessEngine, EngineCallbacks, EngineResult
+from ..process.models import ProcessRecipe, ProcessError, StopMode
 
 
 class ProcessWorker(QThread):
@@ -60,6 +52,9 @@ class ProcessWorker(QThread):
         self._engine = engine
         self._recipe = recipe
         self._run_id = run_id
+
+        # ✅ 이전 콜백 저장(종료 후 원복)
+        self._prev_callbacks = getattr(self._engine, "callbacks", None)
 
         # 엔진 콜백을 Worker 시그널로 브릿지
         self._engine.callbacks = EngineCallbacks(
@@ -114,4 +109,12 @@ class ProcessWorker(QThread):
                 finished_ts=t1,
                 error=ProcessError(where="ProcessWorker.run", message=str(e), exception_repr=repr(e)),
             )
+        finally:
+            # ✅ Worker 종료 후 엔진 콜백 원복(레퍼런스 누수 방지)
+            try:
+                if self._prev_callbacks is not None:
+                    self._engine.callbacks = self._prev_callbacks
+            except Exception:
+                pass
+
         self.sig_result.emit(result)

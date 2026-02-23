@@ -18,7 +18,7 @@ import platform
 import traceback
 from pathlib import Path
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple, Union, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, Tuple, Union, TYPE_CHECKING, Callable, TypeVar
 
 import minimalmodbus
 
@@ -113,6 +113,18 @@ class PLCConfig:
     dac_offset_code: int
     dac_current_min_ma: float
     dac_current_max_ma: float
+
+    # =========================
+    # Retry / Reconnect Policy
+    # - 에러 5회까지: "연결 유지" 재시도
+    # - 6회째부터: close→reconnect(backoff) 후 재시도
+    # =========================
+    io_err_allow: int
+    io_retry_sleep_s: float
+    io_reconnect_max: int
+    reconnect_backoff_base_s: float
+    reconnect_backoff_factor: float
+    reconnect_backoff_max_s: float
 
     # ===== DEBUG ===== (디버그는 코드 기본값 유지해도 됨)
     debug: bool = True
@@ -217,6 +229,26 @@ class AsyncPLC:
         dac_min_v = float(dac_current_min_ma if dac_current_min_ma is not None else getattr(base, "dac_current_min_ma", 4.0))
         dac_max_v = float(dac_current_max_ma if dac_current_max_ma is not None else getattr(base, "dac_current_max_ma", 20.0))
 
+        io_err_allow_v = int(base.io_err_allow)
+        io_retry_sleep_v = float(base.io_retry_sleep_s)
+        io_reconnect_max_v = int(base.io_reconnect_max)
+
+        reconnect_base_v = float(base.reconnect_backoff_base_s)
+        reconnect_factor_v = float(base.reconnect_backoff_factor)
+        reconnect_max_v = float(base.reconnect_backoff_max_s)
+
+        # 값 sanity
+        if io_err_allow_v < 0:
+            io_err_allow_v = 0
+        if io_reconnect_max_v < 0:
+            io_reconnect_max_v = 0
+        if reconnect_base_v <= 0:
+            reconnect_base_v = 0.3
+        if reconnect_factor_v < 1.0:
+            reconnect_factor_v = 1.0
+        if reconnect_max_v < reconnect_base_v:  
+            reconnect_max_v = reconnect_base_v
+
         self.cfg = PLCConfig(
             port=port_v,
             method=method_v,
@@ -232,6 +264,13 @@ class AsyncPLC:
             dac_offset_code=dac_off_v,
             dac_current_min_ma=dac_min_v,
             dac_current_max_ma=dac_max_v,
+            # ✅ Retry / Reconnect policy
+            io_err_allow=io_err_allow_v,
+            io_retry_sleep_s=io_retry_sleep_v,
+            io_reconnect_max=io_reconnect_max_v,
+            reconnect_backoff_base_s=reconnect_base_v,
+            reconnect_backoff_factor=reconnect_factor_v,
+            reconnect_backoff_max_s=reconnect_max_v,
             debug=bool(debug),
             debug_stacktrace=bool(debug_stacktrace),
             debug_io_timing=bool(debug_io_timing),
@@ -664,6 +703,86 @@ class AsyncPLC:
             return True
 
         return False
+    
+    # ======================================================
+    # I/O 공통 헬퍼
+    # ======================================================
+    
+    _T = TypeVar("_T")
+
+    def _clear_serial_buffers_sync(self) -> None:
+        """연결 유지 재시도 시, 버퍼만 정리(가능할 때). 실패해도 무시."""
+        try:
+            if not self._inst:
+                return
+            ser = getattr(self._inst, "serial", None)
+            if not ser:
+                return
+            # pyserial 표준 API
+            if hasattr(ser, "reset_input_buffer"):
+                ser.reset_input_buffer()
+            if hasattr(ser, "reset_output_buffer"):
+                ser.reset_output_buffer()
+        except Exception:
+            return
+
+    async def _io_with_policy_locked(self, op: str, fn: Callable[[], _T]) -> _T:
+        """
+        ✅ 정책:
+        - 동일 I/O 호출에서 에러 1~5회: 연결 유지하며 재시도(버퍼만 정리 + 짧은 sleep)
+        - 6회째: close→reconnect(backoff) 후 재시도
+        - io_reconnect_max만큼 재연결 시도 후에도 실패하면 raise
+        """
+        allow = int(self.cfg.io_err_allow)
+        sleep_s = float(self.cfg.io_retry_sleep_s)
+        reconnect_left = int(self.cfg.io_reconnect_max)
+        backoff_s = float(self.cfg.reconnect_backoff_base_s)
+        factor = float(self.cfg.reconnect_backoff_factor)
+        backoff_max = float(self.cfg.reconnect_backoff_max_s)
+
+        err_count = 0
+
+        while True:
+            try:
+                await asyncio.to_thread(self._connect_sync)
+                await self._throttle_locked(op=op)
+
+                # fn은 sync 함수(Instrument 호출)여야 함
+                out = await asyncio.to_thread(fn)
+                self._touch_io_ts()
+                return out
+
+            except Exception as e:
+                err_count += 1
+                self._wrn("%s fail #%d err=%r", op, err_count, e)
+
+                # 1~5회: 연결 유지 재시도(버퍼만 정리)
+                if err_count <= allow:
+                    await asyncio.to_thread(self._clear_serial_buffers_sync)
+                    if sleep_s > 0:
+                        await asyncio.sleep(sleep_s)
+                    continue
+
+                # 6회째부터: reconnect
+                if reconnect_left <= 0:
+                    self._err("%s failed: errors=%d, reconnect exhausted -> raise", op, err_count)
+                    # 마지막은 닫아두는 게 안전
+                    await asyncio.to_thread(self._close_sync)
+                    raise
+
+                reconnect_left -= 1
+                self._wrn("%s: errors=%d -> reconnect (left=%d), backoff=%.2fs",
+                        op, err_count, reconnect_left, backoff_s)
+
+                await asyncio.to_thread(self._close_sync)
+                await asyncio.sleep(backoff_s)
+
+                # backoff 업데이트
+                backoff_s = min(backoff_s * factor, backoff_max)
+
+                # reconnect 후에는 에러 카운트 리셋
+                err_count = 0
+                continue
 
     # ======================================================
     # low-level I/O (로그 최대)
@@ -674,22 +793,15 @@ class AsyncPLC:
         async with self._lock:
             t0 = time.monotonic()
             self._dbg("READ_COIL start addr=%s (FC1)", addr)
-            await asyncio.to_thread(self._connect_sync)
-            await self._throttle_locked(op="read_coil")
             try:
-                assert self._inst is not None
-                bits = await asyncio.to_thread(self._inst.read_bits, addr, 1, 1)  # FC1
-                self._touch_io_ts()
-                v = bool(bits[0])
+                def _call():
+                    assert self._inst is not None
+                    return self._inst.read_bits(int(addr), 1, functioncode=1)  # FC1
+
+                bits = await self._io_with_policy_locked(f"READ_COIL(addr={addr})", _call)
+                v = bool(bits[0]) if bits else False
                 self._dbg("READ_COIL ok addr=%s -> %s (raw=%r)", addr, v, bits)
                 return v
-            except Exception as e:
-                self._err("READ_COIL fail addr=%s err=%r", addr, e)
-                et = self._exc_text()
-                if et:
-                    self._err("traceback:\n%s", et)
-                await asyncio.to_thread(self._close_sync)
-                raise
             finally:
                 if self.cfg.debug_io_timing:
                     self._dbg("READ_COIL time=%.1f ms", (time.monotonic() - t0) * 1000.0)
@@ -700,24 +812,21 @@ class AsyncPLC:
         async with self._lock:
             t0 = time.monotonic()
             self._dbg("READ_COILS_BLOCK start start=%s count=%s (FC1)", start_addr, count)
-            await asyncio.to_thread(self._connect_sync)
-            await self._throttle_locked(op="read_coils_block")
             try:
-                assert self._inst is not None
-                bits = await asyncio.to_thread(self._inst.read_bits, start_addr, count, 1)  # FC1
-                self._touch_io_ts()
+                def _call():
+                    assert self._inst is not None
+                    return self._inst.read_bits(int(start_addr), int(count), functioncode=1)  # FC1
+
+                bits = await self._io_with_policy_locked(
+                    f"READ_COILS_BLOCK(start={start_addr},count={count})",
+                    _call,
+                )
+
                 if len(bits) < count:
                     bits = list(bits) + [0] * (count - len(bits))
                 out = [bool(b) for b in bits[:count]]
                 self._dbg("READ_COILS_BLOCK ok start=%s count=%s -> %r", start_addr, count, out)
                 return out
-            except Exception as e:
-                self._err("READ_COILS_BLOCK fail start=%s count=%s err=%r", start_addr, count, e)
-                et = self._exc_text()
-                if et:
-                    self._err("traceback:\n%s", et)
-                await asyncio.to_thread(self._close_sync)
-                raise
             finally:
                 if self.cfg.debug_io_timing:
                     self._dbg("READ_COILS_BLOCK time=%.1f ms", (time.monotonic() - t0) * 1000.0)
@@ -728,20 +837,13 @@ class AsyncPLC:
         async with self._lock:
             t0 = time.monotonic()
             self._dbg("WRITE_COIL start addr=%s value=%s (FC5)", addr, value)
-            await asyncio.to_thread(self._connect_sync)
-            await self._throttle_locked(op="write_coil")
             try:
-                assert self._inst is not None
-                await asyncio.to_thread(self._inst.write_bit, addr, 1 if value else 0, 5)  # FC5
-                self._touch_io_ts()
+                def _call():
+                    assert self._inst is not None
+                    return self._inst.write_bit(int(addr), 1 if value else 0, functioncode=5)  # FC5
+
+                await self._io_with_policy_locked(f"WRITE_COIL(addr={addr})", _call)
                 self._dbg("WRITE_COIL ok addr=%s value=%s", addr, value)
-            except Exception as e:
-                self._err("WRITE_COIL fail addr=%s value=%s err=%r", addr, value, e)
-                et = self._exc_text()
-                if et:
-                    self._err("traceback:\n%s", et)
-                await asyncio.to_thread(self._close_sync)
-                raise
             finally:
                 if self.cfg.debug_io_timing:
                     self._dbg("WRITE_COIL time=%.1f ms", (time.monotonic() - t0) * 1000.0)
@@ -751,22 +853,15 @@ class AsyncPLC:
         async with self._lock:
             t0 = time.monotonic()
             self._dbg("READ_REG start addr=%s (FC3)", addr)
-            await asyncio.to_thread(self._connect_sync)
-            await self._throttle_locked(op="read_reg")
             try:
-                assert self._inst is not None
-                v = await asyncio.to_thread(self._inst.read_register, addr, 0, 3, False)  # FC3
-                self._touch_io_ts()
+                def _call():
+                    assert self._inst is not None
+                    return self._inst.read_register(int(addr), 0, 3, False)  # FC3
+
+                v = await self._io_with_policy_locked(f"READ_REG(addr={addr})", _call)
                 out = int(v)
                 self._dbg("READ_REG ok addr=%s -> %s", addr, out)
                 return out
-            except Exception as e:
-                self._err("READ_REG fail addr=%s err=%r", addr, e)
-                et = self._exc_text()
-                if et:
-                    self._err("traceback:\n%s", et)
-                await asyncio.to_thread(self._close_sync)
-                raise
             finally:
                 if self.cfg.debug_io_timing:
                     self._dbg("READ_REG time=%.1f ms", (time.monotonic() - t0) * 1000.0)
@@ -777,20 +872,13 @@ class AsyncPLC:
         async with self._lock:
             t0 = time.monotonic()
             self._dbg("WRITE_REG start addr=%s value=%s (FC6)", addr, value)
-            await asyncio.to_thread(self._connect_sync)
-            await self._throttle_locked(op="write_reg")
             try:
-                assert self._inst is not None
-                await asyncio.to_thread(self._inst.write_register, addr, value, 0, 6, False)  # FC6
-                self._touch_io_ts()
+                def _call():
+                    assert self._inst is not None
+                    return self._inst.write_register(int(addr), int(value), 0, 6, False)  # FC6
+
+                await self._io_with_policy_locked(f"WRITE_REG(addr={addr})", _call)
                 self._dbg("WRITE_REG ok addr=%s value=%s", addr, value)
-            except Exception as e:
-                self._err("WRITE_REG fail addr=%s value=%s err=%r", addr, value, e)
-                et = self._exc_text()
-                if et:
-                    self._err("traceback:\n%s", et)
-                await asyncio.to_thread(self._close_sync)
-                raise
             finally:
                 if self.cfg.debug_io_timing:
                     self._dbg("WRITE_REG time=%.1f ms", (time.monotonic() - t0) * 1000.0)

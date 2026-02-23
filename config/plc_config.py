@@ -54,6 +54,18 @@ class PLCSettings:
     dac_current_min_ma: float = 4.0
     dac_current_max_ma: float = 20.0
 
+    # =========================
+    # ✅ 공통 IO 정책 (devices.ini [io_policy]에서 관리)
+    # - 에러 5회까지: 연결 유지 재시도
+    # - 6회째부터: close→reconnect(backoff) 후 재시도
+    # =========================
+    io_err_allow: int = 5
+    io_retry_sleep_s: float = 0.05
+    io_reconnect_max: int = 2
+    reconnect_backoff_base_s: float = 0.6
+    reconnect_backoff_factor: float = 1.7
+    reconnect_backoff_max_s: float = 5.0
+
 def load_plc_settings(ini_path: Optional[str | Path] = None, section: str = "plc") -> PLCSettings:
     path = Path(ini_path) if ini_path is not None else _default_ini_path()
     if not path.exists():
@@ -68,6 +80,29 @@ def load_plc_settings(ini_path: Optional[str | Path] = None, section: str = "plc
 
     parity = _normalize_parity(cfg.get(section, "parity", fallback=PLCSettings.parity))
     unit = _normalize_unit(cfg.getint(section, "unit", fallback=PLCSettings.unit))
+
+    io_sec = "io_policy"
+
+    def _get_int2(key: str, default: int) -> int:
+        if cfg.has_option(section, key):
+            return cfg.getint(section, key)
+        if cfg.has_option(io_sec, key):
+            return cfg.getint(io_sec, key)
+        return default
+
+    def _get_float2(key: str, default: float) -> float:
+        if cfg.has_option(section, key):
+            return cfg.getfloat(section, key)
+        if cfg.has_option(io_sec, key):
+            return cfg.getfloat(io_sec, key)
+        return default
+    
+    io_err_allow = _get_int2("io_err_allow", PLCSettings.io_err_allow)
+    io_retry_sleep_s = _get_float2("io_retry_sleep_s", PLCSettings.io_retry_sleep_s)
+    io_reconnect_max = _get_int2("io_reconnect_max", PLCSettings.io_reconnect_max)
+    reconnect_backoff_base_s = _get_float2("reconnect_backoff_base_s", PLCSettings.reconnect_backoff_base_s)
+    reconnect_backoff_factor = _get_float2("reconnect_backoff_factor", PLCSettings.reconnect_backoff_factor)
+    reconnect_backoff_max_s = _get_float2("reconnect_backoff_max_s", PLCSettings.reconnect_backoff_max_s)
 
     return PLCSettings(
         port=cfg.get(section, "port", fallback=PLCSettings.port).strip() or PLCSettings.port,
@@ -87,4 +122,11 @@ def load_plc_settings(ini_path: Optional[str | Path] = None, section: str = "plc
         dac_offset_code=cfg.getint(section, "dac_offset_code", fallback=PLCSettings.dac_offset_code),
         dac_current_min_ma=cfg.getfloat(section, "dac_current_min_ma", fallback=PLCSettings.dac_current_min_ma),
         dac_current_max_ma=cfg.getfloat(section, "dac_current_max_ma", fallback=PLCSettings.dac_current_max_ma),
+        # ✅ 공통 IO 정책
+        io_err_allow=io_err_allow,
+        io_retry_sleep_s=io_retry_sleep_s,
+        io_reconnect_max=io_reconnect_max,
+        reconnect_backoff_base_s=reconnect_backoff_base_s,
+        reconnect_backoff_factor=reconnect_backoff_factor,
+        reconnect_backoff_max_s=reconnect_backoff_max_s,
     )

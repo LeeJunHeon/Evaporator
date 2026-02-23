@@ -413,7 +413,7 @@ class ProcessEngine:
             film_no=None,
             do_zero_thickness=False,
         )
-        self._wait_future(fut, timeout_s=5.0, where=step.name, msg="STM film params 적용 실패")
+        self._wait_future(fut, timeout_s=5.0, where=f"{step.name}/STM_APPLY", msg="STM film params 적용 실패")
 
 
     def _stm_zero_thickness(self, recipe: ProcessRecipe, step: ProcessStep) -> None:
@@ -424,7 +424,7 @@ class ProcessEngine:
         self._stm_wait_connected(recipe, step, timeout_s=5.0)
 
         fut = self.stm.submit_zero_thickness(mode="C")
-        self._wait_future(fut, timeout_s=5.0, where=step.name, msg="STM thickness zero 실패")
+        self._wait_future(fut, timeout_s=5.0, where=f"{step.name}/STM_ZERO", msg="STM thickness zero 실패")
 
 
     # --------------------------------------------------------

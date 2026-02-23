@@ -206,8 +206,9 @@ class ProcessController(QObject):
 
                 # --- 요구사항 기반 제어 파라미터 ---
                 # 1초에 DAC 100씩
-                "dac_fast_step": 100,
-                "dac_slow_step": 100,
+                "ramp_step_dac": 100,        # 엔진이 읽는 키
+                "fine_step_dac": 50,         # 엔진이 읽는 키(현재 엔진 기본 50이니 명시해도 좋음)
+                "ramp_interval_s": 1.0,      # 엔진이 읽는 키(현재 기본 1.0)
 
                 # 목표 dep.rate ±5% 이내면 delay 시작
                 "rate_tol_ratio": 0.05,

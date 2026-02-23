@@ -416,15 +416,15 @@ class ProcessEngine:
         self._wait_future(fut, timeout_s=5.0, where=f"{step.name}/STM_APPLY", msg="STM film params 적용 실패")
 
 
-    def _stm_zero_thickness(self, recipe: ProcessRecipe, step: ProcessStep) -> None:
-        """STM-100 thickness zero (C)."""
+    def _stm_zero_thickness(self, recipe: ProcessRecipe, step: ProcessStep, *, mode: str = "B") -> None:
+        """STM-100 thickness/time zero. mode='B' 권장(두께+타이머)."""
         if self.stm is None:
             return
 
         self._stm_wait_connected(recipe, step, timeout_s=5.0)
 
-        fut = self.stm.submit_zero_thickness(mode="C")
-        self._wait_future(fut, timeout_s=5.0, where=f"{step.name}/STM_ZERO", msg="STM thickness zero 실패")
+        fut = self.stm.submit_zero_thickness(mode=str(mode))
+        self._wait_future(fut, timeout_s=5.0, where=f"{step.name}/STM_ZERO", msg="STM zero 실패")
 
 
     # --------------------------------------------------------
@@ -476,8 +476,13 @@ class ProcessEngine:
         rate_tol_ratio = float(meta.get("rate_tol_ratio", 0.05) or 0.05)    # ±5%
         pre_tol_ratio = float(meta.get("pre_tol_ratio", 0.10) or 0.10)      # pre_rate는 조금 넓게
 
-        ramp_step_dac = int(meta.get("ramp_step_dac", 100) or 100)          # 1초에 100
-        ramp_interval_s = float(meta.get("ramp_interval_s", 1.0) or 1.0)
+        ramp_step_dac = int(meta.get("ramp_step_dac", 100) or 100)
+
+        # ✅ DAC 1000 기준으로 램프 템포 분리
+        ramp_fast_until_dac = int(meta.get("ramp_fast_until_dac", 1000) or 1000)
+        ramp_interval_fast_s = float(meta.get("ramp_interval_fast_s", 1.0) or 1.0)   # < 1000
+        ramp_interval_slow_s = float(meta.get("ramp_interval_slow_s", 10.0) or 10.0) # >= 1000
+
         fine_step_dac = int(meta.get("fine_step_dac", 50) or 50)
 
         rate_drop_ratio = float(meta.get("rate_drop_ratio", 0.30) or 0.30)  # 70% 급감 => 30% 이하
@@ -485,6 +490,11 @@ class ProcessEngine:
 
         dac_max = int(meta.get("dac_max", 4000) or 4000)
         sensor_none_abort_s = float(meta.get("sensor_none_abort_s", 5.0) or 5.0)
+
+        # ✅ stuck guard(“rate가 안 오르는데 DAC만 계속 올리는 것” 방지)
+        stuck_dac_guard = int(meta.get("stuck_dac_guard", 1500) or 1500)  # 이 이상 DAC인데도
+        stuck_rate_abs = float(meta.get("stuck_rate_abs", 0.05) or 0.05)  # rate가 이 값 미만이면
+        stuck_time_s = float(meta.get("stuck_time_s", 60.0) or 60.0)      # 이 시간 지속 시 중단
 
         # delay는 분 단위 입력(기존 UI) → 초로 변환
         delay_s = delay_min * 60.0
@@ -516,6 +526,12 @@ class ProcessEngine:
                 self._check_stop_pause(recipe, step)
                 self._tick_emit(recipe, step)
                 time.sleep(min(0.1, end_t - time.time()))
+
+        def _ramp_sleep_by_dac(cur_dac: int) -> None:
+            if int(cur_dac) >= int(ramp_fast_until_dac):
+                _sleep_with_checks(ramp_interval_slow_s)
+            else:
+                _sleep_with_checks(ramp_interval_fast_s)
 
         def _in_band(rt: float, tgt: float, *, tol_ratio: float) -> bool:
             tol = max(1e-9, abs(float(tgt)) * float(tol_ratio))
@@ -562,12 +578,28 @@ class ProcessEngine:
         ramp_timeout_s = float(meta.get("ramp_timeout_s", 600.0) or 600.0)
         t_ramp0 = time.time()
 
+        stuck_start_ts_pre: Optional[float] = None
+
         while True:
             rt = read_rate_or_abort()
             if rt >= pre_rate:
                 break
 
-            if (time.time() - t_ramp0) > ramp_timeout_s:
+            # ✅ stuck guard: 특정 DAC 이상인데 rate가 거의 0이면, 무작정 DAC 올리지 말고 중단
+            now = time.time()
+            if dac >= stuck_dac_guard and rt < stuck_rate_abs:
+                if stuck_start_ts_pre is None:
+                    stuck_start_ts_pre = now
+                elif (now - stuck_start_ts_pre) >= stuck_time_s:
+                    raise EngineFailed(
+                        step.name,
+                        f"EVAP: rate 상승 없음(stuck/pre) rt={rt:.3f} < {stuck_rate_abs:.3f} "
+                        f"@ dac={dac} (>= {stuck_dac_guard}) for {stuck_time_s:.0f}s"
+                    )
+            else:
+                stuck_start_ts_pre = None
+
+            if (now - t_ramp0) > ramp_timeout_s:
                 raise EngineFailed(step.name, f"EVAP: pre_rate ramp timeout {ramp_timeout_s}s (rt={rt:.3f})")
 
             if dac >= dac_max:
@@ -576,7 +608,7 @@ class ProcessEngine:
             dac = min(dac_max, dac + ramp_step_dac)
             apply_dac()
             self._emit_status(message=f"ramp(pre): dac={dac}, rt={rt:.3f}")
-            _sleep_with_checks(ramp_interval_s)
+            _ramp_sleep_by_dac(dac)
 
         # 4) pre_rate 유지(2분)
         if pre_hold_s > 0:
@@ -604,6 +636,9 @@ class ProcessEngine:
         # 5) target_rate까지 ramp-up (일단은 계속 +100)
         self._emit_status(message=f"EVAP target_rate ramp-up: target_rate={target_rate} Å/s")
         t_ramp1 = time.time()
+
+        stuck_start_ts_target: Optional[float] = None
+
         while True:
             rt = read_rate_or_abort()
 
@@ -611,7 +646,21 @@ class ProcessEngine:
             if rt >= target_rate * (1.0 - rate_tol_ratio):
                 break
 
-            if (time.time() - t_ramp1) > ramp_timeout_s:
+            # ✅ stuck guard: 특정 DAC 이상인데 rate가 거의 0이면, 무작정 DAC 올리지 말고 중단
+            now = time.time()
+            if dac >= stuck_dac_guard and rt < stuck_rate_abs:
+                if stuck_start_ts_target is None:
+                    stuck_start_ts_target = now
+                elif (now - stuck_start_ts_target) >= stuck_time_s:
+                    raise EngineFailed(
+                        step.name,
+                        f"EVAP: rate 상승 없음(stuck/target) rt={rt:.3f} < {stuck_rate_abs:.3f} "
+                        f"@ dac={dac} (>= {stuck_dac_guard}) for {stuck_time_s:.0f}s"
+                    )
+            else:
+                stuck_start_ts_target = None
+
+            if (now - t_ramp1) > ramp_timeout_s:
                 raise EngineFailed(step.name, f"EVAP: target_rate ramp timeout {ramp_timeout_s}s (rt={rt:.3f})")
 
             if dac >= dac_max:
@@ -620,7 +669,7 @@ class ProcessEngine:
             dac = min(dac_max, dac + ramp_step_dac)
             apply_dac()
             self._emit_status(message=f"ramp(target): dac={dac}, rt={rt:.3f}")
-            _sleep_with_checks(ramp_interval_s)
+            _ramp_sleep_by_dac(dac)
 
         # 6) target_rate ±5% band 안으로 fine tune
         self._emit_status(message=f"EVAP fine tune: tol=±{rate_tol_ratio*100:.1f}%")
@@ -677,7 +726,8 @@ class ProcessEngine:
 
         # 8) delay 종료 → STM zero
         self._emit_status(message="EVAP: STM zero + MAIN_SHUTTER open")
-        self._stm_zero_thickness(recipe, step)
+        zero_mode = str(meta.get("zero_mode", "B") or "B")
+        self._stm_zero_thickness(recipe, step, mode=zero_mode)
         
         # zero 직후 thickness baseline 확보(소프트웨어 기준)
         th0 = read_th_or_abort()
@@ -1089,9 +1139,9 @@ class ProcessEngine:
         if (now - self._last_status_emit_ts) >= self._status_emit_interval_s:
             self._emit_status(step_idx=self._current_step_idx, step_name=self._current_step_name)
 
-        tele_int = float(recipe.telemetry_interval_s or 0.5)
+        tele_int = float(recipe.telemetry_interval_s or 1.0)
         if tele_int <= 0:
-            tele_int = 0.5
+            tele_int = 1.0
 
         if (now - self._last_telemetry_ts) >= tele_int:
             self._last_telemetry_ts = now
@@ -1152,16 +1202,39 @@ class ProcessEngine:
         LogService.telemetry()로 run별 CSV에 저장.
         """
         try:
+            acs = self._get_acs_snapshot()
+            acs_meta = getattr(acs, "meta", None) if acs is not None else None
+            pressure_status = None
+            pressure_status_text = None
+            pressure_ok = None
+            pressure_raw = None
+            if isinstance(acs_meta, dict):
+                pressure_status = acs_meta.get("status")
+                pressure_status_text = acs_meta.get("status_text")
+                pressure_ok = acs_meta.get("ok")
+                pressure_raw = acs_meta.get("raw")
+
             self.log.telemetry({
-                "step_idx": self._current_step_idx,
-                "step_name": self._current_step_name,
-                "step_type": step.type.value,
+                # ✅ CSV 고정 컬럼 step 채우기
+                "step": self._current_step_name,
+
                 "phase": self._phase.value,
-                "pressure": self._get_pressure(),
+
+                # ✅ log_service는 pressure_torr 컬럼을 기대함 (pressure를 보내도 보정되지만, 직접 맞추는게 깔끔)
+                "pressure_torr": self._get_pressure(),
+
                 "thickness_A": self._get_thickness(),
                 "rate_Aps": self._get_rate(),
-                "dac1": getattr(self, "_last_dac_power_1", 0),
-                "dac2": getattr(self, "_last_dac_power_2", 0),
+                "dac1": int(getattr(self, "_last_dac_power_1", 0) or 0),
+                "dac2": int(getattr(self, "_last_dac_power_2", 0) or 0),
+
+                # 아래는 고정 컬럼 밖 → extras_json에 들어감 (공정 분석용)
+                "step_idx": self._current_step_idx,
+                "step_type": step.type.value,
+                "pressure_status": pressure_status,
+                "pressure_status_text": pressure_status_text,
+                "pressure_ok": pressure_ok,
+                "pressure_raw": pressure_raw,
             })
         except Exception:
             # 텔레메트리 실패해도 공정은 계속

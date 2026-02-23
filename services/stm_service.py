@@ -20,6 +20,7 @@ import queue
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Dict, Any
+from concurrent.futures import Future
 
 from PySide6.QtCore import QObject, QThread, Signal
 
@@ -44,9 +45,25 @@ class STMSnapshot:
 # Worker command
 # ============================================================
 
+
 @dataclass(frozen=True)
 class _CmdReload:
     ini_path: Path
+
+
+@dataclass(frozen=True)
+class _CmdApplyMaterialParams:
+    density_g_cm3: float
+    z_factor: float
+    film_no: Optional[int]
+    do_zero_thickness: bool
+    future: Future
+
+
+@dataclass(frozen=True)
+class _CmdZeroThickness:
+    mode: str   # "C" thickness only, "B" thickness+timer
+    future: Future
 
 
 # ============================================================
@@ -111,6 +128,37 @@ class STMServiceWorker(QThread):
         except Exception:
             pass
 
+    def request_apply_material_params(
+        self,
+        *,
+        density_g_cm3: float,
+        z_factor: float,
+        film_no: Optional[int] = None,
+        do_zero_thickness: bool = False,
+    ) -> Future:
+        fut: Future = Future()
+        try:
+            self._cmd_q.put_nowait(
+                _CmdApplyMaterialParams(
+                    density_g_cm3=float(density_g_cm3),
+                    z_factor=float(z_factor),
+                    film_no=film_no,
+                    do_zero_thickness=bool(do_zero_thickness),
+                    future=fut,
+                )
+            )
+        except Exception as e:
+            fut.set_exception(e)
+        return fut
+
+    def request_zero_thickness(self, *, mode: str = "C") -> Future:
+        fut: Future = Future()
+        try:
+            self._cmd_q.put_nowait(_CmdZeroThickness(mode=str(mode), future=fut))
+        except Exception as e:
+            fut.set_exception(e)
+        return fut
+
     def get_last_snapshot(self) -> Optional[STMSnapshot]:
         return self._last_snapshot
 
@@ -166,16 +214,87 @@ class STMServiceWorker(QThread):
         self._next_try = 0.0
         self.sig_error.emit(f"[STMService] reload ini -> {self._ini_path}")
 
+    def _ensure_connected_for_cmd(self) -> None:
+        """
+        명령 실행(SET/ZERO)은 연결이 있어야 한다.
+        연결이 아니면 즉시 재연결 1회 시도 후 실패면 예외.
+        """
+        now = time.time()
+        if (not self._connected) or (self._stm is None):
+            # 즉시 재시도
+            self._next_try = 0.0
+            self._try_connect(now)
+
+        if (not self._connected) or (self._stm is None):
+            raise RuntimeError("STM not connected")
+
     def _drain_commands(self) -> None:
         while True:
             try:
                 cmd = self._cmd_q.get_nowait()
             except queue.Empty:
                 return
+
             if cmd is None:
                 continue
+
             if isinstance(cmd, _CmdReload):
                 self._handle_reload(cmd.ini_path)
+                continue
+
+            if isinstance(cmd, _CmdApplyMaterialParams):
+                fut = cmd.future
+                try:
+                    self._ensure_connected_for_cmd()
+                    assert self._stm is not None
+
+                    # devices/stm100.py에 이미 구현된 "한 방" API 사용
+                    self._stm.apply_material_params(
+                        density_g_cm3=float(cmd.density_g_cm3),
+                        z_factor=float(cmd.z_factor),
+                        film_no=cmd.film_no,
+                        do_zero_thickness=bool(cmd.do_zero_thickness),
+                    )
+                    fut.set_result(True)
+                except Exception as e:
+                    try:
+                        fut.set_exception(e)
+                    except Exception:
+                        pass
+                    self.sig_error.emit(f"[STMService] apply_material_params failed: {e!r}")
+
+                    # 끊김/오류로 보고 재연결 사이클로
+                    self._safe_close()
+                    self._set_connected(False)
+                    self._next_try = time.time() + self._reconnect_interval_s
+                continue
+
+            if isinstance(cmd, _CmdZeroThickness):
+                fut = cmd.future
+                try:
+                    self._ensure_connected_for_cmd()
+                    assert self._stm is not None
+
+                    m = (cmd.mode or "C").strip().upper()
+                    if m == "C":
+                        self._stm.zero_thickness()
+                    elif m == "B":
+                        self._stm.zero_timer_and_thickness()
+                    else:
+                        raise ValueError(f"invalid zero mode: {cmd.mode!r} (use 'C' or 'B')")
+
+                    fut.set_result(True)
+                except Exception as e:
+                    try:
+                        fut.set_exception(e)
+                    except Exception:
+                        pass
+                    self.sig_error.emit(f"[STMService] zero_thickness failed: {e!r}")
+
+                    self._safe_close()
+                    self._set_connected(False)
+                    self._next_try = time.time() + self._reconnect_interval_s
+                continue
 
     def _try_connect(self, now: float) -> None:
         if self._connected:
@@ -329,4 +448,31 @@ class STMService(QObject):
 
     def reload_from_ini(self, ini_path: str | Path) -> None:
         self._worker.request_reload(ini_path)
+
+    # ✅ engine.py가 호출하는 API (Future 반환)
+    def submit_apply_material_params(
+        self,
+        *,
+        density_g_cm3: float,
+        z_factor: float,
+        film_no: Optional[int] = None,
+        do_zero_thickness: bool = False,
+    ) -> Future:
+        if not self.is_running():
+            fut: Future = Future()
+            fut.set_exception(RuntimeError("STMService is not running"))
+            return fut
+        return self._worker.request_apply_material_params(
+            density_g_cm3=density_g_cm3,
+            z_factor=z_factor,
+            film_no=film_no,
+            do_zero_thickness=do_zero_thickness,
+        )
+
+    def submit_zero_thickness(self, *, mode: str = "C") -> Future:
+        if not self.is_running():
+            fut: Future = Future()
+            fut.set_exception(RuntimeError("STMService is not running"))
+            return fut
+        return self._worker.request_zero_thickness(mode=mode)
 

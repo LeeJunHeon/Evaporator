@@ -35,7 +35,7 @@ class PLCSettings:
     baudrate: int = 115200
     bytesize: int = 8
     parity: str = "N"
-    stopbits: int = 1.0
+    stopbits: int = 1
     unit: int = 1
 
     timeout_s: float = 0.5

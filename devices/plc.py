@@ -114,11 +114,7 @@ class PLCConfig:
     dac_current_min_ma: float
     dac_current_max_ma: float
 
-    # =========================
-    # Retry / Reconnect Policy
-    # - 에러 5회까지: "연결 유지" 재시도
-    # - 6회째부터: close→reconnect(backoff) 후 재시도
-    # =========================
+    # ✅ IO policy (ini/settings에서 주입)
     io_err_allow: int
     io_retry_sleep_s: float
     io_reconnect_max: int
@@ -202,7 +198,7 @@ class AsyncPLC:
 
         # 2) merge: 명시 인자 > settings(ini) 우선순위
         port_v = str(port if port is not None else base.port)
-        method_v = str(method if method is not None else getattr(base, "method", "rtu")).lower()
+        method_v = str(method if method is not None else base.method).lower()
         if method_v not in ("rtu",):
             raise ValueError(f"Unsupported PLC method={method_v!r} (only 'rtu' supported)")
 
@@ -214,20 +210,20 @@ class AsyncPLC:
 
         stop_v = int(stopbits if stopbits is not None else base.stopbits)
 
-        unit_v = int(unit if unit is not None else getattr(base, "unit", 1))
+        unit_v = int(unit if unit is not None else base.unit)
         if unit_v <= 0:
             unit_v = 1  # ✅ 브로드캐스트 방지
 
         timeout_v = float(timeout_s if timeout_s is not None else base.timeout_s)
-        pulse_v = int(pulse_ms if pulse_ms is not None else getattr(base, "pulse_ms", 180))
+        pulse_v = int(pulse_ms if pulse_ms is not None else base.pulse_ms)
 
         # inter_cmd_gap_s는 plc_config.py에 추가했을 수도/아직 없을 수도 → getattr fallback
-        gap_v = float(inter_cmd_gap_s if inter_cmd_gap_s is not None else getattr(base, "inter_cmd_gap_s", 0.05))
+        gap_v = float(inter_cmd_gap_s if inter_cmd_gap_s is not None else base.inter_cmd_gap_s)
 
-        dac_fs_v = int(dac_full_scale_code if dac_full_scale_code is not None else getattr(base, "dac_full_scale_code", 4000))
-        dac_off_v = int(dac_offset_code if dac_offset_code is not None else getattr(base, "dac_offset_code", 0))
-        dac_min_v = float(dac_current_min_ma if dac_current_min_ma is not None else getattr(base, "dac_current_min_ma", 4.0))
-        dac_max_v = float(dac_current_max_ma if dac_current_max_ma is not None else getattr(base, "dac_current_max_ma", 20.0))
+        dac_fs_v = int(dac_full_scale_code if dac_full_scale_code is not None else base.dac_full_scale_code)
+        dac_off_v = int(dac_offset_code if dac_offset_code is not None else base.dac_offset_code)
+        dac_min_v = float(dac_current_min_ma if dac_current_min_ma is not None else base.dac_current_min_ma)
+        dac_max_v = float(dac_current_max_ma if dac_current_max_ma is not None else base.dac_current_max_ma)
 
         io_err_allow_v = int(base.io_err_allow)
         io_retry_sleep_v = float(base.io_retry_sleep_s)
@@ -237,17 +233,13 @@ class AsyncPLC:
         reconnect_factor_v = float(base.reconnect_backoff_factor)
         reconnect_max_v = float(base.reconnect_backoff_max_s)
 
-        # 값 sanity
-        if io_err_allow_v < 0:
-            io_err_allow_v = 0
-        if io_reconnect_max_v < 0:
-            io_reconnect_max_v = 0
-        if reconnect_base_v <= 0:
-            reconnect_base_v = 0.3
-        if reconnect_factor_v < 1.0:
-            reconnect_factor_v = 1.0
-        if reconnect_max_v < reconnect_base_v:  
-            reconnect_max_v = reconnect_base_v
+        # sanity (숫자 하드코딩 없이, settings 값 기반으로만 보정)
+        if io_err_allow_v < 0: io_err_allow_v = 0
+        if io_retry_sleep_v < 0: io_retry_sleep_v = 0.0
+        if io_reconnect_max_v < 0: io_reconnect_max_v = 0
+        if reconnect_base_v <= 0: reconnect_base_v = float(base.reconnect_interval_s)
+        if reconnect_factor_v < 1.0: reconnect_factor_v = 1.0
+        if reconnect_max_v < reconnect_base_v: reconnect_max_v = reconnect_base_v
 
         self.cfg = PLCConfig(
             port=port_v,
@@ -264,7 +256,7 @@ class AsyncPLC:
             dac_offset_code=dac_off_v,
             dac_current_min_ma=dac_min_v,
             dac_current_max_ma=dac_max_v,
-            # ✅ Retry / Reconnect policy
+            # ✅ io_policy
             io_err_allow=io_err_allow_v,
             io_retry_sleep_s=io_retry_sleep_v,
             io_reconnect_max=io_reconnect_max_v,

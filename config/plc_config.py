@@ -35,7 +35,7 @@ class PLCSettings:
     baudrate: int = 115200
     bytesize: int = 8
     parity: str = "N"
-    stopbits: int = 1
+    stopbits: int = 1.0
     unit: int = 1
 
     timeout_s: float = 0.5
@@ -59,7 +59,7 @@ def load_plc_settings(ini_path: Optional[str | Path] = None, section: str = "plc
     if not path.exists():
         return PLCSettings()
 
-    cfg = ConfigParser()
+    cfg = ConfigParser(interpolation=None)
     cfg.read(path, encoding="utf-8")
     if not cfg.has_section(section):
         return PLCSettings()

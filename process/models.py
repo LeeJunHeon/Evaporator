@@ -364,7 +364,7 @@ class ProcessRecipe:
     default_poll_s: float = 0.2
 
     # 텔레메트리 기록 주기(초) - engine이 log_service.telemetry() 호출할 주기
-    telemetry_interval_s: float = 0.5
+    telemetry_interval_s: float = 1.0
 
     # 레시피 메타(옵션)
     operator: str = ""
@@ -407,7 +407,7 @@ class ProcessRecipe:
             recipe_name=_safe_str(d.get("recipe_name")),
             steps=steps,
             default_poll_s=float(d.get("default_poll_s", 0.2)),
-            telemetry_interval_s=float(d.get("telemetry_interval_s", 0.5)),
+            telemetry_interval_s=float(d.get("telemetry_interval_s", 1.0)),
             operator=_safe_str(d.get("operator", "")),
             note=_safe_str(d.get("note", "")),
             meta=dict(d.get("meta") or {}),

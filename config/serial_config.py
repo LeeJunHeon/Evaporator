@@ -13,7 +13,7 @@ class SerialSettings:
     baudrate: int = 9600
     bytesize: int = 8
     parity: str = "N"
-    stopbits: int = 1
+    stopbits: int = 1.0
     timeout_s: float = 0.5
     write_timeout_s: float = 0.5
     rtscts: bool = False
@@ -67,7 +67,7 @@ def load_settings(ini_path: str | Path, section: str) -> SerialSettings:
         baudrate=_get_int(cfg, section, "baudrate", 9600),
         bytesize=_get_int(cfg, section, "bytesize", 8),
         parity=_get_str(cfg, section, "parity", "N").upper(),
-        stopbits=_get_int(cfg, section, "stopbits", 1),
+        stopbits=_get_int(cfg, section, "stopbits", 1.0),
         timeout_s=_get_float(cfg, section, "timeout_s", 0.5),
         write_timeout_s=_get_float(cfg, section, "write_timeout_s", 0.5),
         rtscts=_get_bool(cfg, section, "rtscts", False),

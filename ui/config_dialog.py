@@ -254,7 +254,7 @@ class ConfigDialog(QDialog):
         self.plc_stopbits.setValue(int(plc.get("stopbits", 1)))
         self.plc_unit.setValue(int(plc.get("unit", 1)))
         self.plc_timeout.setValue(float(plc.get("timeout_s", 2.0)))
-        self.plc_poll.setValue(float(plc.get("poll_interval_s", 0.25)))
+        self.plc_poll.setValue(float(plc.get("poll_interval_s", 1.0)))
         self.plc_reconn.setValue(float(plc.get("reconnect_interval_s", 1.0)))
         self.plc_pulse.setValue(int(plc.get("pulse_ms", 180)))
 

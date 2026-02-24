@@ -447,6 +447,10 @@ class ProcessStatus:
     thickness_a: Optional[float] = None
     rate_a_s: Optional[float] = None
 
+    # ✅ 최신 DAC 출력값(옵션) - power ramp/표시/그래프에 사용
+    dac1: Optional[int] = None
+    dac2: Optional[int] = None
+
 
 @dataclass(frozen=True)
 class ProcessError:

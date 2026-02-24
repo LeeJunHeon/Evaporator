@@ -563,13 +563,21 @@ class ProcessWindow(QWidget):
             QMessageBox.warning(self, "Process", "start_from_ui가 구현되어 있지 않습니다.\nProcessController에 start_from_ui를 추가하세요.")
             self._rt_stop()
             self._shutdown_sensors_and_release_memory()
+            self._reset_process_ui()
             return
 
         try:
             pc.start_from_ui(run_cfg)
         except Exception as e:
-            self._rt_stop()
-            self._shutdown_sensors_and_release_memory()
+            with contextlib.suppress(Exception):
+                self._safe_shutdown_plc_best_effort()
+            with contextlib.suppress(Exception):
+                self._rt_stop()
+            with contextlib.suppress(Exception):
+                self._shutdown_sensors_and_release_memory()
+            with contextlib.suppress(Exception):
+                self._reset_process_ui()
+
             QMessageBox.warning(self, "Process Start Failed", f"{e!r}")
             _append_text(self.ui.logWindow, f"[START FAIL] {e!r}")
             return
@@ -681,25 +689,31 @@ class ProcessWindow(QWidget):
             _append_text(getattr(self.ui, "logWindow", None), f"[ERROR] {err!r}")
 
     def _on_finished(self, result: Any) -> None:
-        # ✅ UI RT 정지
-        self._rt_stop()
-
-        # (선택) 공정 엔진이 끝에서 셔터/파워를 이미 정리한다면 아래는 생략 가능
-        # 그래도 운영 안전을 위해 “best effort”로 한 번 더 호출하는 걸 권장
-        self._safe_shutdown_plc_best_effort()
-
-        # ✅ 센서/메모리 정리
-        self._shutdown_sensors_and_release_memory()
-        
-        # ✅ 공정 종료 후 UI 초기화(입력/물질/그래프)
-        self._reset_process_ui()
-
         try:
-            ok = bool(getattr(result, "ok", False))
-            rid = getattr(result, "run_id", "")
-            _append_text(getattr(self.ui, "logWindow", None), f"[FINISHED] ok={ok} run_id={rid}")
-        except Exception:
-            _append_text(getattr(self.ui, "logWindow", None), "[FINISHED]")
+            # ✅ UI RT 정지
+            with contextlib.suppress(Exception):
+                self._rt_stop()
+
+            # ✅ 운영 안전: best-effort 안전정지
+            with contextlib.suppress(Exception):
+                self._safe_shutdown_plc_best_effort()
+
+            # ✅ 센서/메모리 정리
+            with contextlib.suppress(Exception):
+                self._shutdown_sensors_and_release_memory()
+
+            # ✅ finished 로그는 초기화 전에 남기는 게 보통 더 보기 좋음
+            try:
+                ok = bool(getattr(result, "ok", False))
+                rid = getattr(result, "run_id", "")
+                _append_text(getattr(self.ui, "logWindow", None), f"[FINISHED] ok={ok} run_id={rid}")
+            except Exception:
+                _append_text(getattr(self.ui, "logWindow", None), "[FINISHED]")
+
+        finally:
+            # ✅ 성공/실패/예외 상관없이 UI 초기화 보장
+            with contextlib.suppress(Exception):
+                self._reset_process_ui()
 
     def closeEvent(self, event):
         # ✅ Process 창 닫기(X) = Stop 버튼과 동일하게 동작

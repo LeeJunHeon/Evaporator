@@ -13,8 +13,9 @@
 from PySide6.QtCore import QCoreApplication, QMetaObject, QRect, Qt
 from PySide6.QtGui import QFont, QPalette
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QFrame, QLabel, QLineEdit, QPlainTextEdit,
+    QApplication, QRadioButton, QFrame, QLabel, QLineEdit, QPlainTextEdit,
     QPushButton, QStackedWidget, QWidget, QGroupBox, QSpinBox, QGridLayout,
+    QButtonGroup,
 )
 
 
@@ -477,8 +478,13 @@ class Ui_Form(object):
         self.currentThicknessLabel.setGeometry(QRect(0, 550, 191, 20))
 
         self.currentThicknessEdit = QLineEdit(self.page_2)
-        self.currentThicknessEdit.setGeometry(QRect(0, 570, 191, 26))
+        self.currentThicknessEdit.setGeometry(QRect(0, 520, 191, 26))
         self.currentThicknessEdit.setReadOnly(True)
+
+        # ✅ Recipe 파일 선택(추후 레시피 로딩 기능 연결용)
+        self.recipeBtn = QPushButton(self.page_2)
+        self.recipeBtn.setObjectName("recipeBtn")
+        self.recipeBtn.setGeometry(QRect(0, 560, 191, 41))
 
         self.graphWidget = QWidget(self.page_2)
         self.graphWidget.setObjectName("graphWidget")
@@ -492,12 +498,12 @@ class Ui_Form(object):
         self.deprateEdit2.setObjectName("deprateEdit2")
         self.deprateEdit2.setGeometry(QRect(100, 320, 91, 26))
 
-        self.powerEdit = QLineEdit(self.page_2)
-        self.powerEdit.setObjectName("powerEdit")
-        self.powerEdit.setGeometry(QRect(0, 420, 91, 26))
-        self.powerEdit2 = QLineEdit(self.page_2)
-        self.powerEdit2.setObjectName("powerEdit2")
-        self.powerEdit2.setGeometry(QRect(100, 420, 91, 26))
+        # self.powerEdit = QLineEdit(self.page_2)
+        # self.powerEdit.setObjectName("powerEdit")
+        # self.powerEdit.setGeometry(QRect(0, 420, 91, 26))
+        # self.powerEdit2 = QLineEdit(self.page_2)
+        # self.powerEdit2.setObjectName("powerEdit2")
+        # self.powerEdit2.setGeometry(QRect(100, 420, 91, 26))
 
         self.thicknessEdit = QLineEdit(self.page_2)
         self.thicknessEdit.setObjectName("thicknessEdit")
@@ -539,10 +545,10 @@ class Ui_Form(object):
         self.delayLabel.setGeometry(QRect(0, 450, 181, 20))
         self.delayLabel.setAlignment(Qt.AlignmentFlag.AlignLeading | Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
-        self.pwoerLabel = QLabel(self.page_2)
-        self.pwoerLabel.setObjectName("pwoerLabel")
-        self.pwoerLabel.setGeometry(QRect(0, 400, 181, 20))
-        self.pwoerLabel.setAlignment(Qt.AlignmentFlag.AlignLeading | Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        # self.pwoerLabel = QLabel(self.page_2)
+        # self.pwoerLabel.setObjectName("pwoerLabel")
+        # self.pwoerLabel.setGeometry(QRect(0, 400, 181, 20))
+        # self.pwoerLabel.setAlignment(Qt.AlignmentFlag.AlignLeading | Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
         self.deprateLabel = QLabel(self.page_2)
         self.deprateLabel.setObjectName("deprateLabel")
@@ -562,16 +568,22 @@ class Ui_Form(object):
         self.hmiBtn.setObjectName("hmiBtn")
         self.hmiBtn.setGeometry(QRect(0, 50, 191, 61))
 
-        self.sourcePower1 = QCheckBox(self.page_2)
+        self.sourcePower1 = QRadioButton(self.page_2)
         self.sourcePower1.setObjectName("sourcePower1")
         self.sourcePower1.setGeometry(QRect(0, 120, 81, 24))
 
-        self.sourcePower2 = QCheckBox(self.page_2)
+        self.sourcePower2 = QRadioButton(self.page_2)
         self.sourcePower2.setObjectName("sourcePower2")
         self.sourcePower2.setGeometry(QRect(110, 120, 81, 24))
 
-        # 기본 선택(안전하게 Power1만 기본 체크, 둘 다 가능)
-        self.sourcePower1.setChecked(True)
+        # ✅ 둘 중 1개만 선택되도록 그룹 지정
+        self._power_group = QButtonGroup(self.page_2)
+        self._power_group.setExclusive(True)
+        self._power_group.addButton(self.sourcePower1, 1)
+        self._power_group.addButton(self.sourcePower2, 2)
+
+        # 기본 선택: Power2
+        self.sourcePower2.setChecked(True)
 
         self.processMonitor_Process = QLineEdit(self.page_2)
         self.processMonitor_Process.setObjectName("processMonitor_Process")
@@ -631,10 +643,10 @@ class Ui_Form(object):
         self.materialLabel.setText(QCoreApplication.translate("Form", "Material Name", None))
         self.stopProcess.setText(QCoreApplication.translate("Form", "Stop", None))
         self.startProcess.setText(QCoreApplication.translate("Form", "Start", None))
-        self.thicknessLabel.setText(QCoreApplication.translate("Form", "Thickness", None))
-        self.delayLabel.setText(QCoreApplication.translate("Form", "Delay", None))
-        self.pwoerLabel.setText(QCoreApplication.translate("Form", "Power Ramp", None))
-        self.deprateLabel.setText(QCoreApplication.translate("Form", "Dep.Rate", None))
+        self.thicknessLabel.setText(QCoreApplication.translate("Form", "Thickness (Å)", None))
+        self.delayLabel.setText(QCoreApplication.translate("Form", "Shutter Delay (min)", None))
+        #self.pwoerLabel.setText(QCoreApplication.translate("Form", "Power Ramp", None))
+        self.deprateLabel.setText(QCoreApplication.translate("Form", "Dep.Rate (Å/s)", None))
         self.evaporatorLabel.setText(QCoreApplication.translate("Form", "Evaporator", None))
         self.hmiBtn.setText(QCoreApplication.translate("Form", "HMI", None))
         self.sourcePower1.setText(QCoreApplication.translate("Form", "Power 1", None))
@@ -645,18 +657,19 @@ class Ui_Form(object):
         self.materialEdit2.setText(QCoreApplication.translate("Form", "Select", None))
 
         # ✅ Density / Z-Factor 라벨 (위 라벨)
-        self.materialRhoLabel1.setText(QCoreApplication.translate("Form", "Density", None))
+        self.materialRhoLabel1.setText(QCoreApplication.translate("Form", "Density (g/cm³)", None))
         self.materialRhoLabel2.setText(QCoreApplication.translate("Form", "", None))  # 숨김 처리용
-        self.materialZLabel1.setText(QCoreApplication.translate("Form", "Z-Factor", None))
+        self.materialZLabel1.setText(QCoreApplication.translate("Form", "Z-Factor (-)", None))
         self.materialZLabel2.setText(QCoreApplication.translate("Form", "", None))    # 숨김 처리용
 
         # Cur Rate는 2칸이므로 각 칸 라벨 분리(재료/소스 1/2 의미)
-        self.currentRateLabel.setText(QCoreApplication.translate("Form", "Cur Rate 1", None))
-        self.currentRateLabel2.setText(QCoreApplication.translate("Form", "Cur Rate 2", None))
+        self.currentRateLabel.setText(QCoreApplication.translate("Form", "Cur Rate 1 (Å/s)", None))
+        self.currentRateLabel2.setText(QCoreApplication.translate("Form", "Cur Rate 2 (Å/s)", None))
 
         # Thick는 전체 1칸
-        self.currentThicknessLabel.setText(QCoreApplication.translate("Form", "Cur Thick", None))
+        self.currentThicknessLabel.setText(QCoreApplication.translate("Form", "Cur Thick (Å)", None))
 
+        self.recipeBtn.setText("Recipe")
     # =========================
     # Style only
     # =========================

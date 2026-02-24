@@ -382,52 +382,53 @@ class ProcessController(QObject):
     # Internal helpers
     # --------------------------------------------------------
     def _issue_safe_stop_outputs(self, *, tag: str = "SAFE_STOP") -> None:
-            """
-            안전 출력(best-effort, enqueue만 사용):
-            1) MAIN_SHUTTER close
-            2) SOURCE SHUTTER close (1/2)
-            3) DAC 0
-            4) POWER off
-            5) FTM off
-            """
-            try:
-                self._ensure_services_running()
-            except Exception:
-                pass
+        """
+        안전 출력(best-effort, enqueue만 사용):
+        1) MAIN_SHUTTER close
+        2) SOURCE SHUTTER close (1/2)
+        3) DAC 0
+        4) POWER off
+        5) FTM off
+        """
+        try:
+            self._ensure_services_running()
+        except Exception:
+            pass
 
-            # 1) Shutters close
+        # 1) Shutters close
+        for coil in ("MAIN_SHUTTER_SW", "SHUTTER_1_SW", "SHUTTER_2_SW"):
             try:
-                self.plc.enqueue_write_coil("MAIN_SHUTTER_SW", False, tag=tag)
-                self._csv_event(event="WRITE_COIL", target="MAIN_SHUTTER_SW", value=0, detail=f"ENQ tag={tag}")
+                self.plc.enqueue_write_coil(coil, False, tag=tag)
+                self._csv_event(event="WRITE_COIL", target=coil, value=0, detail=f"ENQ tag={tag}")
             except Exception as e:
-                self._csv_event(event="WRITE_COIL", target="MAIN_SHUTTER_SW", value=0, detail=f"ERR tag={tag} {e!r}")
-                self._ui_warn(f"MAIN_SHUTTER close 실패(enqueue): {e!r}")
+                self._csv_event(event="WRITE_COIL", target=coil, value=0, detail=f"ERR tag={tag} {e!r}")
+                self._ui_warn(f"{coil} close 실패(enqueue): {e!r}")
 
-            for coil in ("SHUTTER_1_SW", "SHUTTER_2_SW"):
-                try:
-                    self.plc.enqueue_write_coil(coil, False, tag=tag)
-                except Exception as e:
-                    self._ui_warn(f"{coil} close 실패(enqueue): {e!r}")
-
-            # 2) DAC=0
+        # 2) DAC=0
+        for reg in ("DAC_POWER_1", "DAC_POWER_2"):
             try:
-                self.plc.enqueue_write_reg("DAC_POWER_1", 0, tag=tag)
-                self.plc.enqueue_write_reg("DAC_POWER_2", 0, tag=tag)
+                self.plc.enqueue_write_reg(reg, 0, tag=tag)
+                self._csv_event(event="SET_DAC", target=reg, value=0, detail=f"ENQ tag={tag}")
             except Exception as e:
-                self._ui_warn(f"DAC 0 실패(enqueue): {e!r}")
+                self._csv_event(event="SET_DAC", target=reg, value=0, detail=f"ERR tag={tag} {e!r}")
+                self._ui_warn(f"{reg} 0 실패(enqueue): {e!r}")
 
-            # 3) Power off
+        # 3) Power off
+        for coil in ("POWER_1_SW", "POWER_2_SW"):
             try:
-                self.plc.enqueue_write_coil("POWER_1_SW", False, tag=tag)
-                self.plc.enqueue_write_coil("POWER_2_SW", False, tag=tag)
+                self.plc.enqueue_write_coil(coil, False, tag=tag)
+                self._csv_event(event="WRITE_COIL", target=coil, value=0, detail=f"ENQ tag={tag}")
             except Exception as e:
-                self._ui_warn(f"POWER off 실패(enqueue): {e!r}")
+                self._csv_event(event="WRITE_COIL", target=coil, value=0, detail=f"ERR tag={tag} {e!r}")
+                self._ui_warn(f"{coil} off 실패(enqueue): {e!r}")
 
-            # 4) FTM off
-            try:
-                self.plc.enqueue_write_coil("FTM_SW", False, tag=tag)
-            except Exception as e:
-                self._ui_warn(f"FTM off 실패(enqueue): {e!r}")
+        # 4) FTM off
+        try:
+            self.plc.enqueue_write_coil("FTM_SW", False, tag=tag)
+            self._csv_event(event="WRITE_COIL", target="FTM_SW", value=0, detail=f"ENQ tag={tag}")
+        except Exception as e:
+            self._csv_event(event="WRITE_COIL", target="FTM_SW", value=0, detail=f"ERR tag={tag} {e!r}")
+            self._ui_warn(f"FTM off 실패(enqueue): {e!r}")
 
     def _request_engine_stop(self, mode: StopMode) -> None:
         if not self.is_running():

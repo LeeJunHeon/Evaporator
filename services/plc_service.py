@@ -101,6 +101,7 @@ class PlcServiceWorker(QThread):
     sig_coils = Signal(object)     # Dict[str,bool]
     sig_regs = Signal(object)      # Dict[str,int]
     sig_snapshot = Signal(object)  # PLCSnapshot
+    sig_cmd_trace = Signal(object) # ✅ {"ok":bool, "event":..., "target":..., "value":..., "tag":..., "detail":...}
 
     def __init__(self, settings: PLCSettings, parent: Optional[QObject] = None):
         super().__init__(parent)
@@ -369,14 +370,18 @@ class PlcServiceWorker(QThread):
                 result: Any = True
 
             elif isinstance(cmd, CmdWriteReg):
-                # ✅ DAC는 clamp 포함된 set_dac_power로 통일
                 rn = str(cmd.reg_name).upper()
                 if rn in ("DAC_POWER_1", "DAC_POWER_2"):
-                    ch = 1 if cmd.reg_name.endswith("_1") else 2
+                    ch = 1 if rn.endswith("_1") else 2
                     await plc.set_dac_power(ch, int(cmd.value))
                 else:
                     await plc.write_reg_name(rn, int(cmd.value))
                 result = True
+
+            elif isinstance(cmd, CmdSetDacCurrent):
+                # ✅ mA → 내부에서 code로 변환 후 write, 반환은 실제 code(int)
+                code = await plc.set_dac_current(int(cmd.ch), float(cmd.ma))
+                result = int(code)
 
             else:
                 raise RuntimeError(f"Unknown PLCCommand: {cmd!r}")
@@ -390,6 +395,21 @@ class PlcServiceWorker(QThread):
                     cmd.reply.set_result(result)
                 except Exception:
                     pass
+
+            # ✅ 성공 trace
+            try:
+                self.sig_cmd_trace.emit({
+                    "ok": True,
+                    "event": type(cmd).__name__,
+                    "target": getattr(cmd, "coil_name", getattr(cmd, "reg_name", getattr(cmd, "ch", ""))),
+                    "value": getattr(cmd, "on", getattr(cmd, "value", getattr(cmd, "ma", ""))),
+                    "tag": getattr(cmd, "tag", ""),
+                    "detail": "",
+                    "result": result,
+                })
+            except Exception:
+                pass
+
             return result
 
         except Exception as e:
@@ -550,6 +570,7 @@ class PLCService(QObject):
     sig_coils = Signal(object)
     sig_regs = Signal(object)
     sig_snapshot = Signal(object)
+    sig_cmd_trace = Signal(object)
 
     def __init__(self, settings: PLCSettings, parent: Optional[QObject] = None):
         super().__init__(parent)
@@ -561,6 +582,7 @@ class PLCService(QObject):
         self._worker.sig_coils.connect(self.sig_coils)
         self._worker.sig_regs.connect(self.sig_regs)
         self._worker.sig_snapshot.connect(self.sig_snapshot)
+        self._worker.sig_cmd_trace.connect(self.sig_cmd_trace)
 
     # -------------------------------
     # lifecycle
@@ -594,6 +616,9 @@ class PLCService(QObject):
     def enqueue_write_reg(self, reg_name: str, value: int, *, tag: str = "") -> None:
         self._worker.enqueue(CmdWriteReg(reg_name=str(reg_name), value=int(value), tag=tag))
 
+    def enqueue_set_dac_current(self, ch: int, ma: float, *, tag: str = "") -> None:
+        self._worker.enqueue(CmdSetDacCurrent(ch=int(ch), ma=float(ma), tag=tag))
+
     # -------------------------------
     # submit (want completion)
     # - 반환 Future는 .result(timeout=...)로 대기 가능
@@ -609,4 +634,10 @@ class PLCService(QObject):
         import concurrent.futures
         fut = concurrent.futures.Future()
         self._worker.enqueue(CmdWriteReg(reg_name=str(reg_name), value=int(value), tag=tag, reply=fut))
+        return fut
+
+    def submit_set_dac_current(self, ch: int, ma: float, *, tag: str = ""):
+        import concurrent.futures
+        fut = concurrent.futures.Future()
+        self._worker.enqueue(CmdSetDacCurrent(ch=int(ch), ma=float(ma), tag=tag, reply=fut))
         return fut

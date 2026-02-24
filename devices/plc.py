@@ -649,20 +649,22 @@ class AsyncPLC:
         if not key_raw:
             raise ValueError("empty address/name")
 
+        up = key_raw.upper()
+
+        # ✅ 대소문자 무시로 1차 맵 조회(소문자 입력 보호)
+        if up in PLC_COIL_MAP:
+            return int(PLC_COIL_MAP[up])
+        if up in PLC_REG_MAP:
+            return int(PLC_REG_MAP[up])
+
+        # (기존 로직 유지)
         if key_raw in PLC_COIL_MAP:
             return int(PLC_COIL_MAP[key_raw])
         if key_raw in PLC_REG_MAP:
             return int(PLC_REG_MAP[key_raw])
 
-        nk = key_raw.upper().replace(" ", "").replace("_", "").replace("-", "").replace("/", "")
-        if nk in self._SYNONYMS:
-            canonical = self._SYNONYMS[nk]
-            if canonical in PLC_COIL_MAP:
-                return int(PLC_COIL_MAP[canonical])
-            if canonical in PLC_REG_MAP:
-                return int(PLC_REG_MAP[canonical])
-
-        up = key_raw.upper()
+        nk = up.replace(" ", "").replace("_", "").replace("-", "").replace("/", "")
+        ...
         if up.startswith("M"):
             return self._parse_m_device_to_coil(up)
         if up.startswith("D"):
@@ -675,13 +677,14 @@ class AsyncPLC:
             return False
 
         s = str(name).strip()
+        su = s.upper()
 
-        # ✅ 코일 맵에 있는 이름은 무조건 COIL (DOOR_SW 같은 케이스 보호)
-        if s in PLC_COIL_MAP:
+        # ✅ 코일 맵에 있는 이름은 무조건 COIL
+        if s in PLC_COIL_MAP or su in PLC_COIL_MAP:
             return False
 
-        # ✅ 레지스터 맵에 있는 이름만 REG (현재는 DAC_POWER_1/2만 해당)
-        if s in PLC_REG_MAP:
+        # ✅ 레지스터 맵에 있는 이름만 REG
+        if s in PLC_REG_MAP or su in PLC_REG_MAP:
             return True
 
         nk = s.upper().replace(" ", "").replace("_", "").replace("-", "").replace("/", "")
@@ -901,7 +904,11 @@ class AsyncPLC:
         addr = self._addr(name_or_addr)
         self._dbg("WRITE_SWITCH name=%r -> addr=%s on=%s momentary=%s", name_or_addr, addr, on, momentary)
         if momentary:
-            await self.pulse(addr, ms=pulse_ms)
+            if on:
+                await self.pulse(addr, ms=pulse_ms)
+            else:
+                # OFF 요청이면 그냥 OFF만 보장
+                await self.write_coil(addr, False)
         else:
             await self.write_coil(addr, bool(on))
 

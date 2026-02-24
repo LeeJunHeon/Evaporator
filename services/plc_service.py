@@ -57,7 +57,14 @@ class CmdWriteReg(_CmdBase):
     reg_name: str = ""
     value: int = 0
 
-PLCCommand = Union[CmdWakeup, CmdWriteCoil, CmdWriteReg]
+
+@dataclass
+class CmdSetDacCurrent(_CmdBase):
+    ch: int = 1
+    ma: float = 4.0
+
+
+PLCCommand = Union[CmdWakeup, CmdWriteCoil, CmdWriteReg, CmdSetDacCurrent]
 
 
 class PLCCommandError(Exception):
@@ -363,11 +370,12 @@ class PlcServiceWorker(QThread):
 
             elif isinstance(cmd, CmdWriteReg):
                 # ✅ DAC는 clamp 포함된 set_dac_power로 통일
-                if cmd.reg_name in ("DAC_POWER_1", "DAC_POWER_2"):
+                rn = str(cmd.reg_name).upper()
+                if rn in ("DAC_POWER_1", "DAC_POWER_2"):
                     ch = 1 if cmd.reg_name.endswith("_1") else 2
                     await plc.set_dac_power(ch, int(cmd.value))
                 else:
-                    await plc.write_reg_name(cmd.reg_name, int(cmd.value))
+                    await plc.write_reg_name(rn, int(cmd.value))
                 result = True
 
             else:

@@ -540,12 +540,8 @@ class ProcessEngine:
             self._emit_status(message=f"STM film params 적용: density={density}, z={z_factor}")
             self._stm_apply_material_params(recipe, step, density_g_cm3=density, z_factor=z_factor)
 
-        # 2) 초기 DAC (현재 값 기반)
-        if use_p1:
-            dac = int(getattr(self, "_last_dac_power_1", 0) or 0)
-        else:
-            dac = int(getattr(self, "_last_dac_power_2", 0) or 0)
-        dac = max(0, min(dac_max, dac))
+        # 2) 초기 DAC: 항상 0부터 시작
+        dac = 0
 
         # --- 내부 유틸 ---
         def _sleep_with_checks(total_s: float) -> None:
@@ -1012,6 +1008,7 @@ class ProcessEngine:
         # 결과가 "dac code(int)"일 수 있으니 받아서 telemetry에 반영
         res = self._wait_future(fut, timeout_s=self._plc_cmd_timeout_s, where=f"PLC_SET_DAC_MA ch={ch_i} ma={ma}")
 
+        code: Optional[int] = None
         try:
             if isinstance(res, (int, float)):
                 code = int(res)
@@ -1023,7 +1020,12 @@ class ProcessEngine:
             pass
 
         # ✅ 이벤트 1줄 추가
-        self._tele_event(event="SET_DAC_MA", target=f"DAC_CH{ch_i}", value=float(ma), detail=f"code={code}, tag={tag}")
+        self._tele_event(
+            event="SET_DAC_MA",
+            target=f"DAC_CH{ch_i}",
+            value=float(ma),
+            detail=f"code={code}, tag={tag}",
+        )
 
     @staticmethod
     def _wait_future(fut: Any, *, timeout_s: float, where: str, msg: str = "") -> Any:

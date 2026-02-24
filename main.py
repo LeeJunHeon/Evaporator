@@ -4,6 +4,7 @@ from __future__ import annotations
 import gc
 import sys
 import time
+import contextlib
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Any
@@ -592,6 +593,9 @@ class ProcessWindow(QWidget):
         # ✅ 4) Stop에서 STM/ACS 끊고 메모리 해제
         self._shutdown_sensors_and_release_memory()
 
+        # ✅ Stop도 '공정 종료'이므로 UI 초기화
+        self._reset_process_ui()
+
     def _on_pause_clicked(self) -> None:
         pc = self._process_controller
         if pc is None:
@@ -686,6 +690,9 @@ class ProcessWindow(QWidget):
 
         # ✅ 센서/메모리 정리
         self._shutdown_sensors_and_release_memory()
+        
+        # ✅ 공정 종료 후 UI 초기화(입력/물질/그래프)
+        self._reset_process_ui()
 
         try:
             ok = bool(getattr(result, "ok", False))
@@ -784,9 +791,17 @@ class ProcessWindow(QWidget):
 
     def _tick_rt_ui(self) -> None:
         """1초마다 lineedit + 그래프 갱신"""
-        rate = self._last_rate
-        th = self._last_thickness
-        power = self._last_power
+        rate = self._clamp_nonneg(self._last_rate)
+
+        power_plc = self._read_plc_power_dac()
+        if power_plc is not None:
+            power = self._clamp_nonneg(power_plc)
+            self._last_power = power
+        else:
+            power = self._clamp_nonneg(self._last_power)
+
+        show_th = self._is_main_deposition()
+        th = self._clamp_nonneg(self._last_thickness) if show_th else None
 
         try:
             self.ui.currentRateEdit.setText(f"{rate:.3f}" if rate is not None else "")
@@ -804,6 +819,115 @@ class ProcessWindow(QWidget):
             except Exception:
                 pass
     # ================== 그래프 설정 ==================
+
+    @staticmethod
+    def _clamp_nonneg(v: Optional[float]) -> Optional[float]:
+        """음수는 0으로 클램프. (None은 그대로)"""
+        if v is None:
+            return None
+        try:
+            fv = float(v)
+        except Exception:
+            return None
+        return 0.0 if fv < 0 else fv
+
+    def _is_main_deposition(self) -> bool:
+        """메인 공정(메인 셔터 OPEN)일 때만 True."""
+        pc = self._process_controller
+        try:
+            if pc is None or (not pc.is_running()):
+                return False
+        except Exception:
+            return False
+
+        if self.hmi_window is None:
+            return False
+        binder = getattr(self.hmi_window, "_plc_binder", None)
+        if binder is None:
+            return False
+
+        try:
+            return bool(binder.read_coil("MAIN_SHUTTER_SW", default=False))
+        except Exception:
+            return False
+
+    def _read_plc_power_dac(self) -> Optional[float]:
+        """PLC 폴링(regs) 기준으로 현재 DAC 파워를 읽는다."""
+        if self.hmi_window is None:
+            return None
+        binder = getattr(self.hmi_window, "_plc_binder", None)
+        if binder is None:
+            return None
+        try:
+            plc = binder.get_plc_service()
+            snap = plc.get_last_snapshot() if plc is not None else None
+            if snap is None:
+                return None
+            regs = getattr(snap, "regs", None) or {}
+            p1 = float(regs.get("DAC_POWER_1", 0) or 0.0)
+            p2 = float(regs.get("DAC_POWER_2", 0) or 0.0)
+
+            # UI 선택(현재는 1개만 선택이 정상) 기준으로 표시 파워 결정
+            use1 = bool(getattr(getattr(self.ui, "sourcePower1", None), "isChecked", lambda: False)())
+            use2 = bool(getattr(getattr(self.ui, "sourcePower2", None), "isChecked", lambda: False)())
+            if use1 and not use2:
+                return p1
+            if use2 and not use1:
+                return p2
+            return p1 + p2
+        except Exception:
+            return None
+
+    def _reset_process_ui(self) -> None:
+        """공정 종료 후: 입력값/물질 선택/그래프/표시값 초기화."""
+        # 입력값(있으면 전부 비우기)
+        for wname in ("deprateEdit", "deprateEdit2", "powerEdit", "powerEdit2", "thicknessEdit", "delayEdit"):
+            w = getattr(self.ui, wname, None)
+            if w is not None and hasattr(w, "setText"):
+                with contextlib.suppress(Exception):
+                    w.setText("")
+
+        # Power 선택 해제
+        for wname in ("sourcePower1", "sourcePower2"):
+            w = getattr(self.ui, wname, None)
+            if w is not None and hasattr(w, "setChecked"):
+                with contextlib.suppress(Exception):
+                    w.setChecked(False)
+
+        # Material 선택 초기화(내부 상태 + 표시)
+        self._material_1 = None
+        self._material_2 = None
+        with contextlib.suppress(Exception):
+            self.ui.materialEdit.setText("Select")
+            self.ui.materialDensityEdit1.setText("")
+            self.ui.materialZfactorEdit1.setText("")
+        with contextlib.suppress(Exception):
+            self.ui.materialEdit2.setText("Select")
+            self.ui.materialDensityEdit2.setText("")
+            self.ui.materialZfactorEdit2.setText("")
+
+        # 현재값 표시 초기화
+        for wname in ("currentRateEdit", "currentThicknessEdit"):
+            w = getattr(self.ui, wname, None)
+            if w is not None and hasattr(w, "setText"):
+                with contextlib.suppress(Exception):
+                    w.setText("")
+
+        # 공정 모니터 텍스트 초기화
+        w = getattr(self.ui, "processMonitor_Process", None)
+        if w is not None and hasattr(w, "setText"):
+            with contextlib.suppress(Exception):
+                w.setText("")
+
+        # 그래프 초기화
+        if self._plot is not None:
+            with contextlib.suppress(Exception):
+                self._plot.clear()
+
+        # 내부 last 값 초기화
+        self._last_rate = None
+        self._last_thickness = None
+        self._last_power = None
 
     # ================== UI 값 파싱 ==================
     def _read_float(self, wname: str) -> Optional[float]:

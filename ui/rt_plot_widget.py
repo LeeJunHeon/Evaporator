@@ -101,6 +101,9 @@ class DepositionPlotWidget(QWidget):
 
         if rate is not None:
             r = float(rate)
+            if r < 0:
+                r = 0.0
+
             self._rate_buf.append((t, r))
             self._rate_series.append(t, r)
             if self._rate_series.count() > self._max_points:
@@ -108,6 +111,9 @@ class DepositionPlotWidget(QWidget):
 
         if power is not None:
             p = float(power)
+            if p < 0:
+                p = 0.0
+
             self._power_series.append(t, p)
             if self._power_series.count() > self._max_points:
                 self._power_series.removePoints(0, self._power_series.count() - self._max_points)
@@ -128,6 +134,8 @@ class DepositionPlotWidget(QWidget):
         if self._rate_buf:
             ys = [v for _, v in self._rate_buf]
             y_min, y_max = min(ys), max(ys)
+            if y_min < 0:
+                y_min = 0.0
             pad = max(0.01, (y_max - y_min) * 0.1)
             self._ax_rate.setRange(y_min - pad, y_max + pad)
 

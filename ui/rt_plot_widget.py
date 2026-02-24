@@ -4,7 +4,7 @@
 DepositionPlotWidget
 - 단일 그래프
   - X: time(s)
-  - Y(left): Dep.rate (A/s)
+  - Y(left): Dep.rate (Å/s)
   - Y(right): Power (DAC)  # 고정 범위(기본 0~4000)
 - main.py에서는 append(rate=..., power=...)만 호출
 """
@@ -54,11 +54,8 @@ class DepositionPlotWidget(QWidget):
 
         self._chart = QChart()
 
-        # ✅ 아래 legend 박스가 거슬리면 숨김(축 라벨 색으로 구분)
+        # legend는 숨기고(축 라벨 색으로 구분)
         self._chart.legend().hide()
-        # 만약 legend도 같이 쓰고 싶으면 hide() 대신:
-        # self._chart.legend().setVisible(True)
-        # self._chart.legend().setAlignment(Qt.AlignBottom)
 
         self._chart.setTitle("Dep. Rate / Power")
         self._chart.setAnimationOptions(QChart.NoAnimation)
@@ -68,12 +65,13 @@ class DepositionPlotWidget(QWidget):
         # X axis (time)
         self._ax_x = QValueAxis()
         self._ax_x.setLabelFormat("%.0f")
+        self._ax_x.setTitleText("Time (s)")  # ✅ 하단 값 의미 표시(초)
         self._chart.addAxis(self._ax_x, Qt.AlignBottom)
 
         # Left Y axis (rate)
         self._ax_rate = QValueAxis()
         self._ax_rate.setLabelFormat("%.3f")
-        self._ax_rate.setTitleText("Dep. Rate (A/s)")
+        self._ax_rate.setTitleText("Dep. Rate (Å/s)")
         self._chart.addAxis(self._ax_rate, Qt.AlignLeft)
 
         # Right Y axis (power)

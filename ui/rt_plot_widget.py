@@ -49,8 +49,13 @@ class DepositionPlotWidget(QWidget):
         self._rate_series = QLineSeries()
         self._power_series = QLineSeries()
 
+        self._rate_series.setName("Dep. Rate (Å/s)")
+        self._power_series.setName(self._power_title)
+
         self._chart = QChart()
-        self._chart.legend().hide()
+        # ✅ 범례를 표시해서 '왼쪽 Y(Dep.Rate) / 오른쪽 Y(Power)' 선 색을 UI에서 바로 확인 가능
+        self._chart.legend().setVisible(True)
+        self._chart.legend().setAlignment(Qt.AlignBottom)
         self._chart.setTitle("Dep. Rate / Power")
         self._chart.setAnimationOptions(QChart.NoAnimation)
         self._chart.addSeries(self._rate_series)

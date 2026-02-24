@@ -4,6 +4,7 @@ from __future__ import annotations
 import gc
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Optional, Any
 
@@ -54,6 +55,110 @@ def _append_text(widget: Any, text: str) -> None:
 
 
 # ============================================================
+# NAS 로그 경로(요구사항)
+# ============================================================
+NAS_LOG_ROOT = Path(r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs\Evaporator")
+PROCESS_LOG_DIR = NAS_LOG_ROOT / "ProcessLog"
+PROCESS_WINDOW_LOG_DIR = NAS_LOG_ROOT / "ProcessWindowLog"
+HMI_WINDOW_LOG_DIR = NAS_LOG_ROOT / "HMIWindowLog"
+
+
+class DailyWindowLogWriter:
+    """
+    화면 로그용: 폴더/날짜별 1파일 (YYYY-MM-DD.log)
+    - 파일명에 시간 안 넣음 (요구사항)
+    - 날짜 넘어가면 자동으로 다음 파일로 rotate
+    - NAS 쓰기 실패 시 로컬 fallback으로 저장
+    """
+    def __init__(self, folder: Path, *, fallback_root: Optional[Path] = None):
+        self._folder = Path(folder)
+        self._fallback_root = Path(fallback_root) if fallback_root else (Path.cwd() / "_Logs_local_Evaporator")
+        self._cur_date = ""
+        self._fp = None
+        self._active_folder = None  # 성공한 저장 위치
+
+    def _today(self) -> str:
+        return datetime.now().strftime("%Y-%m-%d")
+
+    def _ensure_open(self) -> None:
+        d = self._today()
+        if self._fp is not None and self._cur_date == d:
+            return
+
+        self.close()
+        self._cur_date = d
+
+        # 1) NAS 우선
+        for base in (self._folder, self._fallback_root / self._folder.name):
+            try:
+                base.mkdir(parents=True, exist_ok=True)
+                path = base / f"{d}.log"
+                self._fp = open(path, "a", encoding="utf-8", newline="")
+                self._active_folder = base
+                return
+            except Exception:
+                self._fp = None
+                self._active_folder = None
+
+    def write(self, line: str) -> None:
+        try:
+            self._ensure_open()
+            if not self._fp:
+                return
+            s = str(line).rstrip("\n")
+            self._fp.write(s + "\n")
+            self._fp.flush()
+        except Exception:
+            # 화면 로그는 공정에 영향 주면 안 되므로 silent fail
+            pass
+
+    def close(self) -> None:
+        try:
+            if self._fp:
+                self._fp.flush()
+                self._fp.close()
+        except Exception:
+            pass
+        self._fp = None
+
+
+def _wrap_append_for_daily_log(widget: Any, writer: DailyWindowLogWriter) -> None:
+    """
+    QPlainTextEdit.appendPlainText / QTextEdit.append 호출을 가로채서
+    화면에 찍히는 그대로 파일에도 1줄씩 저장.
+    (HmiPlcBinder처럼 widget에 직접 appendPlainText 하는 케이스까지 잡기 위해 필요)
+    """
+    if widget is None or writer is None:
+        return
+    if getattr(widget, "_daily_log_wrapped", False):
+        return
+    try:
+        setattr(widget, "_daily_log_wrapped", True)
+    except Exception:
+        pass
+
+    if hasattr(widget, "appendPlainText"):
+        orig = widget.appendPlainText
+
+        def wrapped(s):
+            writer.write(s)
+            return orig(s)
+
+        widget.appendPlainText = wrapped
+        return
+
+    if hasattr(widget, "append"):
+        orig = widget.append
+
+        def wrapped(s):
+            writer.write(s)
+            return orig(s)
+
+        widget.append = wrapped
+        return
+    
+
+# ============================================================
 # HMI 창
 # ============================================================
 class HmiWindow(QWidget):
@@ -61,6 +166,10 @@ class HmiWindow(QWidget):
         super().__init__()
         self.ui = Ui_Form()
         self.ui.setupUi(self)
+
+        # ✅ HMI 화면 로그 -> \\...\Evaporator\HMIWindowLog\YYYY-MM-DD.log
+        self._hmi_window_log_writer = DailyWindowLogWriter(HMI_WINDOW_LOG_DIR)
+        _wrap_append_for_daily_log(getattr(self.ui, "hmiLogWindow", None), self._hmi_window_log_writer)
 
         self.setWindowTitle("HMI")
         self.ui.stackedWidget.setCurrentIndex(0)  # HMI page
@@ -196,6 +305,11 @@ class HmiWindow(QWidget):
 
     def closeEvent(self, event):
         if getattr(self, "_closing_all", False):
+            try:
+                if getattr(self, "_hmi_window_log_writer", None):
+                    self._hmi_window_log_writer.close()
+            except Exception:
+                pass
             event.accept()
             return
 
@@ -214,6 +328,13 @@ class HmiWindow(QWidget):
                 pass
             self.process_window = None
 
+        # ✅ accept 전에 닫아도 OK (flush 보장)
+        try:
+            if getattr(self, "_hmi_window_log_writer", None):
+                self._hmi_window_log_writer.close()
+        except Exception:
+            pass
+
         event.accept()
 
 
@@ -225,6 +346,10 @@ class ProcessWindow(QWidget):
         super().__init__()
         self.ui = Ui_Form()
         self.ui.setupUi(self)
+
+        # ✅ Process 화면 로그 -> \\...\Evaporator\ProcessWindowLog\YYYY-MM-DD.log
+        self._process_window_log_writer = DailyWindowLogWriter(PROCESS_WINDOW_LOG_DIR)
+        _wrap_append_for_daily_log(getattr(self.ui, "logWindow", None), self._process_window_log_writer)
 
         self.setWindowTitle("Process")
         self.ui.stackedWidget.setCurrentIndex(1)  # Process page
@@ -293,14 +418,6 @@ class ProcessWindow(QWidget):
                 pass
             try:
                 pc.sig_finished.connect(self._on_finished)
-            except Exception:
-                pass
-
-        # LogService가 있으면 추가로 같이 출력(선택)
-        lg = self._log_service
-        if lg is not None and hasattr(lg, "sig_line"):
-            try:
-                lg.sig_line.connect(lambda s: _append_text(getattr(self.ui, "logWindow", None), s))
             except Exception:
                 pass
 
@@ -593,6 +710,12 @@ class ProcessWindow(QWidget):
         if self.hmi_window is not None:
             self.hmi_window.process_window = None
 
+        try:
+            if getattr(self, "_process_window_log_writer", None):
+                self._process_window_log_writer.close()
+        except Exception:
+            pass
+
         event.accept()
 
     def _open_material_dialog(self, channel: int) -> None:
@@ -873,12 +996,12 @@ def main():
 
         acs_service.sig_pressure.connect(_update_pressure)
         acs_service.sig_connected.connect(_acs_connected)
-        acs_service.sig_error.connect(lambda s: _append_text(getattr(hmi.ui, "logWindow", None), s))
+        acs_service.sig_error.connect(lambda s: _append_text(getattr(hmi.ui, "hmiLogWindow", None), s))
 
         acs_service.start()
     except Exception as e:
         acs_service = None
-        _append_text(getattr(hmi.ui, "logWindow", None), f"[BOOT][WARN] ACSService init failed: {e!r}")
+        _append_text(getattr(hmi.ui, "hmiLogWindow", None), f"[BOOT][WARN] ACSService init failed: {e!r}")
 
     # ------------------------------
     # LogService (신규)
@@ -886,7 +1009,7 @@ def main():
     log_service: Any = None
     try:
         try:
-            log_service = LogService(base_dir=_BASE_DIR)
+            log_service = LogService(app_name="Evaporator", base_dir=PROCESS_LOG_DIR)
         except TypeError:
             log_service = LogService()
         if hasattr(log_service, "start"):
@@ -907,7 +1030,7 @@ def main():
         )
     except Exception as e:
         process_controller = None
-        _append_text(getattr(hmi.ui, "logWindow", None), f"[BOOT][WARN] ProcessController init failed: {e!r}")
+        _append_text(getattr(hmi.ui, "hmiLogWindow", None), f"[BOOT][WARN] ProcessController init failed: {e!r}")
 
     # 종료 시 신규 서비스 정리
     def _shutdown_new_services() -> None:

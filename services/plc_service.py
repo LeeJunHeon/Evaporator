@@ -398,13 +398,29 @@ class PlcServiceWorker(QThread):
 
             # ✅ 성공 trace
             try:
+                target = getattr(cmd, "coil_name", getattr(cmd, "reg_name", getattr(cmd, "ch", "")))
+                value  = getattr(cmd, "on", getattr(cmd, "value", getattr(cmd, "ma", "")))
+                detail = ""
+
+                # ✅ (개선1) CmdSetDacCurrent: target을 숫자 ch가 아니라 DAC_CH{n} 형태로
+                if isinstance(cmd, CmdSetDacCurrent):
+                    target = f"DAC_CH{int(cmd.ch)}"
+
+                # ✅ (개선2) 펄스 코일: pulse_ms를 detail에 표시
+                if isinstance(cmd, CmdWriteCoil) and cmd.pulse_ms is not None:
+                    # momentary 여부도 같이 남기면 더 알아보기 쉬움(원하면 제거 가능)
+                    if cmd.momentary:
+                        detail = f"momentary=1,pulse_ms={int(cmd.pulse_ms)}"
+                    else:
+                        detail = f"pulse_ms={int(cmd.pulse_ms)}"
+
                 self.sig_cmd_trace.emit({
                     "ok": True,
                     "event": type(cmd).__name__,
-                    "target": getattr(cmd, "coil_name", getattr(cmd, "reg_name", getattr(cmd, "ch", ""))),
-                    "value": getattr(cmd, "on", getattr(cmd, "value", getattr(cmd, "ma", ""))),
+                    "target": target,
+                    "value": value,
                     "tag": getattr(cmd, "tag", ""),
-                    "detail": "",
+                    "detail": detail,
                     "result": result,
                 })
             except Exception:

@@ -440,6 +440,7 @@ class ProcessEngine:
             do_zero_thickness=False,
         )
         self._wait_future(fut, timeout_s=5.0, where=f"{step.name}/STM_APPLY", msg="STM film params 적용 실패")
+        self._tele_event(event="STM_APPLY", target="FILM_PARAM", value="", detail=f"density={density_g_cm3}, z={z_factor}")
 
 
     def _stm_zero_thickness(self, recipe: ProcessRecipe, step: ProcessStep, *, mode: str = "B") -> None:
@@ -451,6 +452,7 @@ class ProcessEngine:
 
         fut = self.stm.submit_zero_thickness(mode=str(mode))
         self._wait_future(fut, timeout_s=5.0, where=f"{step.name}/STM_ZERO", msg="STM zero 실패")
+        self._tele_event(event="STM_ZERO", target="THICKNESS", value=str(mode), detail="zero thickness/time")
 
 
     # --------------------------------------------------------
@@ -971,6 +973,7 @@ class ProcessEngine:
             raise EngineFailed(tag, "coil is None")
         fut = self.plc.submit_write_coil(coil_name=str(coil), on=bool(on), momentary=False, pulse_ms=None, tag=tag)
         self._wait_future(fut, timeout_s=self._plc_cmd_timeout_s, where=f"PLC_WRITE_COIL {coil}={on}")
+        self._tele_event(event="WRITE_COIL", target=str(coil), value=int(bool(on)), detail=f"tag={tag}")
 
     def _plc_pulse_coil(self, coil: Optional[str], pulse_ms: int, *, tag: str) -> None:
         if not coil:
@@ -980,6 +983,7 @@ class ProcessEngine:
             pulse_ms = 200
         fut = self.plc.submit_write_coil(coil_name=str(coil), on=True, momentary=True, pulse_ms=pulse_ms, tag=tag)
         self._wait_future(fut, timeout_s=max(self._plc_cmd_timeout_s, pulse_ms / 1000.0 + 0.5), where=f"PLC_PULSE_COIL {coil} ({pulse_ms}ms)")
+        self._tele_event(event="PULSE_COIL", target=str(coil), value=int(pulse_ms), detail=f"tag={tag}")
 
     def _plc_write_reg(self, reg: Optional[str], value: int, *, tag: str) -> None:
         if not reg:
@@ -997,6 +1001,9 @@ class ProcessEngine:
             self._last_dac_power_1 = v
         elif rn == "DAC_POWER_2":
             self._last_dac_power_2 = v
+
+        ev = "SET_DAC" if rn in ("DAC_POWER_1", "DAC_POWER_2") else "WRITE_REG"
+        self._tele_event(event=ev, target=rn, value=v, detail=f"tag={tag}")
 
     def _plc_set_dac_ma(self, ch: int, ma: float, *, tag: str) -> None:
         ch_i = int(ch)
@@ -1391,7 +1398,7 @@ class ProcessEngine:
 
             self.log.telemetry({
                 # ✅ CSV 고정 컬럼 step 채우기
-                "step": self._current_step_name,
+                "step": (self._ui_last_message or self._current_step_name),
 
                 "phase": self._phase.value,
 
@@ -1466,6 +1473,26 @@ class ProcessEngine:
         c = (coil or "").upper()
         # 필요하면 여기서 coil 이름별로 더 예쁘게 매핑 가능
         return f"{c} PULSE ({int(pulse_ms)}ms)" if c else f"PULSE ({int(pulse_ms)}ms)"
+    
+    def _tele_event(self, *, event: str, target: str, value: Any = "", detail: str = "") -> None:
+        """공정 CSV에 이벤트 1줄 추가(event/target/value/detail)."""
+        try:
+            self.log.telemetry({
+                "step": (self._ui_last_message or self._current_step_name),
+                "event": str(event),
+                "target": str(target),
+                "value": value,
+                "detail": str(detail),
+
+                # 상태 스냅샷도 같이(없으면 빈칸)
+                "pressure_torr": self._get_pressure(),
+                "dac1": int(getattr(self, "_last_dac_power_1", 0) or 0),
+                "dac2": int(getattr(self, "_last_dac_power_2", 0) or 0),
+                "rate_Aps": self._get_rate(),
+                "thickness_A": self._get_thickness(),
+            })
+        except Exception:
+            pass
 
     # --------------------------------------------------------
     # Utilities

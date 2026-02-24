@@ -625,19 +625,25 @@ class ProcessWindow(QWidget):
             _append_text(getattr(self.ui, "logWindow", None), f"[RESUME FAIL] {e!r}")
 
     def _on_status(self, st: Any) -> None:
-        # ✅ (추가) status에서 power/dac 값을 최대한 추출해서 그래프에 사용
+        # ✅ 그래프용 power 추출(기존 유지)
         self._try_update_last_power(st)
 
-        # UI에 표시용 위젯이 있으면 업데이트(없으면 무시)
         w = getattr(self.ui, "processMonitor_Process", None)
-        if w is None:
+        if w is None or not hasattr(w, "setText"):
             return
+
         try:
+            # ✅ engine.py가 보내는 “스텝별 표시 메시지” 우선
+            m = str(getattr(st, "message", "") or "").strip()
+            if m:
+                w.setText(m)
+                return
+
+            # fallback: message가 없으면 기존처럼 phase/step
             phase = getattr(st, "phase", None)
             step = getattr(st, "step_name", None) or getattr(st, "step", None)
-            msg = f"{phase} | {step}" if (phase or step) else str(st)
-            if hasattr(w, "setText"):
-                w.setText(msg)
+            w.setText(f"{phase} | {step}" if (phase or step) else str(st))
+
         except Exception:
             pass
 

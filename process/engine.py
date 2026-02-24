@@ -1026,16 +1026,39 @@ class ProcessEngine:
     # WAIT helpers
     # --------------------------------------------------------
     def _wait_seconds(self, recipe: ProcessRecipe, step: ProcessStep, sec: float) -> None:
-        deadline = time.time() + max(0.0, float(sec))
+        total_s = max(0.0, float(sec))
+        start_m = time.monotonic()
+        deadline_m = start_m + total_s
         poll = self._get_poll_s(recipe, step, fallback=0.05)
+
+        # ✅ WAIT 표시(경과/남은) : 1초마다 UI 갱신
+        next_ui_m = start_m
 
         while True:
             self._check_stop_pause(recipe, step)
-            now = time.time()
             self._tick_emit(recipe, step)
-            if now >= deadline:
+
+            now_m = time.monotonic()
+            remain_s = deadline_m - now_m
+            if remain_s <= 0:
+                # 마지막 1회 표시(완료 직전 상태)
+                if total_s > 0:
+                    self._emit_status(
+                        message=f"WAIT {total_s:.1f}s / {total_s:.1f}s elapsed (remain 0.0s)",
+                        force=True,
+                    )
                 return
-            time.sleep(min(poll, max(0.0, deadline - now)))
+
+            # 1초마다 표시
+            if now_m >= next_ui_m:
+                elapsed_s = now_m - start_m
+                self._emit_status(
+                    message=f"WAIT {total_s:.1f}s / {elapsed_s:.1f}s elapsed (remain {remain_s:.1f}s)",
+                    force=True,
+                )
+                next_ui_m = now_m + 1.0
+
+            time.sleep(min(poll, max(0.0, remain_s)))
 
     def _wait_condition(
         self,
@@ -1048,51 +1071,102 @@ class ProcessEngine:
         sensor_label: str = "",
         sensor_missing_abort_s: Optional[float] = None,
     ) -> None:
-        stable_start: Optional[float] = None
-        deadline: Optional[float] = None
+        # ✅ WAIT 표시(조건/경과/남은): monotonic 기반(시스템 시간 변경 영향 최소화)
+        start_m = time.monotonic()
+        deadline_m: Optional[float] = None
         if step.timeout_s is not None:
-            deadline = time.time() + float(step.timeout_s)
+            deadline_m = start_m + float(step.timeout_s)
 
         poll_s = max(0.05, float(step.poll_s or 0.2))
 
-        # None 감시(기본 10초)
+        # ✅ 센서 None 지속 감시(기본 10초) — sensor_value_fn 제공 시에만 동작
         missing_abort_s = sensor_missing_abort_s
         if sensor_value_fn is not None and missing_abort_s is None:
             missing_abort_s = float(getattr(self, "_sensor_missing_abort_s", 10.0) or 10.0)
-        last_valid_ts = time.time()
+        last_valid_m = time.monotonic()
+
+        stable_start_m: Optional[float] = None
+
+        # 1초마다 UI 갱신
+        next_ui_m = start_m
 
         while True:
             self._check_stop_pause(recipe, step)
             self._tick_emit(recipe, step)
 
-            now = time.time()
+            now_m = time.monotonic()
 
-            # ✅ 센서 None 지속 감시
-            if sensor_value_fn is not None and missing_abort_s is not None and missing_abort_s > 0:
+            # 센서 값 읽기(표시/None 감시 용)
+            v: Optional[float] = None
+            if sensor_value_fn is not None:
                 try:
                     v = sensor_value_fn()
                 except Exception:
                     v = None
 
-                if v is not None:
-                    last_valid_ts = now
-                elif (now - last_valid_ts) >= missing_abort_s:
-                    lab = sensor_label or "sensor"
-                    raise EngineFailed(step.name, f"{lab}=None 지속 {missing_abort_s:.0f}s 초과(연결 끊김/미보고)")
+                if missing_abort_s is not None and missing_abort_s > 0:
+                    if v is not None:
+                        last_valid_m = now_m
+                    elif (now_m - last_valid_m) >= float(missing_abort_s):
+                        lab = sensor_label or "sensor"
+                        raise EngineFailed(step.name, f"{lab}=None 지속 {float(missing_abort_s):.0f}s 초과(연결 끊김/미보고)")
 
-            if deadline is not None and now >= deadline:
+            # timeout
+            if deadline_m is not None and now_m >= deadline_m:
                 raise EngineTimeout(step.name, f"timeout waiting {cond_desc}")
 
+            # condition + stable
             ok = bool(cond_fn())
             if ok:
-                if stable_start is None:
-                    stable_start = now
-                if step.stable_s is None or (now - stable_start) >= float(step.stable_s):
+                if stable_start_m is None:
+                    stable_start_m = now_m
+                if step.stable_s is None or (now_m - stable_start_m) >= float(step.stable_s):
+                    # 마지막 1회 표시(성공)
+                    elapsed_s = now_m - start_m
+                    self._emit_status(message=f"WAIT {cond_desc} / {elapsed_s:.1f}s elapsed (done)", force=True)
                     return
             else:
-                stable_start = None
+                stable_start_m = None
 
-            time.sleep(poll_s)
+            # UI 표시(조건/경과/남은)
+            if now_m >= next_ui_m:
+                elapsed_s = now_m - start_m
+                if deadline_m is None:
+                    remain_part = "remain ∞"
+                else:
+                    remain_s = max(0.0, deadline_m - now_m)
+                    remain_part = f"remain {remain_s:.1f}s"
+
+                extra_parts = []
+
+                # stable 진행률(있을 때만)
+                if step.stable_s is not None and float(step.stable_s) > 0:
+                    stable_s = float(step.stable_s)
+                    stable_elapsed = 0.0 if stable_start_m is None else max(0.0, now_m - stable_start_m)
+                    stable_elapsed = min(stable_elapsed, stable_s)
+                    extra_parts.append(f"stable {stable_elapsed:.1f}/{stable_s:.1f}s")
+
+                # 센서 값(있을 때만)
+                if sensor_value_fn is not None:
+                    lab = sensor_label or "sensor"
+                    if v is None:
+                        extra_parts.append(f"{lab}=None")
+                    else:
+                        extra_parts.append(f"{lab}={float(v):.3f}")
+
+                extra = (" / " + " / ".join(extra_parts)) if extra_parts else ""
+                self._emit_status(
+                    message=f"WAIT {cond_desc} / {elapsed_s:.1f}s elapsed ({remain_part}){extra}",
+                    force=True,
+                )
+                next_ui_m = now_m + 1.0
+
+            # sleep(남은 시간이 짧으면 그만큼만)
+            if deadline_m is None:
+                time.sleep(poll_s)
+            else:
+                remain_s = max(0.0, deadline_m - time.monotonic())
+                time.sleep(min(poll_s, remain_s))
 
     def _handle_timeout(self, step: ProcessStep, detail: str) -> None:
         policy = step.on_timeout

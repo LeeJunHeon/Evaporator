@@ -80,7 +80,7 @@ class ProcessController(QObject):
 
         # log_service -> controller -> UI
         try:
-            self.log.sig_line.connect(self.sig_ui_log)
+            self.log.sig_line.connect(self.sig_ui_log.emit)
             self.log.sig_error.connect(lambda s: self.sig_ui_log.emit(f"[LOG_ERR] {s}"))
         except Exception:
             pass

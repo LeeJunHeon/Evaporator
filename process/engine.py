@@ -857,15 +857,17 @@ class ProcessEngine:
 
     def _safe_shutdown_sequence(self, *, tag: str) -> None:
         """
-        요구사항 안전 시퀀스(통일):
+        안전 시퀀스(통일):
         1) MAIN_SHUTTER close
         2) DAC 0
-        3) POWER off
+        3) SOURCE SHUTTER close (1/2)
+        4) POWER off
+        5) FTM off
         (실패해도 예외 삼킴: best-effort)
         """
-        # 1) shutter close
+        # 1) main shutter close
         try:
-            self._plc_write_coil("MAIN_SHUTTER_SW", False, tag=f"{tag}_SHUTTER_CLOSE")
+            self._plc_write_coil("MAIN_SHUTTER_SW", False, tag=f"{tag}_MAIN_SHUTTER_CLOSE")
         except Exception:
             pass
 
@@ -881,13 +883,26 @@ class ProcessEngine:
         except Exception:
             pass
 
-        # 3) power off
+        # 3) source shutters close (에러/정지시에도 원복 보장)
+        for coil in ("SHUTTER_1_SW", "SHUTTER_2_SW"):
+            try:
+                self._plc_write_coil(coil, False, tag=f"{tag}_{coil}_CLOSE")
+            except Exception:
+                pass
+
+        # 4) power off
         try:
             self._plc_write_coil("POWER_1_SW", False, tag=f"{tag}_PWR1_OFF")
         except Exception:
             pass
         try:
             self._plc_write_coil("POWER_2_SW", False, tag=f"{tag}_PWR2_OFF")
+        except Exception:
+            pass
+
+        # 5) ftm off
+        try:
+            self._plc_write_coil("FTM_SW", False, tag=f"{tag}_FTM_OFF")
         except Exception:
             pass
 

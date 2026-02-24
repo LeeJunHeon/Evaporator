@@ -116,149 +116,166 @@ class ProcessController(QObject):
         return self._recipe
     
     def build_recipe_from_ui(self, run_cfg: dict[str, Any]) -> ProcessRecipe:
-            """
-            UI 입력(run_cfg)을 ProcessRecipe로 변환.
+        """
+        UI 입력(run_cfg)을 ProcessRecipe로 변환.
 
-            ✅ 요구사항 반영
-            - Power는 1개만 선택(POWER_1 또는 POWER_2)
-            - Source Shutter(선택 채널) open + FTM ON 이후 1.5초 대기
-            - 실제 램프/dep.rate 제어는 engine.py의 _evap_deposition_control()이 수행
-            """
-            use_p1 = bool(run_cfg.get("use_power1", False))
-            use_p2 = bool(run_cfg.get("use_power2", False))
+        ✅ 2파워 동시 사용 지원(동일 물질 가정)
+        - Power는 1개 또는 2개 허용(둘 다 해제 금지)
+        - 채널별 Target Dep.rate 필수:
+            use_power1이면 target_rate_1 > 0
+            use_power2이면 target_rate_2 > 0
+        - 선택된 채널 source shutter open + FTM ON 이후 1.5초 대기
+        - 실제 램프/dep.rate 제어는 engine.py의 _evap_deposition_control()에서 수행(엔진 수정 필요)
+        """
+        use_p1 = bool(run_cfg.get("use_power1", False))
+        use_p2 = bool(run_cfg.get("use_power2", False))
 
-            # ✅ Power는 하나만
-            if use_p1 == use_p2:
-                raise ValueError("Power1 또는 Power2 중 '하나만' 선택되어야 합니다. (현재: 둘 다 선택 또는 둘 다 해제)")
+        if not (use_p1 or use_p2):
+            raise ValueError("Power1/Power2 중 최소 1개는 선택되어야 합니다.")
 
-            material = str(run_cfg.get("material_name", "")).strip()
-            if not material:
-                raise ValueError("material_name은 필수입니다.")
+        material = str(run_cfg.get("material_name", "")).strip()
+        if not material:
+            raise ValueError("material_name은 필수입니다.")
 
-            density = float(run_cfg.get("density", 0.0) or 0.0)
-            z_factor = float(run_cfg.get("z_factor", 0.0) or 0.0)
-            if density <= 0 or z_factor <= 0:
-                raise ValueError("density / z_factor 값이 올바르지 않습니다. (0보다 커야 함)")
+        density = float(run_cfg.get("density", 0.0) or 0.0)
+        z_factor = float(run_cfg.get("z_factor", 0.0) or 0.0)
+        if density <= 0 or z_factor <= 0:
+            raise ValueError("density / z_factor 값이 올바르지 않습니다. (0보다 커야 함)")
 
-            target_rate = float(run_cfg.get("target_rate", 0.0) or 0.0)
-            target_th = float(run_cfg.get("target_thickness", 0.0) or 0.0)
-            delay_min = float(run_cfg.get("delay_min", 0.0) or 0.0)
+        # ✅ 호환 제거: 채널별 rate만 사용
+        rate1 = float(run_cfg.get("target_rate_1", 0.0) or 0.0)
+        rate2 = float(run_cfg.get("target_rate_2", 0.0) or 0.0)
 
-            if target_rate <= 0:
-                raise ValueError("target_rate는 0보다 커야 합니다.")
-            if target_th <= 0:
-                raise ValueError("target_thickness는 0보다 커야 합니다.")
-            if delay_min < 0:
-                raise ValueError("delay_min은 0 이상이어야 합니다.")
+        if use_p1 and rate1 <= 0:
+            raise ValueError("Power1 선택 시 target_rate_1은 0보다 커야 합니다.")
+        if use_p2 and rate2 <= 0:
+            raise ValueError("Power2 선택 시 target_rate_2는 0보다 커야 합니다.")
 
-            # ✅ 선택된 파워에 대응하는 source shutter
-            source_shutter_coil = "SHUTTER_1_SW" if use_p1 else "SHUTTER_2_SW"
+        target_rate_total = (rate1 if use_p1 else 0.0) + (rate2 if use_p2 else 0.0)
 
-            meta = {
-                "ui_run": {
-                    "use_power1": use_p1,
-                    "use_power2": use_p2,
-                    "material_name": material,
-                    "density": density,
-                    "z_factor": z_factor,
-                    "target_rate": target_rate,
-                    "target_thickness": target_th,
-                    "delay_min": delay_min,
-                },
+        target_th = float(run_cfg.get("target_thickness", 0.0) or 0.0)
+        delay_min = float(run_cfg.get("delay_min", 0.0) or 0.0)
 
-                # --- 공정 기본 ---
+        if target_th <= 0:
+            raise ValueError("target_thickness는 0보다 커야 합니다.")
+        if delay_min < 0:
+            raise ValueError("delay_min은 0 이상이어야 합니다.")
+
+        # ✅ 호환 제거: 단일 coil 키 제거하고 리스트만 사용
+        source_shutter_coils: list[str] = []
+        if use_p1:
+            source_shutter_coils.append("SHUTTER_1_SW")
+        if use_p2:
+            source_shutter_coils.append("SHUTTER_2_SW")
+
+        meta = {
+            # --- 공정 기본 ---
+            "use_power1": use_p1,
+            "use_power2": use_p2,
+            "material_name": material,
+            "density": density,
+            "z_factor": z_factor,
+
+            # ✅ 2채널 rate (새 규격)
+            "target_rate_1": rate1,
+            "target_rate_2": rate2,
+            "target_rate_total": target_rate_total,
+
+            "target_thickness": target_th,
+            "delay_min": delay_min,
+
+            # --- 안전/제한 ---
+            "dac_max": 4000,
+            "sensor_none_abort_s": 5.0,
+
+            # --- 램프업 파라미터 ---
+            "ramp_step_dac": 100,
+            "fine_step_dac": 50,
+            "ramp_fast_until_dac": 1000,
+            "ramp_interval_fast_s": 1.0,
+            "ramp_interval_slow_s": 10.0,
+
+            # --- 목표 도달/보정 ---
+            "rate_tol_ratio": 0.05,
+            "rate_drop_ratio": 0.30,
+            "rate_drop_count": 3,
+
+            # --- pre-rate 홀드 ---
+            "pre_rate": 0.4,
+            "pre_hold_s": 120.0,
+
+            # --- stuck 가드 ---
+            "stuck_dac_guard": 1500,
+            "stuck_rate_abs": 0.05,
+            "stuck_time_s": 60.0,
+
+            # --- shutter delay 후 STM zero 모드 ---
+            "zero_mode": "B",
+
+            # --- FTM/STM 안정화 ---
+            "wait_after_ftm_on_s": 1.5,
+
+            # ✅ 셔터 리스트만
+            "source_shutter_coils": source_shutter_coils,
+        }
+
+        # ✅ steps는 리스트 만든 다음 조건부 append로 구성(문법 오류 방지)
+        steps: list[ProcessStep] = [
+            # 0) 안전 초기화
+            ProcessStep(name="MAIN_SHUTTER_CLOSE", type=StepType.PLC_WRITE_COIL, coil="MAIN_SHUTTER_SW", on=False),
+            ProcessStep(name="SHUTTER_1_CLOSE_INIT", type=StepType.PLC_WRITE_COIL, coil="SHUTTER_1_SW", on=False),
+            ProcessStep(name="SHUTTER_2_CLOSE_INIT", type=StepType.PLC_WRITE_COIL, coil="SHUTTER_2_SW", on=False),
+
+            # 1) DAC 0
+            ProcessStep(name="DAC1_ZERO", type=StepType.PLC_WRITE_REG, reg="DAC_POWER_1", value=0),
+            ProcessStep(name="DAC2_ZERO", type=StepType.PLC_WRITE_REG, reg="DAC_POWER_2", value=0),
+
+            # 2) 선택된 파워 ON
+            ProcessStep(name="POWER1_SET", type=StepType.PLC_WRITE_COIL, coil="POWER_1_SW", on=use_p1),
+            ProcessStep(name="POWER2_SET", type=StepType.PLC_WRITE_COIL, coil="POWER_2_SW", on=use_p2),
+        ]
+
+        # 3) 선택된 source shutter open
+        if use_p1:
+            steps.append(ProcessStep(name="SHUTTER_1_OPEN", type=StepType.PLC_WRITE_COIL, coil="SHUTTER_1_SW", on=True))
+        if use_p2:
+            steps.append(ProcessStep(name="SHUTTER_2_OPEN", type=StepType.PLC_WRITE_COIL, coil="SHUTTER_2_SW", on=True))
+
+        # 4) FTM ON + 1.5초 대기
+        steps.append(ProcessStep(name="FTM_ON", type=StepType.PLC_WRITE_COIL, coil="FTM_SW", on=True))
+        steps.append(ProcessStep(name="WAIT_FTM_STM", type=StepType.WAIT_SECONDS, seconds=float(meta["wait_after_ftm_on_s"])))
+
+        # 5) deposition 제어(엔진 내부 루프)
+        steps.append(ProcessStep(name="EVAP_DEPOSITION_CONTROL", type=StepType.MARK, meta=meta))
+
+        # 6) 후처리(best-effort): shutter close + FTM OFF
+        #    (안전상 둘 다 닫아도 무해하지만, 선택된 것만 닫게 유지)
+        if use_p1:
+            steps.append(ProcessStep(name="SHUTTER_1_CLOSE", type=StepType.PLC_WRITE_COIL, coil="SHUTTER_1_SW", on=False))
+        if use_p2:
+            steps.append(ProcessStep(name="SHUTTER_2_CLOSE", type=StepType.PLC_WRITE_COIL, coil="SHUTTER_2_SW", on=False))
+        steps.append(ProcessStep(name="FTM_OFF", type=StepType.PLC_WRITE_COIL, coil="FTM_SW", on=False))
+
+        recipe = ProcessRecipe(
+            recipe_name=f"EVAP_{material}",
+            steps=steps,
+            telemetry_interval_s=1.0,
+            meta={
+                "material_name": material,
                 "use_power1": use_p1,
                 "use_power2": use_p2,
-                "material_name": material,   # ✅ 중복 제거
-                "density": density,
-                "z_factor": z_factor,
-                "target_rate": target_rate,
+
+                # ✅ 새 규격만
+                "target_rate_1": rate1,
+                "target_rate_2": rate2,
+                "target_rate_total": target_rate_total,
+
                 "target_thickness": target_th,
                 "delay_min": delay_min,
-
-                # --- 안전/제한 ---
-                "dac_max": 4000,                 # ✅ DAC 4000 넘지 않도록
-                "sensor_none_abort_s": 5.0,      # ✅ rate/thickness가 None 지속 시 중단(엔진이 사용)
-
-                # --- 램프업 파라미터(요구사항) ---
-                "ramp_step_dac": 100,
-                "fine_step_dac": 50,
-
-                # ✅ DAC 1000 전/후 템포 분리(엔진이 지원하는 경우 사용)
-                "ramp_fast_until_dac": 1000,
-                "ramp_interval_fast_s": 1.0,     # < 1000 : 1초에 100
-                "ramp_interval_slow_s": 10.0,    # >=1000 : 10초에 100
-
-                # ✅ (구 엔진 호환/혹은 단일 템포 필요 시)
-                "ramp_interval_s": 1.0,
-
-                # --- 목표 도달/보정 ---
-                "rate_tol_ratio": 0.05,          # target ±5% 이내면 delay 시작
-                "rate_drop_ratio": 0.30,         # 급락 판단(현재가 기준의 30% 미만)
-                "rate_drop_count": 3,
-
-                # --- pre-rate 홀드 ---
-                "pre_rate": 0.4,
-                "pre_hold_s": 120.0,
-
-                # --- stuck 가드(“안 오르는데 무조건 DAC 올리지 않기”) ---
-                "stuck_dac_guard": 1500,
-                "stuck_rate_abs": 0.05,
-                "stuck_time_s": 60.0,
-
-                # --- shutter delay 후 STM zero 모드(두께+타이머) ---
-                "zero_mode": "B",
-
-                # --- FTM/STM 안정화 ---
-                "wait_after_ftm_on_s": 1.5,
-
-                "source_shutter_coil": source_shutter_coil,
-            }
-
-            steps: list[ProcessStep] = [
-                # 0) 안전 초기화
-                ProcessStep(name="MAIN_SHUTTER_CLOSE", type=StepType.PLC_WRITE_COIL, coil="MAIN_SHUTTER_SW", on=False),
-                ProcessStep(name="SHUTTER_1_CLOSE_INIT", type=StepType.PLC_WRITE_COIL, coil="SHUTTER_1_SW", on=False),
-                ProcessStep(name="SHUTTER_2_CLOSE_INIT", type=StepType.PLC_WRITE_COIL, coil="SHUTTER_2_SW", on=False),
-
-                # 1) DAC 0
-                ProcessStep(name="DAC1_ZERO", type=StepType.PLC_WRITE_REG, reg="DAC_POWER_1", value=0),
-                ProcessStep(name="DAC2_ZERO", type=StepType.PLC_WRITE_REG, reg="DAC_POWER_2", value=0),
-
-                # 2) 선택된 파워 ON
-                ProcessStep(name="POWER1_SET", type=StepType.PLC_WRITE_COIL, coil="POWER_1_SW", on=use_p1),
-                ProcessStep(name="POWER2_SET", type=StepType.PLC_WRITE_COIL, coil="POWER_2_SW", on=use_p2),
-
-                # 3) source shutter open + FTM ON
-                ProcessStep(name="SOURCE_SHUTTER_OPEN", type=StepType.PLC_WRITE_COIL, coil=source_shutter_coil, on=True),
-                ProcessStep(name="FTM_ON", type=StepType.PLC_WRITE_COIL, coil="FTM_SW", on=True),
-
-                # 4) 1.5초 대기
-                ProcessStep(name="WAIT_FTM_STM", type=StepType.WAIT_SECONDS, seconds=float(meta["wait_after_ftm_on_s"])),
-
-                # 5) deposition 제어(엔진 내부 루프)
-                ProcessStep(name="EVAP_DEPOSITION_CONTROL", type=StepType.MARK, meta=meta),
-
-                # 6) 후처리(best-effort): source shutter/FTM OFF
-                ProcessStep(name="SOURCE_SHUTTER_CLOSE", type=StepType.PLC_WRITE_COIL, coil=source_shutter_coil, on=False),
-                ProcessStep(name="FTM_OFF", type=StepType.PLC_WRITE_COIL, coil="FTM_SW", on=False),
-            ]
-
-            recipe = ProcessRecipe(
-                recipe_name=f"EVAP_{material}",
-                steps=steps,
-                telemetry_interval_s=1.0,  # ✅ 요구사항: 매초 기록
-                meta={
-                    "material_name": material,
-                    "target_rate": target_rate,
-                    "target_thickness": target_th,
-                    "delay_min": delay_min,
-                    "use_power1": use_p1,
-                    "use_power2": use_p2,
-                },
-            )
-            recipe.validate(strict=True)
-            return recipe
+            },
+        )
+        recipe.validate(strict=True)
+        return recipe
 
     def start_from_ui(self, run_cfg: dict[str, Any], *, run_id: Optional[str] = None) -> None:
         """
@@ -381,7 +398,9 @@ class ProcessController(QObject):
             # 1) Shutters close
             try:
                 self.plc.enqueue_write_coil("MAIN_SHUTTER_SW", False, tag=tag)
+                self._csv_event(event="WRITE_COIL", target="MAIN_SHUTTER_SW", value=0, detail=f"ENQ tag={tag}")
             except Exception as e:
+                self._csv_event(event="WRITE_COIL", target="MAIN_SHUTTER_SW", value=0, detail=f"ERR tag={tag} {e!r}")
                 self._ui_warn(f"MAIN_SHUTTER close 실패(enqueue): {e!r}")
 
             for coil in ("SHUTTER_1_SW", "SHUTTER_2_SW"):
@@ -484,6 +503,24 @@ class ProcessController(QObject):
         """
         self._worker = None
         self._ui_info("공정 스레드 종료")
+
+    def _csv_event(self, *, event: str, target: str, value: Any = "", detail: str = "") -> None:
+        """
+        공정 CSV(telemetry)에 이벤트 1줄 추가.
+        - 공정이 실행 중일 때만 의미가 있음(=run open 상태에서만 기록됨)
+        """
+        if not self.is_running():
+            return
+        try:
+            self.log.telemetry({
+                "step": f"CTRL:{event}",   # step을 컨트롤러 이벤트로 표시
+                "event": str(event),
+                "target": str(target),
+                "value": value,
+                "detail": str(detail),
+            })
+        except Exception:
+            pass
 
     # --------------------------------------------------------
     # UI log helpers

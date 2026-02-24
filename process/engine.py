@@ -152,6 +152,9 @@ class ProcessEngine:
         self._last_dac_power_1: int = 0
         self._last_dac_power_2: int = 0
 
+        # ✅ UI 표시용: 마지막 메시지 캐시 (tick emit이 message=""로 덮는 문제 방지)
+        self._ui_last_message: str = ""
+
     # --------------------------------------------------------
     # External controls (thread-safe-ish: 단순 플래그)
     # --------------------------------------------------------
@@ -304,7 +307,12 @@ class ProcessEngine:
 
         # ---------- PLC actions ----------
         if t == StepType.PLC_WRITE_COIL:
-            self._plc_write_coil(step.coil, bool(step.on), tag=step.name)
+            coil = str(step.coil or "")
+            on = bool(step.on)
+            # ✅ 스텝별 짧은 표시
+            self._emit_status(step_idx=self._current_step_idx, step_name=self._current_step_name,
+                            message=self._ui_coil_text(coil, on), force=True)
+            self._plc_write_coil(coil, on, tag=step.name)
             return
 
         if t == StepType.PLC_PULSE_COIL:
@@ -313,7 +321,12 @@ class ProcessEngine:
             return
 
         if t == StepType.PLC_WRITE_REG:
-            self._plc_write_reg(step.reg, int(step.value or 0), tag=step.name)
+            reg = str(step.reg or "")
+            v = int(step.value or 0)
+            # ✅ 스텝별 짧은 표시
+            self._emit_status(step_idx=self._current_step_idx, step_name=self._current_step_name,
+                            message=self._ui_reg_text(reg, v), force=True)
+            self._plc_write_reg(reg, v, tag=step.name)
             return
 
         if t == StepType.PLC_SET_DAC_MA:
@@ -609,7 +622,7 @@ class ProcessEngine:
 
             dac = min(dac_max, dac + ramp_step_dac)
             apply_dac()
-            self._emit_status(message=f"ramp(pre): dac={dac}, rt={rt:.3f}")
+            self._emit_status(message=f"POWER RAMP UP (PRE) / DAC={dac} / rate={rt:.3f}/{pre_rate:.3f} Å/s")
             _ramp_sleep_by_dac(dac)
 
         # 4) pre_rate 유지(2분)
@@ -670,7 +683,7 @@ class ProcessEngine:
 
             dac = min(dac_max, dac + ramp_step_dac)
             apply_dac()
-            self._emit_status(message=f"ramp(target): dac={dac}, rt={rt:.3f}")
+            self._emit_status(message=f"POWER RAMP UP (TARGET) / DAC={dac} / rate={rt:.3f}/{target_rate:.3f} Å/s")
             _ramp_sleep_by_dac(dac)
 
         # 6) target_rate ±5% band 안으로 fine tune
@@ -702,19 +715,25 @@ class ProcessEngine:
 
         # 7) delay (shutter delay)
         if delay_s > 0:
-            self._emit_status(message=f"EVAP shutter delay 시작: {delay_s:.1f}s")
-            t_end = time.time() + delay_s
-            while time.time() < t_end:
+            total_min = float(delay_min)
+            t0m = time.monotonic()
+            tendm = t0m + float(delay_s)
+            next_ui = t0m  # 1초마다 UI 업데이트
+
+            # 시작 표시(0/total)
+            self._emit_status(message=f"SHUTTER DELAY / 0.00/{total_min:.2f} min", force=True)
+
+            while True:
                 rt = read_rate_or_abort()
 
-                # rate 급감 감지(소스 부족 등) - 셔터 열기 전에도 감지
+                # rate 급감 감지(셔터 열기 전)
                 if rt < target_rate * rate_drop_ratio:
                     raise EngineFailed(step.name, f"EVAP: dep.rate 급감(셔터 전) rt={rt:.3f} < {target_rate*rate_drop_ratio:.3f}")
 
                 new_dac = self._evap_adjust_dac(
                     dac=dac,
                     rate=rt,
-                    target_rate=target_rate,  # ✅ 여기
+                    target_rate=target_rate,
                     tol_ratio=rate_tol_ratio,
                     step_up=fine_step_dac,
                     step_dn=fine_step_dac,
@@ -724,10 +743,26 @@ class ProcessEngine:
                     dac = new_dac
                     apply_dac()
 
-                _sleep_with_checks(0.5)
+                nowm = time.monotonic()
+                remain_s = tendm - nowm
+                if remain_s <= 0:
+                    break
+
+                # ✅ 1초마다 "경과/남은(min)" 표시
+                if nowm >= next_ui:
+                    elapsed_min = (nowm - t0m) / 60.0
+                    remain_min = max(0.0, remain_s) / 60.0
+                    self._emit_status(
+                        message=f"SHUTTER DELAY / {elapsed_min:.2f}/{total_min:.2f} min (remain {remain_min:.2f}) / DAC={dac}",
+                        force=True,
+                    )
+                    next_ui = nowm + 1.0
+
+                # ✅ 남은 시간 기준 sleep(딜레이 누적 오차 최소화)
+                time.sleep(min(0.1, max(0.0, remain_s)))
 
         # 8) delay 종료 → STM zero
-        self._emit_status(message="EVAP: STM zero + MAIN_SHUTTER open")
+        self._emit_status(message="MAIN SHUTTER OPEN", force=True)
         zero_mode = str(meta.get("zero_mode", "B") or "B")
         self._stm_zero_thickness(recipe, step, mode=zero_mode)
         
@@ -780,7 +815,10 @@ class ProcessEngine:
                 dac = new_dac
                 apply_dac()
 
-            self._emit_status(message=f"deposit: th={dep_th:.1f}/{target_th:.1f}Å, rt={rt:.3f}Å/s, dac={dac}")
+            remain_th = max(0.0, float(target_th) - float(dep_th))
+            self._emit_status(
+                message=f"MAIN PROCESSING / remain {remain_th:.1f}Å ( {dep_th:.1f}/{target_th:.1f}Å ) / DAC={dac}",
+            )
 
             if dep_th >= target_th:
                 break
@@ -1200,6 +1238,12 @@ class ProcessEngine:
             return
         self._last_status_emit_ts = now  # ✅ 여기서 갱신
 
+        # ✅ message가 비어있으면 마지막 메시지 유지
+        if message:
+            self._ui_last_message = message
+        else:
+            message = self._ui_last_message
+
         st = ProcessStatus(
             phase=self._phase,
             recipe_name=self._recipe_name,
@@ -1300,6 +1344,32 @@ class ProcessEngine:
             self.log.error(msg, tag=tag, also_ui=also_ui)
         except Exception:
             pass
+
+    def _ui_coil_text(self, coil: str, on: bool) -> str:
+        c = (coil or "").upper()
+        # ✅ 너가 원하는 대표 표시들
+        if c == "FTM_SW":
+            return f"FTM {'ON' if on else 'OFF'}"
+        if c == "MAIN_SHUTTER_SW":
+            return f"MAIN SHUTTER {'OPEN' if on else 'CLOSE'}"
+        if c == "SHUTTER_1_SW":
+            return f"SOURCE SHUTTER 1 {'OPEN' if on else 'CLOSE'}"
+        if c == "SHUTTER_2_SW":
+            return f"SOURCE SHUTTER 2 {'OPEN' if on else 'CLOSE'}"
+        if c == "POWER_1_SW":
+            return f"POWER 1 {'ON' if on else 'OFF'}"
+        if c == "POWER_2_SW":
+            return f"POWER 2 {'ON' if on else 'OFF'}"
+        # fallback
+        return f"{c}={'ON' if on else 'OFF'}"
+
+    def _ui_reg_text(self, reg: str, value: int) -> str:
+        r = (reg or "").upper()
+        if r == "DAC_POWER_1":
+            return f"POWER RAMP (DAC1={int(value)})"
+        if r == "DAC_POWER_2":
+            return f"POWER RAMP (DAC2={int(value)})"
+        return f"{r}={int(value)}"
 
     # --------------------------------------------------------
     # Utilities

@@ -316,8 +316,19 @@ class ProcessEngine:
             return
 
         if t == StepType.PLC_PULSE_COIL:
+            coil = str(step.coil or "")
+            ms = int(step.pulse_ms or 200)
+
+            # ✅ 펄스 스텝도 상단에 짧게 표시
+            self._emit_status(
+                step_idx=self._current_step_idx,
+                step_name=self._current_step_name,
+                message=self._ui_pulse_text(coil, ms),
+                force=True,
+            )
+
             # momentary pulse(ON 펄스)로 통일
-            self._plc_pulse_coil(step.coil, int(step.pulse_ms or 200), tag=step.name)
+            self._plc_pulse_coil(coil, ms, tag=step.name)
             return
 
         if t == StepType.PLC_WRITE_REG:
@@ -536,11 +547,17 @@ class ProcessEngine:
 
         # --- 내부 유틸 ---
         def _sleep_with_checks(total_s: float) -> None:
-            end_t = time.time() + float(total_s)
-            while time.time() < end_t:
+            end_t = time.monotonic() + float(total_s)
+            while True:
                 self._check_stop_pause(recipe, step)
                 self._tick_emit(recipe, step)
-                time.sleep(min(0.1, end_t - time.time()))
+
+                now = time.monotonic()
+                remain = end_t - now
+                if remain <= 0:
+                    return
+
+                time.sleep(min(0.1, remain))
 
         def _ramp_sleep_by_dac(cur_dac: int) -> None:
             if int(cur_dac) >= int(ramp_fast_until_dac):
@@ -1370,6 +1387,11 @@ class ProcessEngine:
         if r == "DAC_POWER_2":
             return f"POWER RAMP (DAC2={int(value)})"
         return f"{r}={int(value)}"
+    
+    def _ui_pulse_text(self, coil: str, pulse_ms: int) -> str:
+        c = (coil or "").upper()
+        # 필요하면 여기서 coil 이름별로 더 예쁘게 매핑 가능
+        return f"{c} PULSE ({int(pulse_ms)}ms)" if c else f"PULSE ({int(pulse_ms)}ms)"
 
     # --------------------------------------------------------
     # Utilities

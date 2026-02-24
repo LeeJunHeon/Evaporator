@@ -192,8 +192,10 @@ class ProcessEngine:
                 run_id=self._run_id,
                 recipe_name=self._recipe_name,
                 meta={
-                    "recipe": recipe.to_dict(),
                     "started_at": self._ts_str(self._started_ts),
+                    "telemetry_interval_s": float(getattr(recipe, "telemetry_interval_s", 1.0) or 1.0),
+                    # recipe.meta는 너가 ProcessController에서 작게 넣어두는 값만 있으니 부담 적음
+                    "recipe_meta": dict(getattr(recipe, "meta", {}) or {}),
                 },
             )
         except Exception as e:
@@ -927,13 +929,36 @@ class ProcessEngine:
     def _plc_write_reg(self, reg: Optional[str], value: int, *, tag: str) -> None:
         if not reg:
             raise EngineFailed(tag, "reg is None")
-        fut = self.plc.submit_write_reg(reg_name=str(reg), value=int(value), tag=tag)
-        self._wait_future(fut, timeout_s=self._plc_cmd_timeout_s, where=f"PLC_WRITE_REG {reg}={value}")
+
+        reg_name = str(reg)
+        v = int(value)
+
+        fut = self.plc.submit_write_reg(reg_name=reg_name, value=v, tag=tag)
+        self._wait_future(fut, timeout_s=self._plc_cmd_timeout_s, where=f"PLC_WRITE_REG {reg_name}={v}")
+
+        # ✅ telemetry(dac1/dac2) 정확도 확보: DAC 레지스터면 마지막값 갱신
+        rn = reg_name.upper()
+        if rn == "DAC_POWER_1":
+            self._last_dac_power_1 = v
+        elif rn == "DAC_POWER_2":
+            self._last_dac_power_2 = v
 
     def _plc_set_dac_ma(self, ch: int, ma: float, *, tag: str) -> None:
-        fut = self.plc.submit_set_dac_current(ch=int(ch), ma=float(ma), tag=tag)
-        # 결과는 dac code(int)일 수 있음
-        _ = self._wait_future(fut, timeout_s=self._plc_cmd_timeout_s, where=f"PLC_SET_DAC_MA ch={ch} ma={ma}")
+        ch_i = int(ch)
+        fut = self.plc.submit_set_dac_current(ch=ch_i, ma=float(ma), tag=tag)
+
+        # 결과가 "dac code(int)"일 수 있으니 받아서 telemetry에 반영
+        res = self._wait_future(fut, timeout_s=self._plc_cmd_timeout_s, where=f"PLC_SET_DAC_MA ch={ch_i} ma={ma}")
+
+        try:
+            if isinstance(res, (int, float)):
+                code = int(res)
+                if ch_i == 1:
+                    self._last_dac_power_1 = code
+                elif ch_i == 2:
+                    self._last_dac_power_2 = code
+        except Exception:
+            pass
 
     @staticmethod
     def _wait_future(fut: Any, *, timeout_s: float, where: str, msg: str = "") -> Any:

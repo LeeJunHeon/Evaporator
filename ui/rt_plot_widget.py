@@ -16,7 +16,7 @@ from collections import deque
 from typing import Deque, Optional, Tuple
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QPainter
+from PySide6.QtGui import QPainter, QBrush, QColor, QPen
 from PySide6.QtWidgets import QWidget, QVBoxLayout
 
 
@@ -53,9 +53,13 @@ class DepositionPlotWidget(QWidget):
         self._power_series.setName(self._power_title)
 
         self._chart = QChart()
-        # ✅ 범례를 표시해서 '왼쪽 Y(Dep.Rate) / 오른쪽 Y(Power)' 선 색을 UI에서 바로 확인 가능
-        self._chart.legend().setVisible(True)
-        self._chart.legend().setAlignment(Qt.AlignBottom)
+
+        # ✅ 아래 legend 박스가 거슬리면 숨김(축 라벨 색으로 구분)
+        self._chart.legend().hide()
+        # 만약 legend도 같이 쓰고 싶으면 hide() 대신:
+        # self._chart.legend().setVisible(True)
+        # self._chart.legend().setAlignment(Qt.AlignBottom)
+
         self._chart.setTitle("Dep. Rate / Power")
         self._chart.setAnimationOptions(QChart.NoAnimation)
         self._chart.addSeries(self._rate_series)
@@ -88,6 +92,10 @@ class DepositionPlotWidget(QWidget):
         self._view = QChartView(self._chart)
         self._view.setRenderHint(QPainter.Antialiasing, True)
         lay.addWidget(self._view, 1)
+
+        # view 생성 직전 또는 _reset_axes() 직전에 호출
+        self._apply_tick_density(segments=10)  # ✅ 10칸(=tick 11개) 정도
+        self._sync_axis_label_colors()         # ✅ 축 라벨을 선 색으로
 
         self._reset_axes()
 
@@ -138,10 +146,82 @@ class DepositionPlotWidget(QWidget):
 
         if self._rate_buf:
             ys = [v for _, v in self._rate_buf]
-            y_min, y_max = min(ys), max(ys)
-            if y_min < 0:
-                y_min = 0.0
-            pad = max(0.01, (y_max - y_min) * 0.1)
-            self._ax_rate.setRange(y_min - pad, y_max + pad)
+            y_max = max(ys)
 
-        # Power 축은 고정이므로 여기서 자동 스케일링하지 않음
+            # ✅ Dep.rate는 보통 0 이상이므로 0부터 시작
+            # ✅ 최소 상한 1.0은 유지하되, 1 넘으면 자동 확장
+            y_upper = max(1.0, y_max * 1.10)
+
+            self._ax_rate.setRange(0.0, y_upper)
+
+            # 범위에 따라 라벨 포맷 자동 조정(눈금 11개면 너무 많은 소수는 지저분해짐)
+            try:
+                if y_upper < 2.0:
+                    self._ax_rate.setLabelFormat("%.3f")
+                elif y_upper < 10.0:
+                    self._ax_rate.setLabelFormat("%.2f")
+                else:
+                    self._ax_rate.setLabelFormat("%.1f")
+            except Exception:
+                pass
+
+    def _apply_tick_density(self, *, segments: int = 10) -> None:
+        """축 눈금(칸) 수를 늘림. segments=10이면 tickCount=11."""
+        ticks = max(2, int(segments) + 1)
+        try:
+            self._ax_x.setTickCount(ticks)
+        except Exception:
+            pass
+        try:
+            self._ax_rate.setTickCount(ticks)
+        except Exception:
+            pass
+        try:
+            self._ax_power.setTickCount(ticks)
+        except Exception:
+            pass
+
+        # minor tick은 과하면 복잡해져서 기본 0 권장 (원하면 1~2로 늘리면 더 촘촘해짐)
+        for ax in (self._ax_x, self._ax_rate, self._ax_power):
+            try:
+                ax.setMinorTickCount(0)
+            except Exception:
+                pass
+
+    def _sync_axis_label_colors(self) -> None:
+        """선 색상에 맞춰 축 제목(라벨) 색을 칠해서 legend 없이도 구분되게."""
+        rate_color = self._rate_series.pen().color()
+        power_color = self._power_series.pen().color()
+
+        # 혹시 둘 다 기본 검정으로 잡히는 환경이면(테마 영향) 안전하게 지정
+        if rate_color == power_color:
+            rate_color = QColor("#1f77b4")  # 파란 계열
+            power_color = QColor("#2ca02c") # 초록 계열
+            try:
+                self._rate_series.setPen(QPen(rate_color, 2))
+            except Exception:
+                pass
+            try:
+                self._power_series.setPen(QPen(power_color, 2))
+            except Exception:
+                pass
+
+        # ✅ 축 제목만 색칠(눈금 숫자까지 색칠하면 가독성이 떨어질 수 있어서)
+        try:
+            self._ax_rate.setTitleBrush(QBrush(rate_color))
+        except Exception:
+            pass
+        try:
+            self._ax_power.setTitleBrush(QBrush(power_color))
+        except Exception:
+            pass
+
+        # 축 라인까지 같이 칠하고 싶으면(더 직관적):
+        try:
+            self._ax_rate.setLinePen(QPen(rate_color))
+        except Exception:
+            pass
+        try:
+            self._ax_power.setLinePen(QPen(power_color))
+        except Exception:
+            pass

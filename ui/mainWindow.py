@@ -457,34 +457,44 @@ class Ui_Form(object):
         self.materialZfactorEdit2.setGeometry(QRect(100, 270, 91, 26))
         self.materialZfactorEdit2.setReadOnly(True)
 
-        # ✅ Current: Rate는 재료별 2칸, Thick는 1칸(전체폭)
+        # ✅ Cur Rate: 라벨 1개(전체폭) + Edit 2개
         self.currentRateLabel = QLabel(self.page_2)
-        self.currentRateLabel.setGeometry(QRect(0, 450, 91, 34))
+        self.currentRateLabel.setObjectName("currentRateLabel")
+        self.currentRateLabel.setGeometry(QRect(0, 450, 191, 20))
+        self.currentRateLabel.setAlignment(
+            Qt.AlignmentFlag.AlignLeading | Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
 
+        # ✅ 기존 2번째 라벨은 "완전 삭제" 대신 숨김 처리
+        #    (다른 파일에서 currentRateLabel2를 참조할 가능성 때문에 안전하게 유지)
         self.currentRateLabel2 = QLabel(self.page_2)
         self.currentRateLabel2.setObjectName("currentRateLabel2")
-        self.currentRateLabel2.setGeometry(QRect(100, 450, 91, 34))
+        self.currentRateLabel2.setGeometry(QRect(0, 0, 0, 0))
 
+        # Edit 2칸(라벨+20)
         self.currentRateEdit = QLineEdit(self.page_2)
-        self.currentRateEdit.setGeometry(QRect(0, 485, 91, 26))
+        self.currentRateEdit.setGeometry(QRect(0, 470, 91, 26))
         self.currentRateEdit.setReadOnly(True)
 
         self.currentRateEdit2 = QLineEdit(self.page_2)
         self.currentRateEdit2.setObjectName("currentRateEdit2")
-        self.currentRateEdit2.setGeometry(QRect(100, 485, 91, 26))
+        self.currentRateEdit2.setGeometry(QRect(100, 470, 91, 26))
         self.currentRateEdit2.setReadOnly(True)
 
+        # ✅ Cur Thick (Edit 끝 +4 = 다음 라벨)
         self.currentThicknessLabel = QLabel(self.page_2)
-        self.currentThicknessLabel.setGeometry(QRect(0, 513, 191, 20))
+        self.currentThicknessLabel.setObjectName("currentThicknessLabel")
+        self.currentThicknessLabel.setGeometry(QRect(0, 500, 191, 20))
 
         self.currentThicknessEdit = QLineEdit(self.page_2)
-        self.currentThicknessEdit.setGeometry(QRect(0, 533, 191, 26))
+        self.currentThicknessEdit.setObjectName("currentThicknessEdit")
+        self.currentThicknessEdit.setGeometry(QRect(0, 520, 191, 26))
         self.currentThicknessEdit.setReadOnly(True)
 
-        # ✅ Recipe 파일 선택(추후 레시피 로딩 기능 연결용)
+        # ✅ Recipe (Edit 끝 +4)
         self.recipeBtn = QPushButton(self.page_2)
         self.recipeBtn.setObjectName("recipeBtn")
-        self.recipeBtn.setGeometry(QRect(0, 560, 191, 41))
+        self.recipeBtn.setGeometry(QRect(0, 550, 191, 41))
 
         self.graphWidget = QWidget(self.page_2)
         self.graphWidget.setObjectName("graphWidget")
@@ -518,13 +528,14 @@ class Ui_Form(object):
         self.materialLabel.setGeometry(QRect(0, 150, 181, 20))
         self.materialLabel.setAlignment(Qt.AlignmentFlag.AlignLeading | Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
+        # ✅ Start/Stop (Recipe 끝 +4)
         self.stopProcess = QPushButton(self.page_2)
         self.stopProcess.setObjectName("stopProcess")
-        self.stopProcess.setGeometry(QRect(100, 610, 91, 71))  # ✅ 오른쪽으로 이동
+        self.stopProcess.setGeometry(QRect(100, 595, 91, 71))
 
         self.startProcess = QPushButton(self.page_2)
         self.startProcess.setObjectName("startProcess")
-        self.startProcess.setGeometry(QRect(0, 610, 91, 71))    # ✅ 왼쪽으로 이동
+        self.startProcess.setGeometry(QRect(0, 595, 91, 71))
 
         self.logWindow = QPlainTextEdit(self.page_2)
         self.logWindow.setObjectName("logWindow")
@@ -663,8 +674,8 @@ class Ui_Form(object):
         self.materialZLabel2.setText(QCoreApplication.translate("Form", "", None))    # 숨김 처리용
 
         # Cur Rate는 2칸이므로 각 칸 라벨 분리(재료/소스 1/2 의미)
-        self.currentRateLabel.setText(QCoreApplication.translate("Form", "Cur Rate 1 (Å/s)", None))
-        self.currentRateLabel2.setText(QCoreApplication.translate("Form", "Cur Rate 2 (Å/s)", None))
+        self.currentRateLabel.setText(QCoreApplication.translate("Form", "Cur Rate (Å/s)", None))
+        self.currentRateLabel2.setText(QCoreApplication.translate("Form", "", None))  # 숨김
 
         # Thick는 전체 1칸
         self.currentThicknessLabel.setText(QCoreApplication.translate("Form", "Cur Thick (Å)", None))

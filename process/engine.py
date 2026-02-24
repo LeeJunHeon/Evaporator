@@ -482,9 +482,9 @@ class ProcessEngine:
         use_p1 = bool(meta.get("use_power1", False))
         use_p2 = bool(meta.get("use_power2", False))
 
-        # ✅ power는 1개만
-        if (use_p1 and use_p2) or (not use_p1 and not use_p2):
-            raise EngineFailed(step.name, "EVAP: use_power1/use_power2는 정확히 하나만 True여야 합니다.")
+        # ✅ power는 1개 또는 2개 허용(둘 다 False만 금지)
+        if not (use_p1 or use_p2):
+            raise EngineFailed(step.name, "EVAP: use_power1/use_power2 중 최소 1개는 True여야 합니다.")
 
         target_rate = float(meta.get("target_rate", 0.0) or 0.0)        # Å/s
         target_th = float(meta.get("target_thickness", 0.0) or 0.0)     # Å

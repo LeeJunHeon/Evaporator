@@ -121,9 +121,9 @@ class ProcessController(QObject):
 
         ✅ 2파워 동시 사용 지원(동일 물질 가정)
         - Power는 1개 또는 2개 허용(둘 다 해제 금지)
-        - 채널별 Target Dep.rate 필수:
-            use_power1이면 target_rate_1 > 0
-            use_power2이면 target_rate_2 > 0
+        - Target Dep.rate는 1개(target_rate)만 사용
+        - Power1/Power2는 1개 또는 2개 선택 가능
+        - 두 파워는 동일 DAC로 같이 제어됨
         - 선택된 채널 source shutter open + FTM ON 이후 1.5초 대기
         - 실제 램프/dep.rate 제어는 engine.py의 _evap_deposition_control()에서 수행(엔진 수정 필요)
         """
@@ -142,19 +142,7 @@ class ProcessController(QObject):
         if density <= 0 or z_factor <= 0:
             raise ValueError("density / z_factor 값이 올바르지 않습니다. (0보다 커야 함)")
 
-        # ✅ dep.rate는 1개만 사용 (두 파워는 동일 DAC로 같이 제어)
         target_rate = float(run_cfg.get("target_rate", 0.0) or 0.0)
-
-        # (안전) main.py가 아직 target_rate_1/2 또는 total만 넘기는 경우를 대비한 최소 fallback
-        # - main.py를 target_rate 하나로 통일하면 아래 fallback은 삭제해도 됨
-        if target_rate <= 0:
-            target_rate = float(run_cfg.get("target_rate_total", 0.0) or 0.0)
-
-        if target_rate <= 0:
-            r1 = float(run_cfg.get("target_rate_1", 0.0) or 0.0)
-            r2 = float(run_cfg.get("target_rate_2", 0.0) or 0.0)
-            target_rate = r1 if r1 > 0 else r2
-
         if target_rate <= 0:
             raise ValueError("target_rate(목표 Dep.rate)는 0보다 커야 합니다.")
 

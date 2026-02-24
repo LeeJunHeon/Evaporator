@@ -972,21 +972,13 @@ class ProcessWindow(QWidget):
             QMessageBox.warning(self, "Input", "Power1/Power2 중 최소 1개는 선택해야 합니다.")
             return None
 
-        # ✅ 채널별 Target Dep.rate 읽기
-        rate1 = self._read_float("deprateEdit") if p1 else None
-        rate2 = self._read_float("deprateEdit2") if p2 else None
-
-        if p1 and rate1 is None:
-            QMessageBox.warning(self, "Input", "Power1 선택 시 Target Dep.rate(1)을 입력하세요.")
+        # ✅ Target Dep.rate는 1개만 사용 (두 파워는 동일 DAC로 같이 제어)
+        target_rate = self._read_float("deprateEdit")
+        if target_rate is None:
+            QMessageBox.warning(self, "Input", "Target Dep.rate를 입력하세요.")
             return None
-        if p2 and rate2 is None:
-            QMessageBox.warning(self, "Input", "Power2 선택 시 Target Dep.rate(2)을 입력하세요.")
-            return None
-        if p1 and (rate1 is not None) and (rate1 <= 0):
-            QMessageBox.warning(self, "Input", "Target Dep.rate(1)은 0보다 커야 합니다.")
-            return None
-        if p2 and (rate2 is not None) and (rate2 <= 0):
-            QMessageBox.warning(self, "Input", "Target Dep.rate(2)은 0보다 커야 합니다.")
+        if target_rate <= 0:
+            QMessageBox.warning(self, "Input", "Target Dep.rate는 0보다 커야 합니다.")
             return None
 
         # 공통 입력값
@@ -1002,17 +994,6 @@ class ProcessWindow(QWidget):
             delay_min = 0.0
         if delay_min < 0:
             QMessageBox.warning(self, "Input", "Delay(min)은 0 이상이어야 합니다.")
-            return None
-
-        # ✅ Material: “둘 다 동일 물질” 가정
-        # - 1개 파워만 선택이면 해당 채널 material 필수
-        # - 2개 파워면 material_1 또는 material_2 중 최소 1개만 있어도 OK
-        # - 둘 다 선택되어 있고 둘 다 material이 있으면, 서로 다르면 에러(동일 물질 가정 위반)
-        if p1 and (not p2) and (not self._material_1):
-            QMessageBox.warning(self, "Input", "Power1 사용 시 Material1 선택이 필요합니다.")
-            return None
-        if p2 and (not p1) and (not self._material_2):
-            QMessageBox.warning(self, "Input", "Power2 사용 시 Material2 선택이 필요합니다.")
             return None
 
         if p1 and p2:
@@ -1052,13 +1033,6 @@ class ProcessWindow(QWidget):
             QMessageBox.warning(self, "Input", "Material density/z-factor 값이 올바르지 않습니다.")
             return None
 
-        # ✅ 기존 호환 키 유지 + 2채널 확장 키 추가
-        # - target_rate: (1채널이면 그 채널 rate, 2채널이면 합계)로 넣어둠
-        # - 추후 process_controller/engine에서 target_rate_1/2를 사용하도록 확장 가능
-        r1 = float(rate1) if rate1 is not None else 0.0
-        r2 = float(rate2) if rate2 is not None else 0.0
-        target_rate_total = (r1 + r2) if (p1 and p2) else (r1 if p1 else r2)
-
         cfg: dict[str, Any] = {
             "use_power1": p1,
             "use_power2": p2,
@@ -1067,18 +1041,13 @@ class ProcessWindow(QWidget):
             "density": den,
             "z_factor": zf,
 
-            # ✅ 기존 키(단일 float) 유지
-            "target_rate": float(target_rate_total),
+            # ✅ 목표 dep.rate는 이것 하나만
+            "target_rate": float(target_rate),
 
             "target_thickness": float(target_thk),
             "delay_min": float(delay_min),
 
-            # ✅ 2채널 확장 키(추후 controller/engine 수정에 사용)
-            "target_rate_1": r1,
-            "target_rate_2": r2,
-            "target_rate_total": float(target_rate_total),
-
-            # (참고용)
+            # (참고용: 동일 물질 체크/디버깅용)
             "material_1": self._material_1,
             "material_2": self._material_2,
         }

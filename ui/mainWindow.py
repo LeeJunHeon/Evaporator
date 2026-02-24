@@ -459,26 +459,26 @@ class Ui_Form(object):
 
         # ✅ Current: Rate는 재료별 2칸, Thick는 1칸(전체폭)
         self.currentRateLabel = QLabel(self.page_2)
-        self.currentRateLabel.setGeometry(QRect(0, 500, 91, 20))
+        self.currentRateLabel.setGeometry(QRect(0, 450, 91, 34))
 
         self.currentRateLabel2 = QLabel(self.page_2)
         self.currentRateLabel2.setObjectName("currentRateLabel2")
-        self.currentRateLabel2.setGeometry(QRect(100, 500, 91, 20))
+        self.currentRateLabel2.setGeometry(QRect(100, 450, 91, 34))
 
         self.currentRateEdit = QLineEdit(self.page_2)
-        self.currentRateEdit.setGeometry(QRect(0, 520, 91, 26))
+        self.currentRateEdit.setGeometry(QRect(0, 485, 91, 26))
         self.currentRateEdit.setReadOnly(True)
 
         self.currentRateEdit2 = QLineEdit(self.page_2)
         self.currentRateEdit2.setObjectName("currentRateEdit2")
-        self.currentRateEdit2.setGeometry(QRect(100, 520, 91, 26))
+        self.currentRateEdit2.setGeometry(QRect(100, 485, 91, 26))
         self.currentRateEdit2.setReadOnly(True)
 
         self.currentThicknessLabel = QLabel(self.page_2)
-        self.currentThicknessLabel.setGeometry(QRect(0, 550, 191, 20))
+        self.currentThicknessLabel.setGeometry(QRect(0, 513, 191, 20))
 
         self.currentThicknessEdit = QLineEdit(self.page_2)
-        self.currentThicknessEdit.setGeometry(QRect(0, 520, 191, 26))
+        self.currentThicknessEdit.setGeometry(QRect(0, 533, 191, 26))
         self.currentThicknessEdit.setReadOnly(True)
 
         # ✅ Recipe 파일 선택(추후 레시피 로딩 기능 연결용)
@@ -511,7 +511,7 @@ class Ui_Form(object):
 
         self.delayEdit = QLineEdit(self.page_2)
         self.delayEdit.setObjectName("delayEdit")
-        self.delayEdit.setGeometry(QRect(0, 470, 191, 26))
+        self.delayEdit.setGeometry(QRect(0, 420, 191, 26))
 
         self.materialLabel = QLabel(self.page_2)
         self.materialLabel.setObjectName("materialLabel")
@@ -542,7 +542,7 @@ class Ui_Form(object):
 
         self.delayLabel = QLabel(self.page_2)
         self.delayLabel.setObjectName("delayLabel")
-        self.delayLabel.setGeometry(QRect(0, 450, 181, 20))
+        self.delayLabel.setGeometry(QRect(0, 400, 191, 20))
         self.delayLabel.setAlignment(Qt.AlignmentFlag.AlignLeading | Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
         # self.pwoerLabel = QLabel(self.page_2)

@@ -142,16 +142,21 @@ class ProcessController(QObject):
         if density <= 0 or z_factor <= 0:
             raise ValueError("density / z_factor 값이 올바르지 않습니다. (0보다 커야 함)")
 
-        # ✅ 호환 제거: 채널별 rate만 사용
-        rate1 = float(run_cfg.get("target_rate_1", 0.0) or 0.0)
-        rate2 = float(run_cfg.get("target_rate_2", 0.0) or 0.0)
+        # ✅ dep.rate는 1개만 사용 (두 파워는 동일 DAC로 같이 제어)
+        target_rate = float(run_cfg.get("target_rate", 0.0) or 0.0)
 
-        if use_p1 and rate1 <= 0:
-            raise ValueError("Power1 선택 시 target_rate_1은 0보다 커야 합니다.")
-        if use_p2 and rate2 <= 0:
-            raise ValueError("Power2 선택 시 target_rate_2는 0보다 커야 합니다.")
+        # (안전) main.py가 아직 target_rate_1/2 또는 total만 넘기는 경우를 대비한 최소 fallback
+        # - main.py를 target_rate 하나로 통일하면 아래 fallback은 삭제해도 됨
+        if target_rate <= 0:
+            target_rate = float(run_cfg.get("target_rate_total", 0.0) or 0.0)
 
-        target_rate_total = (rate1 if use_p1 else 0.0) + (rate2 if use_p2 else 0.0)
+        if target_rate <= 0:
+            r1 = float(run_cfg.get("target_rate_1", 0.0) or 0.0)
+            r2 = float(run_cfg.get("target_rate_2", 0.0) or 0.0)
+            target_rate = r1 if r1 > 0 else r2
+
+        if target_rate <= 0:
+            raise ValueError("target_rate(목표 Dep.rate)는 0보다 커야 합니다.")
 
         target_th = float(run_cfg.get("target_thickness", 0.0) or 0.0)
         delay_min = float(run_cfg.get("delay_min", 0.0) or 0.0)
@@ -176,10 +181,7 @@ class ProcessController(QObject):
             "density": density,
             "z_factor": z_factor,
 
-            # ✅ 2채널 rate (새 규격)
-            "target_rate_1": rate1,
-            "target_rate_2": rate2,
-            "target_rate_total": target_rate_total,
+            "target_rate": target_rate,
 
             "target_thickness": target_th,
             "delay_min": delay_min,
@@ -265,10 +267,7 @@ class ProcessController(QObject):
                 "use_power1": use_p1,
                 "use_power2": use_p2,
 
-                # ✅ 새 규격만
-                "target_rate_1": rate1,
-                "target_rate_2": rate2,
-                "target_rate_total": target_rate_total,
+                "target_rate": target_rate,
 
                 "target_thickness": target_th,
                 "delay_min": delay_min,

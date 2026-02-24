@@ -271,14 +271,7 @@ class LogWriterWorker(QThread):
         # 1) base_dir 시도
         try:
             _ensure_dir(self._base_dir)
-            test_file = self._base_dir / ".write_test"
-            with open(test_file, "w", encoding="utf-8") as f:
-                f.write("ok")
-            try:
-                test_file.unlink(missing_ok=True)
-            except Exception:
-                pass
-
+            # ✅ 파일로 write_test 하지 않음(불필요 파일 생성 방지)
             self._resolved_base_cache = self._base_dir
             return self._base_dir
         except Exception:
@@ -324,56 +317,58 @@ class LogWriterWorker(QThread):
 
     def _open_run(self, run_id: str, recipe_name: str, meta: Dict[str, Any], ts: Optional[float]) -> None:
         """
-        run별 폴더/파일 오픈:
-        - base_dir/YYYY-MM-DD/runs/<run_id>_<recipe>/
-            run.log
-            telemetry.csv
-            meta.json
+        ✅ 공정(run)당 파일 1개만 생성:
+        - (NAS 우선) base_dir/<run_id>_<recipe>.log
+        - NAS open 실패 시 로컬(_fallback_dir)로 저장
         """
-        # 이미 열려 있으면 먼저 닫고 새로 연다(중복 방지)
         self._close_run()
 
-        base = self._resolve_base_dir()
-        date_dir = _date_dir(ts)
-        runs_dir = base / date_dir / "runs"
-        _ensure_dir(runs_dir)
-
-        rid = _safe_name(run_id, 48) or _safe_name(datetime.now().strftime("%H%M%S"), 48)
+        # ✅ 파일명/런 메타 세팅
+        rid = _safe_name(run_id, 48) or _safe_name(datetime.now().strftime("%Y%m%d_%H%M%S"), 48)
         rcp = _safe_name(recipe_name, 48)
-        folder_name = f"{rid}_{rcp}" if rcp else rid
-        self._run_folder_name = folder_name
-        self._run_id = str(run_id)
-        self._run_recipe = str(recipe_name)
+        file_stem = f"{rid}_{rcp}" if rcp else rid
+
+        self._run_id = run_id
+        self._run_recipe = recipe_name
         self._run_open_ts = _now_ts(ts)
+        self._run_folder_name = file_stem  # 재오픈용 key
 
-        self._run_dir = runs_dir / folder_name
-        _ensure_dir(self._run_dir)
+        last_err = None
+        chosen_base = None
+        chosen_path = None
+        chosen_fp = None
 
-        # meta.json 저장
-        meta_path = self._run_dir / "meta.json"
-        try:
-            meta_out = dict(meta or {})
-            meta_out.setdefault("run_id", run_id)
-            meta_out.setdefault("recipe_name", recipe_name)
-            meta_out.setdefault("opened_at", _dt_str(ts))
-            with open(meta_path, "w", encoding="utf-8") as f:
-                json.dump(meta_out, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            self.sig_error.emit(f"[LogService] meta.json write failed: {e!r}")
+        # ✅ “NAS 못 열면 로컬 저장”만 명확히: 후보를 NAS(base_dir) -> 로컬(fallback)로 고정
+        candidates = [self._base_dir, self._fallback_dir]
 
-        # run.log 오픈
-        self._run_log_path = self._run_dir / "run.log"
-        self._run_log_fp = open(self._run_log_path, "a", encoding="utf-8", newline="")
+        for b in candidates:
+            try:
+                _ensure_dir(b)
+                p = b / f"{file_stem}.log"
+                fp = open(p, "a", encoding="utf-8", newline="")
+                chosen_base, chosen_path, chosen_fp = b, p, fp
+                break
+            except Exception as e:
+                last_err = e
+
+        if chosen_fp is None:
+            try:
+                self.sig_error.emit(f"[LogService] RUN OPEN failed (NAS+LOCAL): {last_err!r}")
+            except Exception:
+                pass
+            self._run_open = False
+            self._run_dir = None
+            self._run_folder_name = ""
+            return
+
+        self._run_dir = chosen_base
         self._run_open = True
-
-        # telemetry.csv 오픈 (header는 첫 write에서)
-        self._tele_path = self._run_dir / "telemetry.csv"
-        self._tele_fp = open(self._tele_path, "a", encoding="utf-8", newline="")
+        self._tele_path = chosen_path
+        self._tele_fp = chosen_fp
         self._tele_writer = None
         self._tele_header_written = False
 
-        # 안내 로그
-        self._write_log("INFO", f"RUN OPEN -> {self._run_dir}", "LogService", True, ts)
+        self._write_log("INFO", f"RUN OPEN -> {self._tele_path}", "LogService", True, ts)
 
     def _close_run(self) -> None:
         if self._run_open:
@@ -385,22 +380,15 @@ class LogWriterWorker(QThread):
                 self._tele_fp.close()
         except Exception:
             pass
+
         self._tele_fp = None
         self._tele_writer = None
         self._tele_header_written = False
         self._tele_path = None
 
-        try:
-            if self._run_log_fp:
-                self._run_log_fp.flush()
-                self._run_log_fp.close()
-        except Exception:
-            pass
-        self._run_log_fp = None
-        self._run_log_path = None
-
         self._run_open = False
         self._run_dir = None
+        self._run_folder_name = ""
 
     def _close_all(self) -> None:
         self._close_run()
@@ -423,7 +411,7 @@ class LogWriterWorker(QThread):
         """
         run이 열린 상태에서 파일 쓰기 실패 시:
         - base_dir 재판정(force)
-        - 동일 run_folder_name으로 fallback 위치에 run.log/telemetry.csv 재오픈
+        - 동일 file_stem(<run_id>_<recipe>)으로 base/<file_stem>.log 재오픈
         """
         if not self._run_open or not self._run_folder_name:
             return
@@ -437,70 +425,53 @@ class LogWriterWorker(QThread):
             pass
         self._tele_fp = None
         self._tele_writer = None
+        self._tele_header_written = False
 
-        try:
-            if self._run_log_fp:
-                self._run_log_fp.flush()
-                self._run_log_fp.close()
-        except Exception:
-            pass
-        self._run_log_fp = None
+        last_err = None
+        chosen_base = None
+        chosen_path = None
+        chosen_fp = None
 
-        # 새로운 base 결정(강제)
-        base = self._resolve_base_dir(force=True)
-        date_dir = _date_dir(self._run_open_ts if self._run_open_ts > 0 else None)
-        runs_dir = base / date_dir / "runs"
-        _ensure_dir(runs_dir)
+        candidates = []
+        b0 = self._resolve_base_dir(force=True)
+        candidates.append(b0)
+        if self._fallback_dir not in candidates:
+            candidates.append(self._fallback_dir)
+        if Path.cwd() not in candidates:
+            candidates.append(Path.cwd())
 
-        self._run_dir = runs_dir / self._run_folder_name
-        _ensure_dir(self._run_dir)
+        for b in candidates:
+            try:
+                _ensure_dir(b)
+                p = b / f"{self._run_folder_name}.log"
+                fp = open(p, "a", encoding="utf-8", newline="")
+                chosen_base, chosen_path, chosen_fp = b, p, fp
+                break
+            except Exception as e:
+                last_err = e
 
-        # run.log 재오픈
-        self._run_log_path = self._run_dir / "run.log"
-        self._run_log_fp = open(self._run_log_path, "a", encoding="utf-8", newline="")
+        if chosen_fp is None:
+            try:
+                self.sig_error.emit(f"[LogService] RUN reopen failed: {last_err!r}")
+            except Exception:
+                pass
+            return
 
-        # telemetry.csv 재오픈
-        self._tele_path = self._run_dir / "telemetry.csv"
-        self._tele_fp = open(self._tele_path, "a", encoding="utf-8", newline="")
-        self._tele_writer = None  # 다음 write에서 header 처리        
+        self._run_dir = chosen_base
+        self._tele_path = chosen_path
+        self._tele_fp = chosen_fp
+        self._tele_writer = None
+        self._tele_header_written = False
 
     def _write_log(self, level: str, msg: str, tag: str, also_ui: bool, ts: Optional[float]) -> None:
         line = self._format_line(level, msg, tag, ts)
 
-        # UI로도 전달
+        # UI로만 전달 (파일 저장은 main.py의 화면 로그 writer가 담당)
         if also_ui:
             try:
                 self.sig_line.emit(line)
             except Exception:
                 pass
-
-        # day log
-        try:
-            self._ensure_day_log_open(ts)
-            if self._day_log_fp:
-                self._day_log_fp.write(line + "\n")
-                self._day_log_fp.flush()
-        except Exception as e:
-            try:
-                self.sig_error.emit(f"[LogService] day log write failed: {e!r}")
-            except Exception:
-                pass
-            # ✅ 다음 write에서 fallback 선택 가능하도록
-            self._invalidate_base_cache()
-            self._close_day_log()
-
-        # run log (열려있을 때만)
-        if self._run_open and self._run_log_fp:
-            try:
-                self._run_log_fp.write(line + "\n")
-                self._run_log_fp.flush()
-            except Exception as e:
-                try:
-                    self.sig_error.emit(f"[LogService] run log write failed: {e!r}")
-                except Exception:
-                    pass
-                self._invalidate_base_cache()
-                self._reopen_run_files_in_resolved_base()
 
     def _write_telemetry(self, row: Dict[str, Any], ts: Optional[float]) -> None:
         if not self._run_open or not self._tele_fp:

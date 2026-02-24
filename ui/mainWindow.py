@@ -13,9 +13,8 @@
 from PySide6.QtCore import QCoreApplication, QMetaObject, QRect, Qt
 from PySide6.QtGui import QFont, QPalette
 from PySide6.QtWidgets import (
-    QApplication, QRadioButton, QFrame, QLabel, QLineEdit, QPlainTextEdit,
+    QApplication, QCheckBox, QFrame, QLabel, QLineEdit, QPlainTextEdit,
     QPushButton, QStackedWidget, QWidget, QGroupBox, QSpinBox, QGridLayout,
-    QButtonGroup,
 )
 
 
@@ -579,22 +578,13 @@ class Ui_Form(object):
         self.hmiBtn.setObjectName("hmiBtn")
         self.hmiBtn.setGeometry(QRect(0, 50, 191, 61))
 
-        self.sourcePower1 = QRadioButton(self.page_2)
+        self.sourcePower1 = QCheckBox(self.page_2)
         self.sourcePower1.setObjectName("sourcePower1")
         self.sourcePower1.setGeometry(QRect(0, 120, 81, 24))
 
-        self.sourcePower2 = QRadioButton(self.page_2)
+        self.sourcePower2 = QCheckBox(self.page_2)
         self.sourcePower2.setObjectName("sourcePower2")
         self.sourcePower2.setGeometry(QRect(110, 120, 81, 24))
-
-        # ✅ 둘 중 1개만 선택되도록 그룹 지정
-        self._power_group = QButtonGroup(self.page_2)
-        self._power_group.setExclusive(True)
-        self._power_group.addButton(self.sourcePower1, 1)
-        self._power_group.addButton(self.sourcePower2, 2)
-
-        # 기본 선택: Power2
-        self.sourcePower2.setChecked(True)
 
         self.processMonitor_Process = QLineEdit(self.page_2)
         self.processMonitor_Process.setObjectName("processMonitor_Process")

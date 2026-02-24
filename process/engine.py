@@ -1353,6 +1353,10 @@ class ProcessEngine:
             pressure=self._get_pressure(),
             thickness_a=self._get_thickness(),
             rate_a_s=self._get_rate(),
+
+            # ✅ models.py에 dac1/dac2를 추가했다면 여기서 값도 채워줘야 UI/그래프에서 사용 가능
+            dac1=int(getattr(self, "_last_dac_power_1", 0) or 0),
+            dac2=int(getattr(self, "_last_dac_power_2", 0) or 0),
         )
 
         cb = self.callbacks.on_status

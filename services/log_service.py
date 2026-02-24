@@ -172,12 +172,11 @@ class LogWriterWorker(QThread):
 
         # ✅ telemetry 컬럼 고정(Excel에서 항상 동일 컬럼)
         self._tele_fieldnames = [
-            "t", "elapsed_s", "step",
+            "time", "elapsed_sec", "step",
+            "event", "target", "value", "detail",
             "pressure_torr",
             "dac1", "dac2",
             "rate_Aps", "thickness_A",
-            "run_id", "recipe",
-            "extras_json",
         ]
 
     # ---------- public (thread-safe) ----------
@@ -344,8 +343,8 @@ class LogWriterWorker(QThread):
         for b in candidates:
             try:
                 _ensure_dir(b)
-                p = b / f"{file_stem}.log"
-                fp = open(p, "a", encoding="utf-8", newline="")
+                p = b / f"{file_stem}.csv"
+                fp = open(p, "a", encoding="utf-8-sig", newline="")  # 엑셀 호환(한글 깨짐 방지)
                 chosen_base, chosen_path, chosen_fp = b, p, fp
                 break
             except Exception as e:
@@ -443,8 +442,8 @@ class LogWriterWorker(QThread):
         for b in candidates:
             try:
                 _ensure_dir(b)
-                p = b / f"{self._run_folder_name}.log"
-                fp = open(p, "a", encoding="utf-8", newline="")
+                p = b / f"{self._run_folder_name}.csv"
+                fp = open(p, "a", encoding="utf-8-sig", newline="")
                 chosen_base, chosen_path, chosen_fp = b, p, fp
                 break
             except Exception as e:
@@ -480,29 +479,32 @@ class LogWriterWorker(QThread):
         row2 = dict(row or {})
         now_ts = _now_ts(ts)
 
-        # ✅ 고정 컬럼 기본값 채우기
-        row2.setdefault("t", _dt_str(now_ts))
-        if self._run_open_ts > 0:
-            row2.setdefault("elapsed_s", round(now_ts - self._run_open_ts, 3))
-        else:
-            row2.setdefault("elapsed_s", "")
+        # 1) time (t -> time 흡수)
+        if "time" not in row2 and "t" in row2:
+            row2["time"] = row2.pop("t")
+        row2.setdefault("time", _dt_str(now_ts))
 
-        row2.setdefault("run_id", self._run_id)
-        row2.setdefault("recipe", self._run_recipe)
+        # 2) elapsed_sec (elapsed_s -> elapsed_sec 흡수)
+        if "elapsed_sec" not in row2:
+            if "elapsed_s" in row2:
+                row2["elapsed_sec"] = row2.pop("elapsed_s")
+            elif self._run_open_ts > 0:
+                row2["elapsed_sec"] = round(now_ts - self._run_open_ts, 3)
+            else:
+                row2["elapsed_sec"] = ""
 
-        # ✅ 네가 원하는 대표 키를 통일 (pressure/dac/rate/thickness)
-        # engine 쪽이 pressure/dac1/dac2/rate_Aps/thickness_A 로 보내는 것을 권장.
-        # 혹시 pressure 키로 들어오면 pressure_torr로 보정
+        # 3) step (engine이 세분화 문자열을 넣으면 그대로 저장)
+        row2.setdefault("step", "")
+
+        # 4) event/target/value/detail (이벤트 행용)
+        row2.setdefault("event", "")
+        row2.setdefault("target", "")
+        row2.setdefault("value", "")
+        row2.setdefault("detail", "")
+
+        # 5) pressure 키 보정
         if "pressure_torr" not in row2 and "pressure" in row2:
             row2["pressure_torr"] = row2.get("pressure")
-
-        # ✅ extras_json: 고정 컬럼 밖의 값은 JSON으로 보관(정보 유실 방지)
-        extras = {k: v for k, v in row2.items() if k not in set(self._tele_fieldnames)}
-        try:
-            row2["extras_json"] = json.dumps(extras, ensure_ascii=False, default=str) if extras else ""
-        except Exception:
-            # 최후 수단: repr로라도 남겨서 정보 유실 방지
-            row2["extras_json"] = repr(extras)
 
         # ✅ writer 준비(고정 헤더)
         if self._tele_writer is None:

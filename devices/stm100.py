@@ -324,11 +324,13 @@ class STM100(BaseSerialDevice):
         self.query_text(cmd)
 
     def get_density(self) -> float:
-        """
-        E? : Query current film density
-        """
         s = self.command("E", modifier="?")
-        return float(s)
+        if not s:
+            raise STM100ProtocolError("STM-100: empty density response")
+        try:
+            return float(s)
+        except ValueError as e:
+            raise STM100ProtocolError(f"STM-100: invalid density response: {s!r}") from e
 
     def set_z_factor(self, z: float) -> None:
         """
@@ -341,11 +343,13 @@ class STM100(BaseSerialDevice):
         self.query_text(cmd)
 
     def get_z_factor(self) -> float:
-        """
-        F? : Query current film Z-Factor
-        """
         s = self.command("F", modifier="?")
-        return float(s)
+        if not s:
+            raise STM100ProtocolError("STM-100: empty z-factor response")
+        try:
+            return float(s)
+        except ValueError as e:
+            raise STM100ProtocolError(f"STM-100: invalid z-factor response: {s!r}") from e
 
     # ------------------------------------------------------------
     # Multi-Film (1~9) support (선택: 2개 material 저장/전환용)

@@ -887,7 +887,9 @@ class ProcessWindow(QWidget):
             p1 = float(regs.get("DAC_POWER_1", 0) or 0.0)
             p2 = float(regs.get("DAC_POWER_2", 0) or 0.0)
 
-            # UI 선택(현재는 1개만 선택이 정상) 기준으로 표시 파워 결정
+            # UI 선택 기준 표시:
+            # - 1개 선택이면 해당 채널 DAC 표시
+            # - 2개 선택이면 DAC 합계 표시
             use1 = bool(getattr(getattr(self.ui, "sourcePower1", None), "isChecked", lambda: False)())
             use2 = bool(getattr(getattr(self.ui, "sourcePower2", None), "isChecked", lambda: False)())
             if use1 and not use2:
@@ -963,42 +965,85 @@ class ProcessWindow(QWidget):
             return None
 
     def _collect_ui_run_cfg(self) -> Optional[dict[str, Any]]:
-        # ✅ Power 선택(현재 단계: 1개만 허용)
+        # ✅ Power 선택: 1개 또는 2개 허용
         p1 = bool(getattr(getattr(self.ui, "sourcePower1", None), "isChecked", lambda: False)())
         p2 = bool(getattr(getattr(self.ui, "sourcePower2", None), "isChecked", lambda: False)())
         if not (p1 or p2):
             QMessageBox.warning(self, "Input", "Power1/Power2 중 최소 1개는 선택해야 합니다.")
             return None
-        if p1 and p2:
-            QMessageBox.warning(self, "Input", "현재 단계에서는 Power는 1개만 선택해야 합니다.")
+
+        # ✅ 채널별 Target Dep.rate 읽기
+        rate1 = self._read_float("deprateEdit") if p1 else None
+        rate2 = self._read_float("deprateEdit2") if p2 else None
+
+        if p1 and rate1 is None:
+            QMessageBox.warning(self, "Input", "Power1 선택 시 Target Dep.rate(1)을 입력하세요.")
+            return None
+        if p2 and rate2 is None:
+            QMessageBox.warning(self, "Input", "Power2 선택 시 Target Dep.rate(2)을 입력하세요.")
+            return None
+        if p1 and (rate1 is not None) and (rate1 <= 0):
+            QMessageBox.warning(self, "Input", "Target Dep.rate(1)은 0보다 커야 합니다.")
+            return None
+        if p2 and (rate2 is not None) and (rate2 <= 0):
+            QMessageBox.warning(self, "Input", "Target Dep.rate(2)은 0보다 커야 합니다.")
             return None
 
-        # 입력값
-        target_rate = self._read_float("deprateEdit" if p1 else "deprateEdit2")
-        target_thk  = self._read_float("thicknessEdit")
-        delay_min   = self._read_float("delayEdit")
-
-        if target_rate is None:
-            QMessageBox.warning(self, "Input", "Target Dep.rate를 입력하세요.")
-            return None
+        # 공통 입력값
+        target_thk = self._read_float("thicknessEdit")
+        delay_min = self._read_float("delayEdit")
         if target_thk is None:
             QMessageBox.warning(self, "Input", "Target Thickness를 입력하세요.")
             return None
+        if target_thk <= 0:
+            QMessageBox.warning(self, "Input", "Target Thickness는 0보다 커야 합니다.")
+            return None
         if delay_min is None:
             delay_min = 0.0
+        if delay_min < 0:
+            QMessageBox.warning(self, "Input", "Delay(min)은 0 이상이어야 합니다.")
+            return None
 
-        # ✅ 선택된 Power에 대응하는 Material만 사용
-        active_mat = self._material_1 if p1 else self._material_2
-        if p1 and not self._material_1:
+        # ✅ Material: “둘 다 동일 물질” 가정
+        # - 1개 파워만 선택이면 해당 채널 material 필수
+        # - 2개 파워면 material_1 또는 material_2 중 최소 1개만 있어도 OK
+        # - 둘 다 선택되어 있고 둘 다 material이 있으면, 서로 다르면 에러(동일 물질 가정 위반)
+        if p1 and (not p2) and (not self._material_1):
             QMessageBox.warning(self, "Input", "Power1 사용 시 Material1 선택이 필요합니다.")
             return None
-        if p2 and not self._material_2:
+        if p2 and (not p1) and (not self._material_2):
             QMessageBox.warning(self, "Input", "Power2 사용 시 Material2 선택이 필요합니다.")
             return None
 
-        mat_name = str((active_mat or {}).get("material", "")).strip()
-        den = float((active_mat or {}).get("density_g_cm3", 0.0) or 0.0)
-        zf  = float((active_mat or {}).get("z_factor", 0.0) or 0.0)
+        if p1 and p2:
+            if not (self._material_1 or self._material_2):
+                QMessageBox.warning(self, "Input", "Power1+Power2 동시 사용 시 Material을 최소 1개는 선택해야 합니다.")
+                return None
+            base_mat = self._material_1 or self._material_2
+
+            # 둘 다 선택되어 있을 때 둘 다 material이 존재하면 동일성 체크
+            if self._material_1 and self._material_2:
+                m1 = str(self._material_1.get("material", "")).strip()
+                m2 = str(self._material_2.get("material", "")).strip()
+                d1 = float(self._material_1.get("density_g_cm3", 0.0) or 0.0)
+                d2 = float(self._material_2.get("density_g_cm3", 0.0) or 0.0)
+                z1 = float(self._material_1.get("z_factor", 0.0) or 0.0)
+                z2 = float(self._material_2.get("z_factor", 0.0) or 0.0)
+
+                if (m1 != m2) or (abs(d1 - d2) > 1e-9) or (abs(z1 - z2) > 1e-9):
+                    QMessageBox.warning(
+                        self,
+                        "Input",
+                        "Power1+Power2 동시 사용은 '동일 물질' 가정입니다.\n"
+                        "Material1/Material2가 서로 다릅니다. 동일하게 맞춰주세요.",
+                    )
+                    return None
+        else:
+            base_mat = self._material_1 if p1 else self._material_2
+
+        mat_name = str((base_mat or {}).get("material", "")).strip()
+        den = float((base_mat or {}).get("density_g_cm3", 0.0) or 0.0)
+        zf = float((base_mat or {}).get("z_factor", 0.0) or 0.0)
 
         if not mat_name:
             QMessageBox.warning(self, "Input", "Material 이름이 비어있습니다. Material을 다시 선택하세요.")
@@ -1007,18 +1052,33 @@ class ProcessWindow(QWidget):
             QMessageBox.warning(self, "Input", "Material density/z-factor 값이 올바르지 않습니다.")
             return None
 
-        # ✅ ProcessController.build_recipe_from_ui()가 기대하는 키로 정합
+        # ✅ 기존 호환 키 유지 + 2채널 확장 키 추가
+        # - target_rate: (1채널이면 그 채널 rate, 2채널이면 합계)로 넣어둠
+        # - 추후 process_controller/engine에서 target_rate_1/2를 사용하도록 확장 가능
+        r1 = float(rate1) if rate1 is not None else 0.0
+        r2 = float(rate2) if rate2 is not None else 0.0
+        target_rate_total = (r1 + r2) if (p1 and p2) else (r1 if p1 else r2)
+
         cfg: dict[str, Any] = {
             "use_power1": p1,
             "use_power2": p2,
+
             "material_name": mat_name,
             "density": den,
             "z_factor": zf,
-            "target_rate": float(target_rate),
+
+            # ✅ 기존 키(단일 float) 유지
+            "target_rate": float(target_rate_total),
+
             "target_thickness": float(target_thk),
             "delay_min": float(delay_min),
 
-            # (참고용으로 남겨도 무방)
+            # ✅ 2채널 확장 키(추후 controller/engine 수정에 사용)
+            "target_rate_1": r1,
+            "target_rate_2": r2,
+            "target_rate_total": float(target_rate_total),
+
+            # (참고용)
             "material_1": self._material_1,
             "material_2": self._material_2,
         }

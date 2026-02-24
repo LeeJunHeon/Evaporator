@@ -112,8 +112,7 @@ class ProcessWorker(QThread):
         finally:
             # ✅ Worker 종료 후 엔진 콜백 원복(레퍼런스 누수 방지)
             try:
-                if self._prev_callbacks is not None:
-                    self._engine.callbacks = self._prev_callbacks
+                self._engine.callbacks = self._prev_callbacks  # None이어도 원복
             except Exception:
                 pass
 

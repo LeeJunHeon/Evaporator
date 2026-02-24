@@ -1022,6 +1022,9 @@ class ProcessEngine:
         except Exception:
             pass
 
+        # ✅ 이벤트 1줄 추가
+        self._tele_event(event="SET_DAC_MA", target=f"DAC_CH{ch_i}", value=float(ma), detail=f"code={code}, tag={tag}")
+
     @staticmethod
     def _wait_future(fut: Any, *, timeout_s: float, where: str, msg: str = "") -> Any:
         try:

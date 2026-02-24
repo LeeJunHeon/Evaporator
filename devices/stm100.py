@@ -425,21 +425,75 @@ class STM100(BaseSerialDevice):
         z_factor: float,
         film_no: int | None = None,
         do_zero_thickness: bool = False,
+        # ✅ 추가: 입력 후 READ-BACK 검증
+        verify: bool = True,
+        tol_density: float = 0.01,   # density는 장비 표시/반올림 영향 고려(기본 0.01)
+        tol_z: float = 0.002,        # z-factor는 보통 0.001 단위 → 약간 여유
+        verify_retry: int = 1,       # 불일치 시 재시도 횟수(기본 1회)
+        settle_delay_s: float = 0.05 # SET 직후 내부 반영 딜레이(짧게)
     ) -> None:
         """
         공정에서 쓰기 좋은 “한 방” API
-        - film_no가 있으면 멀티필름(j/k)로 저장(또는 전환)
-        - film_no가 없으면 현재 film(E/F)에 적용
-        - 필요 시 thickness zero까지
+        - film_no가 없으면 현재 film(E/F)에 적용 (✅ 네 운영 방식)
+        - verify=True면 E?/F? (또는 jN?/kN?)로 read-back 검증
         """
-        if film_no is None:
-            self.set_density(density_g_cm3)
-            self.set_z_factor(z_factor)
-        else:
-            self.set_film_density(film_no, density_g_cm3)
-            self.set_film_z_factor(film_no, z_factor)
-            # 바로 해당 필름을 current로 쓰고 싶으면:
-            self.set_current_film(film_no)
 
+        # ✅ STM-100 전송 포맷과 동일하게 “보내는 값”을 정규화해서 오탐 줄임
+        den_sent_str = _fmt_compact_float(float(density_g_cm3), max_decimals=3)
+        z_sent_str   = _fmt_compact_float(float(z_factor),     max_decimals=3)
+        den_sent = float(den_sent_str)
+        z_sent   = float(z_sent_str)
+
+        retries = max(0, int(verify_retry))
+
+        for attempt in range(retries + 1):
+            # -----------------------
+            # 1) SET
+            # -----------------------
+            if film_no is None:
+                # ✅ 네 공정 흐름은 여기로 들어옴(필름 번호 신경 X)
+                self.set_density(den_sent)
+                self.set_z_factor(z_sent)
+            else:
+                # (호환 유지: 외부에서 film_no를 쓰는 경우도 대비)
+                self.set_film_density(film_no, den_sent)
+                self.set_film_z_factor(film_no, z_sent)
+                self.set_current_film(film_no)
+
+            if settle_delay_s and settle_delay_s > 0:
+                time.sleep(float(settle_delay_s))
+
+            # -----------------------
+            # 2) VERIFY (READ-BACK)
+            # -----------------------
+            if verify:
+                if film_no is None:
+                    den_got = float(self.get_density())   # E?
+                    z_got   = float(self.get_z_factor())  # F?
+                else:
+                    den_got = float(self.get_film_density(film_no))  # jN?
+                    z_got   = float(self.get_film_z_factor(film_no)) # kN?
+
+                ok_den = abs(den_got - den_sent) <= float(tol_density)
+                ok_z   = abs(z_got   - z_sent)   <= float(tol_z)
+
+                if not (ok_den and ok_z):
+                    # 불일치 → 재시도 기회가 남아있으면 1회 더 SET→VERIFY
+                    if attempt < retries:
+                        continue
+
+                    raise STM100CommandError(
+                        "STM-100 density/z-factor verify failed | "
+                        f"film_no={film_no} | "
+                        f"density got={den_got} sent={den_sent} tol={tol_density} | "
+                        f"z got={z_got} sent={z_sent} tol={tol_z}"
+                    )
+
+            # 성공
+            break
+
+        # -----------------------
+        # 3) 옵션: thickness zero
+        # -----------------------
         if do_zero_thickness:
             self.zero_thickness()

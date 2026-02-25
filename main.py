@@ -642,24 +642,24 @@ class ProcessWindow(QWidget):
         if run_cfg is None:
             return
 
-        # ✅ (추가) 이번 Start에 사용할 run_id 생성 + 파일 open
-        # - 공정 준비/STM 연결 과정 로그도 run 파일에 같이 남기려면 여기서 open하는 게 맞음
+        # ✅ (추가) run_id 생성 + 공정별 ProcessWindowLog 파일 open
         self._active_run_id = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid4().hex[:6]
         mat = str(run_cfg.get("material_name", "") or "").strip()
         self._active_recipe_name = f"EVAP_{mat}" if mat else "EVAP"
-
         with contextlib.suppress(Exception):
-            if getattr(self, "_process_window_log_writer", None):
-                self._process_window_log_writer.open_run(self._active_run_id, self._active_recipe_name)
+            w = getattr(self, "_process_window_log_writer", None)
+            if w and hasattr(w, "open_run"):
+                w.open_run(self._active_run_id, self._active_recipe_name)
 
         # ✅ 2) 그 다음 FTM ON → STM 연결
         if not self._ensure_sensors_connected_fresh():
             QMessageBox.warning(self, "Device", "STM 연결 실패")
 
-            # ✅ (추가) Start 실패 → run 파일 닫기
+            # ✅ (추가) Start 실패 → run 파일 닫기 + 상태 초기화
             with contextlib.suppress(Exception):
-                if getattr(self, "_process_window_log_writer", None):
-                    self._process_window_log_writer.close_run()
+                w = getattr(self, "_process_window_log_writer", None)
+                if w and hasattr(w, "close_run"):
+                    w.close_run()
             self._active_run_id = None
             self._active_recipe_name = ""
             return
@@ -674,26 +674,22 @@ class ProcessWindow(QWidget):
 
         # ✅ 4) 공정 시작
         if not hasattr(pc, "start_from_ui"):
-            QMessageBox.warning(
-                self,
-                "Process",
-                "start_from_ui가 구현되어 있지 않습니다.\nProcessController에 start_from_ui를 추가하세요."
-            )
-
-            # ✅ (추가) run 파일 닫기
-            with contextlib.suppress(Exception):
-                if getattr(self, "_process_window_log_writer", None):
-                    self._process_window_log_writer.close_run()
-            self._active_run_id = None
-            self._active_recipe_name = ""
-
+            QMessageBox.warning(self, "Process", "start_from_ui가 구현되어 있지 않습니다.\nProcessController에 start_from_ui를 추가하세요.")
             self._rt_stop()
             self._shutdown_sensors_and_release_memory()
             self._reset_process_ui()
+
+            # ✅ (추가) 구현 안됨 → run 파일 닫기 + 상태 초기화
+            with contextlib.suppress(Exception):
+                w = getattr(self, "_process_window_log_writer", None)
+                if w and hasattr(w, "close_run"):
+                    w.close_run()
+            self._active_run_id = None
+            self._active_recipe_name = ""
             return
 
         try:
-            # ✅ (변경) run_id를 ProcessController로 전달
+            # ✅ (변경) run_id를 ProcessController로 전달 (process log/csv와 묶이게)
             pc.start_from_ui(run_cfg, run_id=self._active_run_id)
 
         except Exception as e:
@@ -706,17 +702,18 @@ class ProcessWindow(QWidget):
             with contextlib.suppress(Exception):
                 self._reset_process_ui()
 
-            # ✅ (추가) Start 실패 → run 파일 닫기
+            # ✅ (추가) Start 예외 → run 파일 닫기 + 상태 초기화
             with contextlib.suppress(Exception):
-                if getattr(self, "_process_window_log_writer", None):
-                    self._process_window_log_writer.close_run()
+                w = getattr(self, "_process_window_log_writer", None)
+                if w and hasattr(w, "close_run"):
+                    w.close_run()
             self._active_run_id = None
             self._active_recipe_name = ""
 
             QMessageBox.warning(self, "Process Start Failed", f"{e!r}")
             _append_text(self.ui.logWindow, f"[START FAIL] {e!r}")
             return
-        
+            
     def _on_stop_clicked(self) -> None:
         try:
             # ✅ 1) 제일 먼저 하드웨어 안전종료(셔터→DAC0→파워OFF)
@@ -734,17 +731,18 @@ class ProcessWindow(QWidget):
                 except Exception as e:
                     _append_text(self.ui.logWindow, f"[STOP FAIL] {e!r}")
 
-            # ✅ 4) Stop에서 STM만 끊고 메모리 해제(ACS 유지)
+            # ✅ 4) Stop에서 STM/ACS 끊고 메모리 해제
             self._shutdown_sensors_and_release_memory()
 
-            # ✅ Stop도 '공정 종료'이므로 UI 초기화
+            # ✅ UI 초기화
             self._reset_process_ui()
 
         finally:
             # ✅ (추가) 공정 파일 닫기 + run 상태 초기화
             with contextlib.suppress(Exception):
-                if getattr(self, "_process_window_log_writer", None):
-                    self._process_window_log_writer.close_run()
+                w = getattr(self, "_process_window_log_writer", None)
+                if w and hasattr(w, "close_run"):
+                    w.close_run()
             self._active_run_id = None
             self._active_recipe_name = ""
 

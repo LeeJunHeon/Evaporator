@@ -91,7 +91,7 @@ class STMServiceWorker(QThread):
         self,
         ini_path: str | Path,
         *,
-        poll_s: float = 0.25,
+        poll_s: float = 1.0,
         reconnect_interval_s: float = 1.0,
         max_fail_before_close: int = 6,  # ✅ 기본 2 → 6 (io_policy 철학과 정렬)
         parent: Optional[QObject] = None,
@@ -475,13 +475,39 @@ class STMServiceWorker(QThread):
             self._fail_count += 1
             self.sig_error.emit(f"[STMService] poll failed: {e!r} (fail={self._fail_count})")
 
+            # ✅ 이번 폴링은 값 없음 → None으로 상태 갱신 + 외부로 emit
+            self._last_thickness = None
+            self._last_rate = None
+
+            try:
+                self.sig_thickness.emit(None)
+                self.sig_rate.emit(None)
+            except Exception:
+                pass
+
+            snap = STMSnapshot(
+                ts=now,
+                connected=bool(self._connected),   # 아직 close 전이면 True 유지
+                thickness_angstrom=None,
+                rate_angstrom_per_s=None,
+                meta={"fail_count": self._fail_count, "error": repr(e)},
+            )
+            self._last_snapshot = snap
+            try:
+                self.sig_snapshot.emit(snap)
+            except Exception:
+                pass
+
+            # 기존 정책: 실패 누적이면 close → reconnect 사이클
             if self._fail_count >= self._max_fail_before_close:
                 self._safe_close()
                 self._set_connected(False)
 
                 self._next_try = now + float(self._conn_backoff_s)
-                self._conn_backoff_s = min(float(self._conn_backoff_s) * float(self._conn_backoff_factor),
-                                        float(self._conn_backoff_max_s))
+                self._conn_backoff_s = min(
+                    float(self._conn_backoff_s) * float(self._conn_backoff_factor),
+                    float(self._conn_backoff_max_s),
+                )
 
             return False
 
@@ -529,9 +555,9 @@ class STMService(QObject):
         self,
         ini_path: str | Path,
         *,
-        poll_s: float = 0.25,
+        poll_s: float = 1.0,
         reconnect_interval_s: float = 1.0,
-        max_fail_before_close: int = 2,
+        max_fail_before_close: int = 6,
         parent: Optional[QObject] = None,
     ):
         super().__init__(parent)

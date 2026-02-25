@@ -507,8 +507,8 @@ class LogWriterWorker(QThread):
         row2.setdefault("pressure_torr", "")
         row2.setdefault("dac1", "")
         row2.setdefault("dac2", "")
-        row2.setdefault("dep.rate", "")
-        row2.setdefault("thickness_A", "")
+        row2.setdefault("dep.rate", None)
+        row2.setdefault("thickness_A", None)
         row2.setdefault("step", "")
         row2.setdefault("detail", "")
 
@@ -529,15 +529,16 @@ class LogWriterWorker(QThread):
                 except Exception:
                     pass
 
-        def _norm_cell(v: Any) -> Any:
+        def _norm_cell(k: str, v: Any) -> Any:
+            # ✅ STM 값은 None이면 CSV에 "None"으로 명시
             if v is None:
-                return ""
+                return "None" if k in ("dep.rate", "thickness_A") else ""
             if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
-                return ""
+                return "None" if k in ("dep.rate", "thickness_A") else ""
             return v
-
+    
         # ✅ fieldnames(9개)만 정확히 기록
-        filtered = {k: _norm_cell(row2.get(k, "")) for k in self._tele_fieldnames}
+        filtered = {k: _norm_cell(k, row2.get(k, None)) for k in self._tele_fieldnames}
 
         try:
             self._tele_writer.writerow(filtered)

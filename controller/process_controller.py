@@ -220,6 +220,13 @@ class ProcessController(QObject):
             "pre_rate": 0.4,
             "pre_hold_s": 120.0,
 
+            # ✅ 요청 동작:
+            # - dep.rate≈0.4 도달 후 1~2분 "대기"(파워 흔들림 최소화)
+            # - dep.rate 도달 이후에도 DAC 변경은 10초 텀으로 제한
+            "pre_hold_mode": "fixed",              # fixed | control
+            "pre_hold_adjust_interval_s": 10.0,    # control 모드일 때만 의미
+            "dac_adjust_interval_s": 10.0,         # fine tune / shutter delay / main loop
+
             # --- stuck 가드 ---
             "stuck_dac_guard": 1500,
             "stuck_rate_abs": 0.05,

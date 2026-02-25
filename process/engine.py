@@ -501,6 +501,17 @@ class ProcessEngine:
         pre_rate = float(meta.get("pre_rate", 0.4) or 0.4)                  # Å/s
         pre_hold_s = float(meta.get("pre_hold_s", 120.0) or 120.0)          # s
 
+        # ✅ pre_rate 도달 후 대기(hold) 동작
+        # - fixed  : dep.rate가 pre_rate 도달하면 '그 DAC 그대로' 1~2분 대기(파워 흔들림 방지)
+        # - control: pre_rate 근처로 유지 제어를 하되, DAC 변경 텀을 둠
+        pre_hold_mode = str(meta.get("pre_hold_mode", "fixed") or "fixed").strip().lower()
+        if pre_hold_mode not in ("fixed", "control"):
+            pre_hold_mode = "fixed"
+
+        # ✅ dep.rate 도달 이후 파워 변화가 너무 빠르지 않도록 DAC 변경 최소 간격(초)
+        pre_hold_adjust_interval_s = max(0.1, float(meta.get("pre_hold_adjust_interval_s", 10.0) or 10.0))
+        dac_adjust_interval_s = max(0.1, float(meta.get("dac_adjust_interval_s", 10.0) or 10.0))
+
         rate_tol_ratio = float(meta.get("rate_tol_ratio", 0.05) or 0.05)    # ±5%
         pre_tol_ratio = float(meta.get("pre_tol_ratio", 0.10) or 0.10)      # pre_rate는 조금 넓게
 
@@ -597,8 +608,33 @@ class ProcessEngine:
 
                 time.sleep(0.1)
 
+        last_dac_apply_m: float = 0.0
+        pending_dac: Optional[int] = None
+
         def apply_dac() -> None:
+            """즉시 DAC 적용(램프업 등에서 사용) + 마지막 적용 시각 갱신."""
+            nonlocal last_dac_apply_m, pending_dac
             self._evap_apply_dac(use_p1, use_p2, dac, tag="EVAP_DAC")
+            last_dac_apply_m = time.monotonic()
+            pending_dac = None
+
+        def maybe_apply_dac(new_dac: int, *, min_interval_s: float) -> bool:
+            """DAC 변경은 너무 잦지 않게(min_interval_s) 제한."""
+            nonlocal dac, pending_dac, last_dac_apply_m
+            new_dac = int(new_dac)
+            if new_dac == int(dac):
+                pending_dac = None
+                return False
+
+            now_m = time.monotonic()
+            if (now_m - float(last_dac_apply_m)) >= float(min_interval_s):
+                dac = new_dac
+                apply_dac()
+                return True
+
+            # 아직 텀이 안 찼으면 "대기중 목표값"만 저장
+            pending_dac = new_dac
+            return False
 
         # 3) pre_rate까지 ramp-up (1초에 +100)
         self._emit_status(message=f"EVAP ramp-up 시작: pre_rate={pre_rate} Å/s")
@@ -640,28 +676,44 @@ class ProcessEngine:
             self._emit_status(message=f"POWER RAMP UP (PRE) / DAC={dac} / rate={rt:.3f}/{pre_rate:.3f} Å/s")
             _ramp_sleep_by_dac(dac)
 
-        # 4) pre_rate 유지(2분)
+        # 4) pre_rate 유지(1~2분)
+        # - 요청사항: pre_rate(0.4) 도달 후 1~2분 "대기" → 그 다음 target로 ramp
         if pre_hold_s > 0:
-            self._emit_status(message=f"EVAP pre_rate 유지: {pre_hold_s:.0f}s")
-            t_end = time.time() + pre_hold_s
-            while time.time() < t_end:
+            self._emit_status(message=f"EVAP pre_rate 유지: {pre_hold_s:.0f}s (mode={pre_hold_mode})")
+            end_m = time.monotonic() + float(pre_hold_s)
+            next_ui_m = time.monotonic()
+            while True:
+                now_m = time.monotonic()
+                remain_s = end_m - now_m
+                if remain_s <= 0:
+                    break
+
                 rt = read_rate_or_abort()
 
-                # pre_rate 근처 유지(미세 조정)
-                new_dac = self._evap_adjust_dac(
-                    dac=dac,
-                    rate=rt,
-                    target_rate=pre_rate,
-                    tol_ratio=pre_tol_ratio,
-                    step_up=max(1, fine_step_dac // 2),
-                    step_dn=max(1, fine_step_dac // 2),
-                    dac_max=dac_max,
-                )
-                if new_dac != dac:
-                    dac = new_dac
-                    apply_dac()
+                # control 모드만 pre_rate 근처 유지 제어 (단, DAC 변경 텀 적용)
+                if pre_hold_mode == "control":
+                    new_dac = self._evap_adjust_dac(
+                        dac=dac,
+                        rate=rt,
+                        target_rate=pre_rate,
+                        tol_ratio=pre_tol_ratio,
+                        step_up=max(1, fine_step_dac // 2),
+                        step_dn=max(1, fine_step_dac // 2),
+                        dac_max=dac_max,
+                    )
+                    maybe_apply_dac(new_dac, min_interval_s=pre_hold_adjust_interval_s)
 
-                _sleep_with_checks(0.5)
+                # 1초마다 표시
+                if now_m >= next_ui_m:
+                    self._emit_status(
+                        message=(
+                            f"EVAP pre_hold({pre_hold_mode}) / remain {remain_s:.0f}s "
+                            f"/ DAC={dac} / rate={rt:.3f}/{pre_rate:.3f} Å/s"
+                        ),
+                    )
+                    next_ui_m = now_m + 1.0
+
+                _sleep_with_checks(min(0.5, max(0.0, remain_s)))
 
         # 5) target_rate까지 ramp-up (일단은 계속 +100)
         self._emit_status(message=f"EVAP target_rate ramp-up: target_rate={target_rate} Å/s")
@@ -722,10 +774,7 @@ class ProcessEngine:
                 step_dn=fine_step_dac,
                 dac_max=dac_max,
             )
-            if new_dac != dac:
-                dac = new_dac
-                apply_dac()
-
+            maybe_apply_dac(new_dac, min_interval_s=dac_adjust_interval_s)
             _sleep_with_checks(0.5)
 
         # 7) delay (shutter delay)
@@ -754,9 +803,7 @@ class ProcessEngine:
                     step_dn=fine_step_dac,
                     dac_max=dac_max,
                 )
-                if new_dac != dac:
-                    dac = new_dac
-                    apply_dac()
+                maybe_apply_dac(new_dac, min_interval_s=dac_adjust_interval_s)
 
                 nowm = time.monotonic()
                 remain_s = tendm - nowm
@@ -774,7 +821,7 @@ class ProcessEngine:
                     next_ui = nowm + 1.0
 
                 # ✅ 남은 시간 기준 sleep(딜레이 누적 오차 최소화)
-                time.sleep(min(0.1, max(0.0, remain_s)))
+                _sleep_with_checks(min(0.1, max(0.0, remain_s)))
 
         # 8) delay 종료 → STM zero
         self._emit_status(message="MAIN SHUTTER OPEN", force=True)
@@ -826,9 +873,7 @@ class ProcessEngine:
                 step_dn=fine_step_dac,
                 dac_max=dac_max,
             )
-            if new_dac != dac:
-                dac = new_dac
-                apply_dac()
+            maybe_apply_dac(new_dac, min_interval_s=dac_adjust_interval_s)
 
             remain_th = max(0.0, float(target_th) - float(dep_th))
             self._emit_status(

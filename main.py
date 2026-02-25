@@ -972,14 +972,48 @@ class ProcessWindow(QWidget):
             QMessageBox.warning(self, "Input", "Power1/Power2 중 최소 1개는 선택해야 합니다.")
             return None
 
-        # ✅ Target Dep.rate는 1개만 사용 (두 파워는 동일 DAC로 같이 제어)
-        target_rate = self._read_float("deprateEdit")
-        if target_rate is None:
-            QMessageBox.warning(self, "Input", "Target Dep.rate를 입력하세요.")
-            return None
-        if target_rate <= 0:
-            QMessageBox.warning(self, "Input", "Target Dep.rate는 0보다 커야 합니다.")
-            return None
+        # ✅ Target Dep.rate: 선택된 power에 해당하는 입력칸만 사용 (fallback 없음)
+        rate1 = self._read_float("deprateEdit")
+        rate2 = self._read_float("deprateEdit2")
+
+        if p1 and not p2:
+            # Power1만 선택 → Dep.rate 1만 본다
+            if rate1 is None:
+                QMessageBox.warning(self, "Input", "Power1 선택 시 Target Dep.rate 1을 입력하세요.")
+                return None
+            if rate1 <= 0:
+                QMessageBox.warning(self, "Input", "Target Dep.rate 1은 0보다 커야 합니다.")
+                return None
+            target_rate = rate1
+
+        elif p2 and not p1:
+            # Power2만 선택 → Dep.rate 2만 본다
+            if rate2 is None:
+                QMessageBox.warning(self, "Input", "Power2 선택 시 Target Dep.rate 2를 입력하세요.")
+                return None
+            if rate2 <= 0:
+                QMessageBox.warning(self, "Input", "Target Dep.rate 2는 0보다 커야 합니다.")
+                return None
+            target_rate = rate2
+
+        else:
+            # Power1 + Power2 동시 선택
+            # 현재 ProcessController는 target_rate가 1개만 들어가도록 설계되어 있어서(= 엔진도 1개 목표로 동작),
+            # 두 값을 다르게 받으면 이후 단계에서 모순/오동작 가능 → 둘 다 입력 + 동일값 강제
+            if rate1 is None:
+                QMessageBox.warning(self, "Input", "Power1+Power2 동시 사용 시 Target Dep.rate 1을 입력하세요.")
+                return None
+            if rate2 is None:
+                QMessageBox.warning(self, "Input", "Power1+Power2 동시 사용 시 Target Dep.rate 2를 입력하세요.")
+                return None
+            if rate1 <= 0 or rate2 <= 0:
+                QMessageBox.warning(self, "Input", "Target Dep.rate 1/2는 0보다 커야 합니다.")
+                return None
+            if abs(rate1 - rate2) > 1e-9:
+                QMessageBox.warning(self, "Input", "Power1+Power2 동시 사용 시 Target Dep.rate 1과 2는 동일해야 합니다.")
+                return None
+
+            target_rate = rate1
 
         # 공통 입력값
         target_thk = self._read_float("thicknessEdit")

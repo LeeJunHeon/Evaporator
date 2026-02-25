@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Callable, Set, Any
 
 from utils.base_serial import BaseSerialDevice, SerialDeviceError
 
@@ -145,7 +145,16 @@ class STM100(BaseSerialDevice):
         reconnect_backoff_max_s: float = 5.0,
         **kwargs,
     ):
+        io_trace_cb = kwargs.pop("io_trace_cb", None)
+        io_trace_skip_tokens = kwargs.pop("io_trace_skip_tokens", {"S", "T"})
+
         super().__init__(*args, **kwargs)
+
+        # ✅ (추가) I/O trace 콜백 (서비스가 주입 가능)
+        self._io_trace_cb: Optional[Callable[[dict], None]] = kwargs.pop("io_trace_cb", None)  # 혹시 kwargs로도 들어오면 제거
+
+        # ✅ (추가) 너무 자주 호출되는 폴링 명령은 기본 제외(S/T)
+        self._io_trace_skip_tokens: Set[str] = set(kwargs.pop("io_trace_skip_tokens", {"S", "T"}))
 
         self._io_err_allow = max(0, int(io_err_allow))
         self._io_retry_sleep_s = max(0.0, float(io_retry_sleep_s))

@@ -179,10 +179,24 @@ class LogWriterWorker(QThread):
         # ✅ telemetry 컬럼 고정(Excel에서 항상 동일 컬럼)
         self._tele_fieldnames = [
             "time", "elapsed_sec", "step",
+
+            # ✅ engine.py가 매 tick telemetry로 보내는 메타
+            "phase",
+            "step_idx",
+            "step_type",
+            "pressure_status",
+            "pressure_status_text",
+            "pressure_ok",
+            "pressure_raw",
+
+            # 기존 고정 컬럼
             "event", "target", "value", "detail",
             "pressure_torr",
             "dac1", "dac2",
             "rate_Aps", "thickness_A",
+
+            # ✅ 앞으로 추가 키가 생겨도 버리지 않기 위한 안전망
+            "extras_json",
         ]
 
     # ---------- public (thread-safe) ----------
@@ -503,6 +517,19 @@ class LogWriterWorker(QThread):
         # 5) pressure 키 보정
         if "pressure_torr" not in row2 and "pressure" in row2:
             row2["pressure_torr"] = row2.get("pressure")
+
+        # ✅ 고정 컬럼 밖 데이터는 버리지 말고 extras_json에 보관
+        fixed = set(self._tele_fieldnames)
+
+        # pressure_raw 같이 개행이 섞일 수 있는 값은 CSV 깨짐 방지로 정리(선택)
+        if isinstance(row2.get("pressure_raw"), str):
+            row2["pressure_raw"] = row2["pressure_raw"].replace("\r", " ").replace("\n", " ")
+
+        extras = {k: v for k, v in row2.items() if k not in fixed}
+        row2["extras_json"] = (
+            json.dumps(extras, ensure_ascii=False, separators=(",", ":"), default=str)
+            if extras else ""
+        )
 
         # ✅ writer 준비(고정 헤더)
         if self._tele_writer is None:

@@ -535,6 +535,13 @@ class ProcessEngine:
         stuck_rate_abs = float(meta.get("stuck_rate_abs", 0.05) or 0.05)  # rate가 이 값 미만이면
         stuck_time_s = float(meta.get("stuck_time_s", 60.0) or 60.0)      # 이 시간 지속 시 중단
 
+        # ✅ material shortage guard (요구사항)
+        # - DAC가 2000 이상인데도 dep.rate가 0 이하이면 "물질 부족"으로 중단
+        material_shortage_dac = int(meta.get("material_shortage_dac", 2000) or 2000)
+        material_shortage_rate_max = float(meta.get("material_shortage_rate_max", 0.0) or 0.0)  # <=
+        # "계속"을 엄밀히 하려면 지속시간을 쓰면 됨(초). 0이면 즉시 중단.
+        material_shortage_time_s = float(meta.get("material_shortage_time_s", 10.0) or 10.0)
+
         # delay는 분 단위 입력(기존 UI) → 초로 변환
         delay_s = delay_min * 60.0
 
@@ -608,6 +615,39 @@ class ProcessEngine:
 
                 time.sleep(0.1)
 
+        # ✅ material shortage guard helper
+        def _material_shortage_guard(rt: float, start_ts: Optional[float], *, where: str) -> Optional[float]:
+            """
+            DAC가 충분히 올라갔는데(dep.rate <= 0)면 물질 부족으로 중단.
+            - material_shortage_time_s == 0 이면 즉시 중단
+            - > 0 이면 그 시간만큼 조건이 '연속' 유지될 때 중단
+            """
+            if int(dac) < int(material_shortage_dac):
+                return None
+
+            if float(rt) <= float(material_shortage_rate_max):
+                now = time.time()
+
+                if float(material_shortage_time_s) <= 0:
+                    raise EngineFailed(
+                        step.name,
+                        f"EVAP: 물질 부족 의심({where}) - DAC>={material_shortage_dac} 인데 dep.rate<={material_shortage_rate_max:.3f} "
+                        f"(rt={rt:.3f}, dac={dac})"
+                    )
+
+                if start_ts is None:
+                    return now
+
+                if (now - float(start_ts)) >= float(material_shortage_time_s):
+                    raise EngineFailed(
+                        step.name,
+                        f"EVAP: 물질 부족 의심({where}) - DAC>={material_shortage_dac} 인데 dep.rate<={material_shortage_rate_max:.3f} "
+                        f"지속 {material_shortage_time_s:.0f}s (rt={rt:.3f}, dac={dac})"
+                    )
+                return start_ts
+
+            return None
+
         last_dac_apply_m: float = 0.0
         pending_dac: Optional[int] = None
 
@@ -645,11 +685,15 @@ class ProcessEngine:
         t_ramp0 = time.time()
 
         stuck_start_ts_pre: Optional[float] = None
+        shortage_start_ts_pre: Optional[float] = None  # ✅ 추가
 
         while True:
             rt = read_rate_or_abort()
             if rt >= pre_rate:
                 break
+
+            # ✅ material shortage guard (요구사항)
+            shortage_start_ts_pre = _material_shortage_guard(rt, shortage_start_ts_pre, where="pre_ramp")
 
             # ✅ stuck guard: 특정 DAC 이상인데 rate가 거의 0이면, 무작정 DAC 올리지 말고 중단
             now = time.time()
@@ -720,6 +764,7 @@ class ProcessEngine:
         t_ramp1 = time.time()
 
         stuck_start_ts_target: Optional[float] = None
+        shortage_start_ts_target: Optional[float] = None  # ✅ 추가
 
         while True:
             rt = read_rate_or_abort()
@@ -727,6 +772,10 @@ class ProcessEngine:
             # target_rate의 하한(1 - tol)까지만 우선 도달시키고, 이후 fine tune
             if rt >= target_rate * (1.0 - rate_tol_ratio):
                 break
+
+            # ✅ material shortage guard (요구사항)
+            shortage_start_ts_target = _material_shortage_guard(rt, shortage_start_ts_target, where="target_ramp")
+
 
             # ✅ stuck guard: 특정 DAC 이상인데 rate가 거의 0이면, 무작정 DAC 올리지 말고 중단
             now = time.time()
@@ -840,11 +889,17 @@ class ProcessEngine:
         drop_hits = 0
         baseline_rate: float | None = None
 
+        shortage_start_ts_main: Optional[float] = None  # ✅ while 위에 추가(루프 들어가기 전)
+
         while True:
             self._check_stop_pause(recipe, step)
             self._tick_emit(recipe, step)
 
             rt = read_rate_or_abort()
+
+            # ✅ material shortage guard (요구사항)
+            shortage_start_ts_main = _material_shortage_guard(rt, shortage_start_ts_main, where="main_process")
+
             th = read_th_or_abort()
 
             dep_th = th - th0

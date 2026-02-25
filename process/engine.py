@@ -518,12 +518,25 @@ class ProcessEngine:
 
         ramp_step_dac = int(meta.get("ramp_step_dac", 100) or 100)
 
-        # ✅ DAC 1000 기준으로 램프 템포 분리
-        ramp_fast_until_dac = int(meta.get("ramp_fast_until_dac", 1000) or 1000)
-        ramp_interval_fast_s = float(meta.get("ramp_interval_fast_s", 1.0) or 1.0)   # < 1000
-        ramp_interval_slow_s = float(meta.get("ramp_interval_slow_s", 10.0) or 10.0) # >= 1000
+        # ✅ 사용자 요구: DAC 구간별 램프 템포
+        ramp_seg1_max_dac = int(meta.get("ramp_seg1_max_dac", 700) or 700)
+        ramp_seg2_max_dac = int(meta.get("ramp_seg2_max_dac", 1500) or 1500)
+        ramp_interval_seg1_s = float(meta.get("ramp_interval_seg1_s", 10.0) or 10.0)
+        ramp_interval_seg2_s = float(meta.get("ramp_interval_seg2_s", 30.0) or 30.0)
+        ramp_interval_after_seg2_s = float(meta.get("ramp_interval_after_seg2_s", ramp_interval_seg2_s) or ramp_interval_seg2_s)
 
-        fine_step_dac = int(meta.get("fine_step_dac", 50) or 50)
+        # ✅ DAC=1500인데 dep.rate==0이면, dep.rate>=0.1 될 때까지 대기(최대 5분)
+        ignite_dac = int(meta.get("ignite_dac", ramp_seg2_max_dac) or ramp_seg2_max_dac)
+        ignite_trigger_rate_max = float(meta.get("ignite_trigger_rate_max", 0.0) or 0.0)
+        ignite_rate_min = float(meta.get("ignite_rate_min", 0.1) or 0.1)
+        ignite_timeout_s = float(meta.get("ignite_timeout_s", 300.0) or 300.0)
+
+        # ✅ 미세 조정(목표 근접 시): 기본 10 step 이내에서 동적 보정
+        fine_step_dac = int(meta.get("fine_step_dac", 10) or 10)
+
+        # ✅ target_rate 도달 판정: tol 이내 N회 연속
+        target_stable_hits = int(meta.get("target_stable_hits", 5) or 5)
+        target_stable_interval_s = max(0.1, float(meta.get("target_stable_interval_s", 1.0) or 1.0))
 
         rate_drop_ratio = float(meta.get("rate_drop_ratio", 0.30) or 0.30)  # 70% 급감 => 30% 이하
         rate_drop_count = int(meta.get("rate_drop_count", 3) or 3)
@@ -585,11 +598,70 @@ class ProcessEngine:
 
                 time.sleep(min(0.1, remain))
 
+        ignite_wait_active: bool = False
+        ignite_wait_start_m: Optional[float] = None
+
+        def _handle_ignite_wait(rt: float, *, where: str) -> bool:
+            """
+            요구사항:
+            - DAC==ignite_dac(1500)인데 dep.rate<=0이면,
+            dep.rate>=0.1 나올 때까지 DAC 올리지 말고 대기
+            - timeout: ignite_timeout_s(기본 300s)
+            return True면 "대기 수행 중"이라서 상위 루프에서 continue 해야 함
+            """
+            nonlocal ignite_wait_active, ignite_wait_start_m
+
+            # ignite_dac 위치가 아니면 ignite 대기 상태 해제
+            if int(dac) != int(ignite_dac):
+                ignite_wait_active = False
+                ignite_wait_start_m = None
+                return False
+
+            rtf = float(rt)
+
+            # 대기 시작 조건: rate가 0(또는 설정값 이하)
+            if rtf <= float(ignite_trigger_rate_max):
+                if not ignite_wait_active:
+                    ignite_wait_active = True
+                    ignite_wait_start_m = time.monotonic()
+                    self._emit_status(
+                        message=f"IGNITE WAIT: DAC={dac} rate={rtf:.3f} → rate>={ignite_rate_min:.3f} 대기(최대 {ignite_timeout_s:.0f}s)",
+                        force=True,
+                    )
+
+                # 종료 조건: rate가 0.1 이상
+                if rtf >= float(ignite_rate_min):
+                    ignite_wait_active = False
+                    ignite_wait_start_m = None
+                    self._emit_status(message=f"IGNITE OK: rate={rtf:.3f}", force=True)
+                    return False
+
+                # timeout
+                if ignite_wait_start_m is not None and (time.monotonic() - float(ignite_wait_start_m)) >= float(ignite_timeout_s):
+                    raise EngineFailed(step.name, f"IGNITE WAIT TIMEOUT: DAC={dac}, rate={rtf:.3f} < {ignite_rate_min:.3f}")
+
+                return True
+
+            # rate가 0 초과면 ignite 대기 조건 아님
+            ignite_wait_active = False
+            ignite_wait_start_m = None
+            return False
+
+        def _ramp_interval_by_dac(cur_dac: int) -> float:
+            d = int(cur_dac)
+            if d < int(ramp_seg1_max_dac):
+                return float(ramp_interval_seg1_s)          # 0~700 : 10s
+            if d < int(ramp_seg2_max_dac):
+                return float(ramp_interval_seg2_s)          # 700~1500 : 30s
+            return float(ramp_interval_after_seg2_s)        # 1500 이후 : 30s(기본)
+        
+        def _dac_min_interval_by_dac(cur_dac: int) -> float:
+            # 기존 dac_adjust_interval_s도 존중하되,
+            # 구간 규칙보다 더 빠르게는 못 움직이게
+            return max(float(dac_adjust_interval_s), _ramp_interval_by_dac(cur_dac))
+
         def _ramp_sleep_by_dac(cur_dac: int, *, where: str) -> None:
-            if int(cur_dac) >= int(ramp_fast_until_dac):
-                _sleep_with_checks(ramp_interval_slow_s, where=where)
-            else:
-                _sleep_with_checks(ramp_interval_fast_s, where=where)
+            _sleep_with_checks(_ramp_interval_by_dac(cur_dac), where=where)
 
         def _in_band(rt: float, tgt: float, *, tol_ratio: float) -> bool:
             tol = max(1e-9, abs(float(tgt)) * float(tol_ratio))
@@ -692,7 +764,10 @@ class ProcessEngine:
             pending_dac = new_dac
             return False
 
-        # 3) pre_rate까지 ramp-up (1초에 +100)
+        # 3) pre_rate까지 ramp-up (구간별 템포)
+        #   - 0~700 : 10초에 +100
+        #   - 700~1500 : 30초에 +100
+        #   - 1500에서 rate=0이면 rate>=0.1 될 때까지 대기(최대 5분)
         self._emit_status(message=f"EVAP ramp-up 시작: pre_rate={pre_rate} Å/s")
         apply_dac()
 
@@ -707,7 +782,14 @@ class ProcessEngine:
             if rt >= pre_rate:
                 break
 
-            # ✅ stuck guard: 특정 DAC 이상인데 rate가 거의 0이면, 무작정 DAC 올리지 말고 중단
+            # ✅ [추가] ignite_dac(1500)에서 rate=0이면 0.1 될 때까지 대기(최대 5분)
+            if _handle_ignite_wait(rt, where="pre_ramp"):
+                # ignite 대기 중에는 stuck 타이머도 리셋(요구사항 충돌 방지)
+                stuck_start_ts_pre = None
+                _sleep_with_checks(0.2, where="ignite_wait/pre_ramp")
+                continue
+
+            # ✅ stuck guard(ignite 대기 아닐 때만)
             now = time.monotonic()
             if dac >= stuck_dac_guard and rt < stuck_rate_abs:
                 if stuck_start_ts_pre is None:
@@ -727,13 +809,14 @@ class ProcessEngine:
             if dac >= dac_max:
                 raise EngineFailed(step.name, f"EVAP: DAC_MAX({dac_max}) 도달했지만 pre_rate 미도달 (rt={rt:.3f})")
 
+            # ✅ 램프업(+100) 후 구간별 템포 sleep
             dac = min(dac_max, dac + ramp_step_dac)
             apply_dac()
             self._emit_status(
                 message=f"POWER RAMP UP (PRE) / DAC={dac} / rate={rt:.3f}/{pre_rate:.3f} Å/s",
                 force=True,
             )
-            _ramp_sleep_by_dac(dac, where="pre_ramp_sleep")      # pre_ramp 쪽
+            _ramp_sleep_by_dac(dac, where="pre_ramp_sleep")
 
         # 4) pre_rate 유지(1~2분)
         # - 요청사항: pre_rate(0.4) 도달 후 1~2분 "대기" → 그 다음 target로 ramp
@@ -760,7 +843,10 @@ class ProcessEngine:
                         step_dn=max(1, fine_step_dac // 2),
                         dac_max=dac_max,
                     )
-                    maybe_apply_dac(new_dac, min_interval_s=pre_hold_adjust_interval_s)
+                    maybe_apply_dac(
+                        new_dac,
+                        min_interval_s=max(float(pre_hold_adjust_interval_s), _ramp_interval_by_dac(max(int(dac), int(new_dac))))
+                    )
 
                 # 1초마다 표시
                 if now_m >= next_ui_m:
@@ -783,12 +869,16 @@ class ProcessEngine:
 
         while True:
             rt = read_rate_or_abort(where="target_ramp")
-
-            # target_rate의 하한(1 - tol)까지만 우선 도달시키고, 이후 fine tune
             if rt >= target_rate * (1.0 - rate_tol_ratio):
                 break
 
-            # ✅ stuck guard: 특정 DAC 이상인데 rate가 거의 0이면, 무작정 DAC 올리지 말고 중단
+            # ✅ ignite 대기 적용(1500에서 rate=0이면 0.1까지)
+            if _handle_ignite_wait(rt, where="target_ramp"):
+                stuck_start_ts_target = None
+                _sleep_with_checks(0.2, where="ignite_wait/target_ramp")
+                continue
+
+            # ✅ stuck guard(ignite 대기 아닐 때만)
             now = time.monotonic()
             if dac >= stuck_dac_guard and rt < stuck_rate_abs:
                 if stuck_start_ts_target is None:
@@ -814,15 +904,24 @@ class ProcessEngine:
                 message=f"POWER RAMP UP (TARGET) / DAC={dac} / rate={rt:.3f}/{target_rate:.3f} Å/s",
                 force=True,
             )
-            _ramp_sleep_by_dac(dac, where="target_ramp_sleep")   # target_ramp 쪽
+            _ramp_sleep_by_dac(dac, where="target_ramp_sleep")
 
         # 6) target_rate ±5% band 안으로 fine tune
-        self._emit_status(message=f"EVAP fine tune: tol=±{rate_tol_ratio*100:.1f}%")
+        self._emit_status(message=f"EVAP fine tune: tol=±{rate_tol_ratio*100:.1f}% / stable_hits={target_stable_hits}")
         t_tune0 = time.time()
         tune_timeout_s = float(meta.get("tune_timeout_s", 120.0) or 120.0)
+
+        stable_hits = 0
+
         while True:
             rt = read_rate_or_abort(where="fine_tune")
+
             if _in_band(rt, target_rate, tol_ratio=rate_tol_ratio):
+                stable_hits += 1
+            else:
+                stable_hits = 0
+
+            if stable_hits >= max(1, int(target_stable_hits)):
                 break
 
             if (time.time() - t_tune0) > tune_timeout_s:
@@ -831,14 +930,18 @@ class ProcessEngine:
             new_dac = self._evap_adjust_dac(
                 dac=dac,
                 rate=rt,
-                target_rate=target_rate,  # ✅ 목표 dep.rate로 맞춤
+                target_rate=target_rate,
                 tol_ratio=rate_tol_ratio,
                 step_up=fine_step_dac,
                 step_dn=fine_step_dac,
                 dac_max=dac_max,
             )
-            maybe_apply_dac(new_dac, min_interval_s=dac_adjust_interval_s)
-            _sleep_with_checks(0.5)
+
+            # ✅ 미세조정도 구간 템포(10s/30s)보다 빠르게 못 움직이게
+            maybe_apply_dac(new_dac, min_interval_s=_dac_min_interval_by_dac(max(int(dac), int(new_dac))))
+
+            # ✅ 연속 판정을 위해 샘플링 간격을 meta에서 사용
+            _sleep_with_checks(target_stable_interval_s, where="fine_tune_sleep")
 
         # 7) delay (shutter delay)
         if delay_s > 0:
@@ -866,7 +969,7 @@ class ProcessEngine:
                     step_dn=fine_step_dac,
                     dac_max=dac_max,
                 )
-                maybe_apply_dac(new_dac, min_interval_s=dac_adjust_interval_s)
+                maybe_apply_dac(new_dac, min_interval_s=_dac_min_interval_by_dac(max(int(dac), int(new_dac))))
 
                 nowm = time.monotonic()
                 remain_s = tendm - nowm
@@ -937,7 +1040,7 @@ class ProcessEngine:
                 step_dn=fine_step_dac,
                 dac_max=dac_max,
             )
-            maybe_apply_dac(new_dac, min_interval_s=dac_adjust_interval_s)
+            maybe_apply_dac(new_dac, min_interval_s=_dac_min_interval_by_dac(max(int(dac), int(new_dac))))
 
             remain_th = max(0.0, float(target_th) - float(dep_th))
             self._emit_status(

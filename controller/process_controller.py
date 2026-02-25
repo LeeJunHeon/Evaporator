@@ -204,15 +204,33 @@ class ProcessController(QObject):
             "dac_max": 4000,
             "sensor_none_abort_s": 5.0,
 
-            # --- 램프업 파라미터 ---
+            # --- 램프업 파라미터(사용자 요구) ---
+            #  - DAC 0~700 : 10초에 +100
+            #  - DAC 700~1500 : 30초에 +100
+            #  - DAC 1500인데 dep.rate==0이면, dep.rate>=0.1 될 때까지 대기(최대 5분)
             "ramp_step_dac": 100,
-            "fine_step_dac": 50,
-            "ramp_fast_until_dac": 1000,
-            "ramp_interval_fast_s": 1.0,
-            "ramp_interval_slow_s": 10.0,
+            "ramp_seg1_max_dac": 700,
+            "ramp_seg2_max_dac": 1500,
+            "ramp_interval_seg1_s": 10.0,
+            "ramp_interval_seg2_s": 30.0,
+            "ramp_interval_after_seg2_s": 30.0,
+
+            # 미세 조정(목표 근접 시): 기본 10 step 이내에서 동적 보정
+            "fine_step_dac": 10,
+
+            # ignition(=1500에서 0이면 대기) 파라미터
+            "ignite_dac": 1500,
+            "ignite_trigger_rate_max": 0.0,
+            "ignite_rate_min": 0.1,
+            "ignite_timeout_s": 300.0,
 
             # --- 목표 도달/보정 ---
-            "rate_tol_ratio": 0.05,
+            "rate_tol_ratio": float(run_cfg.get("rate_tol_ratio", 0.05) or 0.05),
+            # target_rate 도달 판정: tol 이내 N회 연속(기본 5회)
+            "target_stable_hits": int(run_cfg.get("target_stable_hits", 5) or 5),
+            "target_stable_interval_s": float(run_cfg.get("target_stable_interval_s", 1.0) or 1.0),
+
+            # --- 목표 도달/보정 ---
             "rate_drop_ratio": 0.30,
             "rate_drop_count": 3,
 

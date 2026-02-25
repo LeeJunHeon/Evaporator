@@ -178,25 +178,15 @@ class LogWriterWorker(QThread):
 
         # ✅ telemetry 컬럼 고정(Excel에서 항상 동일 컬럼)
         self._tele_fieldnames = [
-            "time", "elapsed_sec", "step",
-
-            # ✅ engine.py가 매 tick telemetry로 보내는 메타
-            "phase",
-            "step_idx",
-            "step_type",
-            "pressure_status",
-            "pressure_status_text",
-            "pressure_ok",
-            "pressure_raw",
-
-            # 기존 고정 컬럼
-            "event", "target", "value", "detail",
+            "time",
+            "elapsed_sec",
             "pressure_torr",
-            "dac1", "dac2",
-            "rate_Aps", "thickness_A",
-
-            # ✅ 앞으로 추가 키가 생겨도 버리지 않기 위한 안전망
-            "extras_json",
+            "dac1",
+            "dac2",
+            "dep.rate",
+            "thickness_A",
+            "step",
+            "detail",
         ]
 
     # ---------- public (thread-safe) ----------
@@ -505,31 +495,26 @@ class LogWriterWorker(QThread):
         # 2) elapsed_sec: 항상 여기서 계산 (외부에서 준 값은 무시)
         row2["elapsed_sec"] = round(now_ts - self._run_open_ts, 3) if self._run_open_ts > 0 else ""
 
-        # 3) step (engine이 세분화 문자열을 넣으면 그대로 저장)
-        row2.setdefault("step", "")
-
-        # 4) event/target/value/detail (이벤트 행용)
-        row2.setdefault("event", "")
-        row2.setdefault("target", "")
-        row2.setdefault("value", "")
-        row2.setdefault("detail", "")
-
-        # 5) pressure 키 보정
+        # 3) pressure 키 보정
         if "pressure_torr" not in row2 and "pressure" in row2:
             row2["pressure_torr"] = row2.get("pressure")
 
-        # ✅ 고정 컬럼 밖 데이터는 버리지 말고 extras_json에 보관
-        fixed = set(self._tele_fieldnames)
+        # 4) dep.rate 키 보정 (기존 rate_Aps 호환)
+        if "dep.rate" not in row2 and "rate_Aps" in row2:
+            row2["dep.rate"] = row2.get("rate_Aps")
 
-        # pressure_raw 같이 개행이 섞일 수 있는 값은 CSV 깨짐 방지로 정리(선택)
-        if isinstance(row2.get("pressure_raw"), str):
-            row2["pressure_raw"] = row2["pressure_raw"].replace("\r", " ").replace("\n", " ")
+        # 5) 최종 9개 컬럼 누락값 보정
+        row2.setdefault("pressure_torr", "")
+        row2.setdefault("dac1", "")
+        row2.setdefault("dac2", "")
+        row2.setdefault("dep.rate", "")
+        row2.setdefault("thickness_A", "")
+        row2.setdefault("step", "")
+        row2.setdefault("detail", "")
 
-        extras = {k: v for k, v in row2.items() if k not in fixed}
-        row2["extras_json"] = (
-            json.dumps(extras, ensure_ascii=False, separators=(",", ":"), default=str)
-            if extras else ""
-        )
+        # (선택) detail에 개행이 들어오면 CSV/엑셀에서 보기 안좋을 수 있어서 정리
+        if isinstance(row2.get("detail"), str):
+            row2["detail"] = row2["detail"].replace("\r", " ").replace("\n", " ")
 
         # ✅ writer 준비(고정 헤더)
         if self._tele_writer is None:
@@ -551,6 +536,7 @@ class LogWriterWorker(QThread):
                 return ""
             return v
 
+        # ✅ fieldnames(9개)만 정확히 기록
         filtered = {k: _norm_cell(row2.get(k, "")) for k in self._tele_fieldnames}
 
         try:

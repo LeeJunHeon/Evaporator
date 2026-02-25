@@ -335,12 +335,13 @@ class HmiPlcBinder(QObject):
             detail2 += f" | {detail}"
 
         try:
+            detail_line = f"{event} {target}={value}"
+            if detail2:
+                detail_line += f" | {detail2}"
+
             self._log.telemetry({
                 "step": "HMI",
-                "event": event,
-                "target": target,
-                "value": value,
-                "detail": detail2,
+                "detail": detail_line,
             })
         except Exception:
             pass

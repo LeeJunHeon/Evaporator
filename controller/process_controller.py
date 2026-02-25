@@ -521,12 +521,13 @@ class ProcessController(QObject):
         if not self.is_running():
             return
         try:
+            line = f"{str(event)} {str(target)}={value}"
+            if detail:
+                line += f" | {str(detail)}"
+
             self.log.telemetry({
-                "step": f"CTRL:{event}",   # step을 컨트롤러 이벤트로 표시
-                "event": str(event),
-                "target": str(target),
-                "value": value,
-                "detail": str(detail),
+                "step": f"CTRL:{event}",
+                "detail": line,
             })
         except Exception:
             pass

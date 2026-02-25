@@ -1406,26 +1406,14 @@ class ProcessEngine:
                 pressure_raw = acs_meta.get("raw")
 
             self.log.telemetry({
-                # ✅ CSV 고정 컬럼 step 채우기
                 "step": (self._ui_last_message or self._current_step_name),
+                "detail": "",
 
-                "phase": self._phase.value,
-
-                # ✅ log_service는 pressure_torr 컬럼을 기대함 (pressure를 보내도 보정되지만, 직접 맞추는게 깔끔)
                 "pressure_torr": self._get_pressure(),
-
-                "thickness_A": self._get_thickness(),
-                "rate_Aps": self._get_rate(),
                 "dac1": int(getattr(self, "_last_dac_power_1", 0) or 0),
                 "dac2": int(getattr(self, "_last_dac_power_2", 0) or 0),
-
-                # 아래는 고정 컬럼 밖 → extras_json에 들어감 (공정 분석용)
-                "step_idx": self._current_step_idx,
-                "step_type": step.type.value,
-                "pressure_status": pressure_status,
-                "pressure_status_text": pressure_status_text,
-                "pressure_ok": pressure_ok,
-                "pressure_raw": pressure_raw,
+                "dep.rate": self._get_rate(),
+                "thickness_A": self._get_thickness(),
             })
         except Exception:
             # 텔레메트리 실패해도 공정은 계속
@@ -1486,18 +1474,18 @@ class ProcessEngine:
     def _tele_event(self, *, event: str, target: str, value: Any = "", detail: str = "") -> None:
         """공정 CSV에 이벤트 1줄 추가(event/target/value/detail)."""
         try:
+            line = f"{str(event)} {str(target)}={value}"
+            if detail:
+                line += f" | {str(detail)}"
+
             self.log.telemetry({
                 "step": (self._ui_last_message or self._current_step_name),
-                "event": str(event),
-                "target": str(target),
-                "value": value,
-                "detail": str(detail),
+                "detail": line,
 
-                # 상태 스냅샷도 같이(없으면 빈칸)
                 "pressure_torr": self._get_pressure(),
                 "dac1": int(getattr(self, "_last_dac_power_1", 0) or 0),
                 "dac2": int(getattr(self, "_last_dac_power_2", 0) or 0),
-                "rate_Aps": self._get_rate(),
+                "dep.rate": self._get_rate(),
                 "thickness_A": self._get_thickness(),
             })
         except Exception:

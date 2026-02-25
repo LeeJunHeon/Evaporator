@@ -12,6 +12,7 @@ DepositionPlotWidget
 from __future__ import annotations
 
 import time
+import math
 from collections import deque
 from typing import Deque, Optional, Tuple
 
@@ -95,6 +96,9 @@ class DepositionPlotWidget(QWidget):
         self._apply_tick_density(segments=10)  # ✅ 10칸(=tick 11개) 정도
         self._sync_axis_label_colors()         # ✅ 축 라벨을 선 색으로
 
+        # ✅ X축: 큰 눈금 5초, 작은 눈금 1초
+        self._configure_x_axis_ticks(major_s=5.0, minor_s=1.0)
+
         self._reset_axes()
 
     def clear(self) -> None:
@@ -132,27 +136,54 @@ class DepositionPlotWidget(QWidget):
         self._update_axes(t)
 
     def _reset_axes(self) -> None:
-        self._ax_x.setRange(0.0, max(10.0, self._window_s))
+        x2 = max(10.0, self._window_s)
+
+        major = float(getattr(self, "_x_major_s", 0.0) or 0.0)
+        if major > 0:
+            x2 = float(math.ceil(x2 / major) * major)
+
+        self._ax_x.setRange(0.0, x2)
+        self._apply_x_tickcount_for_range(0.0, x2)
+
         self._ax_rate.setRange(0.0, 1.0)
-        # Power 축은 DAC 고정 범위
         self._ax_power.setRange(self._p_def_min, self._p_def_max)
 
     def _update_axes(self, t_now: float) -> None:
-        x1 = max(0.0, t_now - self._window_s)
-        x2 = max(x1 + 1.0, t_now)
-        self._ax_x.setRange(x1, x2)
+        major = float(getattr(self, "_x_major_s", 0.0) or 0.0)
 
+        if major > 0:
+            # ✅ 초반에는 0~window 고정(눈금/라벨 안정)
+            if t_now < self._window_s:
+                x1 = 0.0
+                x2 = float(self._window_s)
+            else:
+                x2 = float(t_now)
+                x1 = max(0.0, x2 - self._window_s)
+
+            # ✅ x2는 항상 t_now를 포함하도록 "올림" 후 5초 경계로 맞춤
+            x2 = float(math.ceil(x2 / major) * major)
+
+            # ✅ x1도 5초 경계로 내림(창 크기 약간 커질 수 있으나 눈금은 매우 깔끔)
+            x1 = max(0.0, x2 - self._window_s)
+            x1 = float(math.floor(x1 / major) * major)
+
+            if x2 <= x1:
+                x2 = x1 + major
+
+            self._ax_x.setRange(x1, x2)
+            self._apply_x_tickcount_for_range(x1, x2)
+        else:
+            # (혹시 major 미설정이면 기존 동작 유지)
+            x1 = max(0.0, t_now - self._window_s)
+            x2 = max(x1 + 1.0, t_now)
+            self._ax_x.setRange(x1, x2)
+
+        # ---- 이하 Dep.rate Y축 자동 스케일은 기존 그대로 ----
         if self._rate_buf:
             ys = [v for _, v in self._rate_buf]
             y_max = max(ys)
-
-            # ✅ Dep.rate는 보통 0 이상이므로 0부터 시작
-            # ✅ 최소 상한 1.0은 유지하되, 1 넘으면 자동 확장
             y_upper = max(1.0, y_max * 1.10)
-
             self._ax_rate.setRange(0.0, y_upper)
-
-            # 범위에 따라 라벨 포맷 자동 조정(눈금 11개면 너무 많은 소수는 지저분해짐)
             try:
                 if y_upper < 2.0:
                     self._ax_rate.setLabelFormat("%.3f")
@@ -221,5 +252,58 @@ class DepositionPlotWidget(QWidget):
             pass
         try:
             self._ax_power.setLinePen(QPen(power_color))
+        except Exception:
+            pass
+
+    def _configure_x_axis_ticks(self, *, major_s: float = 5.0, minor_s: float = 1.0) -> None:
+        """X축 눈금: major=5s, minor=1s"""
+        self._x_major_s = float(major_s)
+        self._x_minor_s = float(minor_s)
+        self._x_use_tick_interval = False
+
+        # minor tick: 5초 사이에 1초 간격이면 4개
+        minor_cnt = 0
+        if self._x_minor_s > 0 and self._x_major_s > self._x_minor_s:
+            div = int(round(self._x_major_s / self._x_minor_s))
+            minor_cnt = max(0, div - 1)
+
+        try:
+            self._ax_x.setMinorTickCount(minor_cnt)
+        except Exception:
+            pass
+
+        # minor grid line이 보이면 “작은 눈금(1초)” 느낌이 훨씬 확실
+        try:
+            if hasattr(self._ax_x, "setMinorGridLineVisible"):
+                self._ax_x.setMinorGridLineVisible(True)
+            if hasattr(self._ax_x, "setGridLineVisible"):
+                self._ax_x.setGridLineVisible(True)
+        except Exception:
+            pass
+
+        # 가능하면 tickInterval(5초)로 고정 (환경에 따라 없을 수 있어 fallback 준비)
+        try:
+            if hasattr(self._ax_x, "setTickType") and hasattr(self._ax_x, "setTickInterval"):
+                TickType = getattr(type(self._ax_x), "TickType", None)
+                ticks_fixed = getattr(TickType, "TicksFixed", None) if TickType else None
+                if ticks_fixed is not None:
+                    self._ax_x.setTickType(ticks_fixed)
+                    self._ax_x.setTickInterval(self._x_major_s)
+                    self._x_use_tick_interval = True
+        except Exception:
+            self._x_use_tick_interval = False
+
+    def _apply_x_tickcount_for_range(self, x1: float, x2: float) -> None:
+        """tickInterval을 못 쓰는 환경이면 tickCount로 5초 간격을 맞춤"""
+        if bool(getattr(self, "_x_use_tick_interval", False)):
+            return
+        major = float(getattr(self, "_x_major_s", 0.0) or 0.0)
+        if major <= 0:
+            return
+        span = max(0.0, float(x2) - float(x1))
+        ticks = int(round(span / major)) + 1
+        ticks = max(2, min(200, ticks))  # 과도 방지
+        try:
+            self._ax_x.setTickCount(ticks)
         except Exception:
             pass

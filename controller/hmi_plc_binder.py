@@ -257,27 +257,31 @@ class HmiPlcBinder(QObject):
             return bool(self._last_states.get(coil, default))
 
     def _on_button_toggled(self, binding: ButtonBinding, on: bool) -> None:
-        # 미연결이면 팝업 + 버튼 원복
+        on_i = int(bool(on))
+
+        # 미연결이면 팝업 + 버튼 원복 (+ 하단 로그)
         if not self.is_connected():
+            self._set_hmi_log(f"[BLOCK] {binding.coil_name} <- {on_i} (PLC not connected)")
             self._popup_warn("PLC 미연결", "PLC가 연결되지 않아 명령을 전송할 수 없습니다.")
             self._revert_button_to_plc(binding, fallback=not bool(on))
             return
 
-        # Door 인터락(기존 유지)
+        # Door 인터락(기존 유지) + 차단 사유도 하단 로그로
         if binding.coil_name == "DOOR_SW":
             if self._is_door_busy():
+                self._set_hmi_log(f"[BLOCK] DOOR_SW <- {on_i} (door busy)")
                 self._popup_warn("인터락", "Door가 열리거나 닫히는 중입니다.\n완료 후 다시 시도하세요.")
                 self._revert_button_to_plc(binding, fallback=not bool(on))
                 return
 
-            # PLC 상태가 아직 없으면 차단(기존 유지)
             if not self.get_states():
+                self._set_hmi_log(f"[BLOCK] DOOR_SW <- {on_i} (PLC state not ready)")
                 self._popup_warn("인터락", "PLC 상태를 아직 읽지 못했습니다.\n잠시 후 다시 시도하세요.")
                 self._revert_button_to_plc(binding, fallback=not bool(on))
                 return
 
-            # Main shutter가 닫혀있으면 door 금지(기존 유지)
             if not self._get_state_locked("MAIN_SHUTTER_SW", False):
+                self._set_hmi_log(f"[BLOCK] DOOR_SW <- {on_i} (MAIN_SHUTTER closed)")
                 self._popup_warn("인터락", "Main Shutter가 닫혀 있습니다.\nMain Shutter를 먼저 열어주세요.")
                 self._revert_button_to_plc(binding, fallback=not bool(on))
                 return
@@ -285,22 +289,31 @@ class HmiPlcBinder(QObject):
             # ✅ write는 PLCService로
             self._plc.enqueue_write_coil("DOOR_SW", bool(on), momentary=False, pulse_ms=None, tag="HMI:DOOR_SW")
             self._begin_door_busy()
-            self._set_hmi_status(f"DOOR_SW <- {int(bool(on))} (moving)")
+
+            # ✅ 상단 상태라인은 건드리지 않음(연결 상태만 표시)
+            self._set_hmi_log(f"[UI] DOOR_SW <- {on_i} (moving)")
             return
 
-        # Main shutter 인터락(door 이동중 닫기 금지) - 기존 유지
+        # Main shutter 인터락(door 이동중 닫기 금지) - 기존 유지 + 로그
         if binding.coil_name == "MAIN_SHUTTER_SW":
             if self._is_door_busy() and (not bool(on)):
+                self._set_hmi_log("[BLOCK] MAIN_SHUTTER_SW <- 0 (door moving)")
                 self._popup_warn("인터락", "Door가 열리거나 닫히는 중에는\nMain Shutter를 닫을 수 없습니다.")
                 self._revert_button_to_plc(binding, fallback=True)
                 return
 
-        # 일반 토글은 바로 write
-        self._plc.enqueue_write_coil(binding.coil_name, bool(on), momentary=binding.momentary, pulse_ms=None, tag=f"HMI:{binding.coil_name}")
-        self._set_hmi_status(f"{binding.coil_name} <- {int(bool(on))}")
+        # 일반 토글: 하단 로그만
+        self._plc.enqueue_write_coil(
+            binding.coil_name, bool(on),
+            momentary=binding.momentary,
+            pulse_ms=None,
+            tag=f"HMI:{binding.coil_name}",
+        )
+        self._set_hmi_log(f"[UI] {binding.coil_name} <- {on_i}")
 
     def _on_all_stop_clicked(self) -> None:
         if not self.is_connected():
+            self._set_hmi_log("[BLOCK] ALL STOP (PLC not connected)")
             self._popup_warn("PLC 미연결", "PLC가 연결되지 않아 ALL STOP을 전송할 수 없습니다.")
             return
 
@@ -317,8 +330,8 @@ class HmiPlcBinder(QObject):
                 continue
             self._plc.enqueue_write_coil(b.coil_name, False, tag="HMI:ALL_STOP")
 
-        self._set_hmi_status("ALL STOP sent (MAIN_SHUTTER close + DAC=0 + POWER OFF + others OFF)")
-        self._set_hmi_log("ALL STOP (safe order)")
+        # ✅ 상단 상태라인은 건드리지 않고, 하단 로그만 남김
+        self._set_hmi_log("[UI] ALL STOP sent (MAIN_SHUTTER close + DAC=0 + POWER OFF + others OFF)")
 
     # ============================================================
     # PLCService signals → UI apply
@@ -335,10 +348,28 @@ class HmiPlcBinder(QObject):
 
         tag = str(d.get("tag", "") or "")
         if not tag.startswith("HMI:"):
-            return  # ✅ 공정(engine)에서 나온 PLC 명령과 중복 방지
+            return  # ✅ 공정(engine) 명령과 중복 방지
 
+        cmd = str(d.get("event", "") or "")
+        target = str(d.get("target", "") or "")
+        value = d.get("value", "")
+        detail = str(d.get("detail", "") or "")
+        ok = bool(d.get("ok", True))
+
+        # ✅ 하단 로그창에는 항상 남김
+        try:
+            vdisp = int(value) if isinstance(value, bool) else value
+            if ok:
+                self._set_hmi_log(f"[CMD][OK] {target}={vdisp} ({cmd})")
+            else:
+                tail = f" | {detail}" if detail else ""
+                self._set_hmi_log(f"[CMD][FAIL] {target}={vdisp} ({cmd}){tail}")
+        except Exception:
+            pass
+
+        # ✅ 공정 CSV(LogService)는 주입된 경우에만 기존 로직 유지
         if self._log is None:
-            return  # LogService가 주입되지 않으면 기록 불가
+            return
 
         cmd = str(d.get("event", "") or "")
         target = str(d.get("target", "") or "")
@@ -376,11 +407,20 @@ class HmiPlcBinder(QObject):
             pass
 
     def _apply_states(self, states_obj: object) -> None:
-        # PLCService.sig_coils -> Dict[str,bool]
         states: Dict[str, bool] = dict(states_obj or {})
 
+        # ✅ 이전값 보관 후 갱신
         with self._state_lock:
+            prev = dict(self._last_states)
             self._last_states = states
+
+        # ✅ 상태 변화 로그(너무 많아지는 것을 방지하기 위해 "UI에 매핑된 coil"만)
+        #    - 필요하면 이 필터를 제거하면 states 전체 변화도 찍을 수 있음.
+        if prev:
+            watch = {b.coil_name for b in self.BUTTONS} | set(self.INDICATORS.values())
+            for k in watch:
+                if k in prev and k in states and bool(prev[k]) != bool(states[k]):
+                    self._set_hmi_log(f"[STATE] {k} -> {int(bool(states[k]))}")
 
         # indicators
         try:
@@ -407,10 +447,12 @@ class HmiPlcBinder(QObject):
             prev = self._connected
             self._connected = bool(ok)
 
-        status = "PLC CONNECTED" if self.is_connected() else "PLC DISCONNECTED"
-        self._set_hmi_status(status)
+        # ✅ 상단 상태라인: 연결 상태만(PLC/ACS)
+        self._render_status_line()
 
+        # ✅ 변화는 하단 로그에만
         if prev != self.is_connected():
+            status = "PLC CONNECTED" if self.is_connected() else "PLC DISCONNECTED"
             self._set_hmi_log(status)
 
     def _on_error(self, msg: str) -> None:
@@ -466,7 +508,7 @@ class HmiPlcBinder(QObject):
 
     def _end_door_busy(self) -> None:
         self._door_busy_until = 0.0
-        self._set_hmi_status("DOOR: move done")
+        self._set_hmi_log("DOOR: move done")
 
     # ============================================================
     # HMI log/status
@@ -599,7 +641,7 @@ class HmiPlcBinder(QObject):
         key = "DAC_POWER_1" if int(ch) == 1 else "DAC_POWER_2"
         try:
             self._plc.enqueue_write_reg(key, int(v_clamped), tag=f"HMI:DAC{ch}")
-            self._set_hmi_status(f"{key} <- {int(v_clamped)}")
-            self._set_hmi_log(f"DAC{ch} set: {int(v_clamped)}")
+            # ✅ 상단 상태라인은 건드리지 않음(연결 상태만)
+            self._set_hmi_log(f"[UI] {key} <- {int(v_clamped)} (DAC{ch} set)")
         except Exception as e:
             self._popup_warn("전송 실패", f"DAC 값 전송 실패: {e!r}")

@@ -348,9 +348,13 @@ class ProcessWindow(QWidget):
         self.ui = Ui_Form()
         self.ui.setupUi(self)
 
-        # ✅ Process 화면 로그 -> \\...\Evaporator\ProcessWindowLog\YYYY-MM-DD.log
-        self._process_window_log_writer = DailyWindowLogWriter(PROCESS_WINDOW_LOG_DIR)
+        # ✅ Process 화면 로그 -> 공정(run) 1개 = 파일 1개
+        self._process_window_log_writer = RunWindowLogWriter(PROCESS_WINDOW_LOG_DIR)
         _wrap_append_for_daily_log(getattr(self.ui, "logWindow", None), self._process_window_log_writer)
+
+        # ✅ 공정별 ProcessWindowLog 파일 식별자
+        self._active_run_id: Optional[str] = None
+        self._active_recipe_name: str = ""
 
         self.setWindowTitle("Process")
         self.ui.stackedWidget.setCurrentIndex(1)  # Process page
@@ -1180,6 +1184,9 @@ def main():
             stream_interval_a=1,        # ✅ 1초
         )
 
+        # ✅ ACS 연결 상태도 상단 상태라인에 항상 보이도록 기본값 세팅
+        plc_binder.set_external_connected("ACS", False)
+
         # UI 표시: HMI 페이지 pressureValue 업데이트(없으면 무시)
         def _update_pressure(v: object) -> None:
             try:
@@ -1215,6 +1222,13 @@ def main():
                 pass
 
         def _acs_connected(ok: bool) -> None:
+            # ✅ 상단 상태라인에는 연결 상태만(PLC/ACS)
+            try:
+                plc_binder.set_external_connected("ACS", bool(ok))
+            except Exception:
+                pass
+
+            # 연결 끊김이면 pressure 표시 제거
             if not ok:
                 _update_pressure(None)
 
@@ -1225,6 +1239,10 @@ def main():
         acs_service.start()
     except Exception as e:
         acs_service = None
+        try:
+            plc_binder.set_external_connected("ACS", False)
+        except Exception:
+            pass
         _hmi_log(f"[BOOT][WARN] ACSService init failed: {e!r}")
 
     # ------------------------------

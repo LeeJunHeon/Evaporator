@@ -476,6 +476,23 @@ class PlcServiceWorker(QThread):
                 })
             except Exception:
                 pass
+
+            # ✅ (추가1) 최종 실패면 retry 슬롯 해제(남아있으면 다음 명령 흐름이 꼬일 수 있음)
+            if self._retry_cmd is cmd:
+                self._retry_cmd = None
+
+            # ✅ (추가2) submit 계열(Future)이라면 예외 확정
+            if cmd.reply is not None:
+                try:
+                    if hasattr(cmd.reply, "done") and cmd.reply.done():
+                        pass
+                    else:
+                        cmd.reply.set_exception(e)
+                except Exception:
+                    pass
+
+            # ✅ (추가3) 최종 실패는 상위로 전파(재연결/에러 처리 흐름이 정상 동작하게)
+            raise PLCCommandError(f"cmd failed (no retries left): {cmd!r} ({e!r})")
         
 
     async def _sleep_with_command_break(self, plc: AsyncPLC, seconds: float) -> None:

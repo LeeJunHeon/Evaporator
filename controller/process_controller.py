@@ -92,6 +92,13 @@ class ProcessController(QObject):
         except Exception:
             pass
 
+        # stm_service trace -> Process Window log
+        try:
+            if self.stm is not None and hasattr(self.stm, "sig_io_trace"):
+                self.stm.sig_io_trace.connect(self._on_stm_io_trace)
+        except Exception:
+            pass
+
     # --------------------------------------------------------
     # Recipe I/O
     # --------------------------------------------------------
@@ -556,6 +563,36 @@ class ProcessController(QObject):
         except Exception:
             # fallback
             self.sig_ui_log.emit(f"[PLC]{'[WARN]' if not ok else ''} {msg}")
+
+    def _on_stm_io_trace(self, obj: object) -> None:
+        try:
+            d = dict(obj or {})
+        except Exception:
+            return
+
+        ok = bool(d.get("ok", True))
+        tx = str(d.get("tx", "") or "")
+        rx = str(d.get("rx", "") or "")
+        detail = str(d.get("detail", "") or "")
+
+        # 혹시라도 S/T 폴링이 넘어오면 한 번 더 안전하게 차단(스팸 방지)
+        token = (tx[:1].upper() if tx else "")
+        if token in ("S", "T"):
+            return
+
+        msg = f"TX={tx}"
+        if rx:
+            msg += f" | RX={rx}"
+        if detail:
+            msg += f" ({detail})"
+
+        try:
+            if ok:
+                self.log.info(msg, tag="STM", also_ui=True)
+            else:
+                self.log.warn(msg, tag="STM", also_ui=True)
+        except Exception:
+            self.sig_ui_log.emit(f"[STM]{'[WARN]' if not ok else ''} {msg}")
 
     # --------------------------------------------------------
     # UI log helpers

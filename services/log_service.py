@@ -485,23 +485,11 @@ class LogWriterWorker(QThread):
         row2 = dict(row or {})
         now_ts = _now_ts(ts)
 
-        # 1) time (t -> time 흡수)
-        if "time" not in row2 and "t" in row2:
-            row2["time"] = row2.pop("t")
-        row2.setdefault("time", _time_str(now_ts))
+        # 1) time: CSV에는 항상 "HH:MM:SS"만 기록 (외부에서 준 값은 무시)
+        row2["time"] = _time_str(now_ts)
 
-        # ✅ 들어오는 time 값이 "YYYY-MM-DD HH:MM:SS" 형태여도 시간만 남김
-        if isinstance(row2.get("time"), str):
-            row2["time"] = row2["time"].strip().split()[-1][:8]
-
-        # 2) elapsed_sec (elapsed_s -> elapsed_sec 흡수)
-        if "elapsed_sec" not in row2:
-            if "elapsed_s" in row2:
-                row2["elapsed_sec"] = row2.pop("elapsed_s")
-            elif self._run_open_ts > 0:
-                row2["elapsed_sec"] = round(now_ts - self._run_open_ts, 3)
-            else:
-                row2["elapsed_sec"] = ""
+        # 2) elapsed_sec: 항상 여기서 계산 (외부에서 준 값은 무시)
+        row2["elapsed_sec"] = round(now_ts - self._run_open_ts, 3) if self._run_open_ts > 0 else ""
 
         # 3) step (engine이 세분화 문자열을 넣으면 그대로 저장)
         row2.setdefault("step", "")

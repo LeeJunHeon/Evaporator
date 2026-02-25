@@ -379,7 +379,6 @@ class PlcServiceWorker(QThread):
                 result = True
 
             elif isinstance(cmd, CmdSetDacCurrent):
-                # ✅ mA → 내부에서 code로 변환 후 write, 반환은 실제 code(int)
                 code = await plc.set_dac_current(int(cmd.ch), float(cmd.ma))
                 result = int(code)
 

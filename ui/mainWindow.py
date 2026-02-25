@@ -456,29 +456,14 @@ class Ui_Form(object):
         self.materialZfactorEdit2.setGeometry(QRect(100, 270, 91, 26))
         self.materialZfactorEdit2.setReadOnly(True)
 
-        # ✅ Cur Rate: 라벨 1개(전체폭) + Edit 2개
+        # ✅ Cur Rate: 라벨 1개(전체폭) + Edit 1개
         self.currentRateLabel = QLabel(self.page_2)
         self.currentRateLabel.setObjectName("currentRateLabel")
         self.currentRateLabel.setGeometry(QRect(0, 450, 191, 20))
-        self.currentRateLabel.setAlignment(
-            Qt.AlignmentFlag.AlignLeading | Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
-        )
 
-        # ✅ 기존 2번째 라벨은 "완전 삭제" 대신 숨김 처리
-        #    (다른 파일에서 currentRateLabel2를 참조할 가능성 때문에 안전하게 유지)
-        self.currentRateLabel2 = QLabel(self.page_2)
-        self.currentRateLabel2.setObjectName("currentRateLabel2")
-        self.currentRateLabel2.setGeometry(QRect(0, 0, 0, 0))
-
-        # Edit 2칸(라벨+20)
         self.currentRateEdit = QLineEdit(self.page_2)
-        self.currentRateEdit.setGeometry(QRect(0, 470, 91, 26))
+        self.currentRateEdit.setGeometry(QRect(0, 470, 191, 26))
         self.currentRateEdit.setReadOnly(True)
-
-        self.currentRateEdit2 = QLineEdit(self.page_2)
-        self.currentRateEdit2.setObjectName("currentRateEdit2")
-        self.currentRateEdit2.setGeometry(QRect(100, 470, 91, 26))
-        self.currentRateEdit2.setReadOnly(True)
 
         # ✅ Cur Thick (Edit 끝 +4 = 다음 라벨)
         self.currentThicknessLabel = QLabel(self.page_2)
@@ -663,9 +648,8 @@ class Ui_Form(object):
         self.materialZLabel1.setText(QCoreApplication.translate("Form", "Z-Factor (-)", None))
         self.materialZLabel2.setText(QCoreApplication.translate("Form", "", None))    # 숨김 처리용
 
-        # Cur Rate는 2칸이므로 각 칸 라벨 분리(재료/소스 1/2 의미)
+        # Cur Rate는 표시값이므로 1칸만 사용
         self.currentRateLabel.setText(QCoreApplication.translate("Form", "Cur Rate (Å/s)", None))
-        self.currentRateLabel2.setText(QCoreApplication.translate("Form", "", None))  # 숨김
 
         # Thick는 전체 1칸
         self.currentThicknessLabel.setText(QCoreApplication.translate("Form", "Cur Thick (Å)", None))
@@ -798,16 +782,11 @@ class Ui_Form(object):
             le.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             le.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
 
-        # ✅ 표시용(LineEdit readOnly)도 "기존 입력칸(Dep.Rate 등)"과 동일한 기본 디자인 유지
-        # - border를 강제하지 않는다(기본 테마 테두리 유지)
-        # - readOnly 때문에 회색 배경이 되는 경우만 팔레트로 흰색 강제
         readonly_display = [
             self.materialDensityEdit1, self.materialDensityEdit2,
             self.materialZfactorEdit1, self.materialZfactorEdit2,
             self.currentRateEdit, self.currentThicknessEdit,
         ]
-        if hasattr(self, "currentRateEdit2"):
-            readonly_display.append(self.currentRateEdit2)
 
         for le in readonly_display:
             # 혹시 이전에 스타일을 먹인 적이 있으면 제거(기본 디자인으로 복귀)

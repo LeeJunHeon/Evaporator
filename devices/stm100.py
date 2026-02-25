@@ -150,11 +150,9 @@ class STM100(BaseSerialDevice):
 
         super().__init__(*args, **kwargs)
 
-        # ✅ (추가) I/O trace 콜백 (서비스가 주입 가능)
-        self._io_trace_cb: Optional[Callable[[dict], None]] = kwargs.pop("io_trace_cb", None)  # 혹시 kwargs로도 들어오면 제거
-
-        # ✅ (추가) 너무 자주 호출되는 폴링 명령은 기본 제외(S/T)
-        self._io_trace_skip_tokens: Set[str] = set(kwargs.pop("io_trace_skip_tokens", {"S", "T"}))
+        # ✅ pop 다시 하지 말고, 위에서 뽑은 값을 저장
+        self._io_trace_cb: Optional[Callable[[dict], None]] = io_trace_cb
+        self._io_trace_skip_tokens: Set[str] = set(io_trace_skip_tokens or set())
 
         self._io_err_allow = max(0, int(io_err_allow))
         self._io_retry_sleep_s = max(0.0, float(io_retry_sleep_s))
@@ -163,6 +161,26 @@ class STM100(BaseSerialDevice):
         self._reconnect_backoff_base_s = max(0.1, float(reconnect_backoff_base_s))
         self._reconnect_backoff_factor = max(1.0, float(reconnect_backoff_factor))
         self._reconnect_backoff_max_s = max(self._reconnect_backoff_base_s, float(reconnect_backoff_max_s))
+
+    def _emit_io_trace(self, *, tx_cmd: str, rx: str | None, ok: bool, detail: str = "") -> None:
+        cb = getattr(self, "_io_trace_cb", None)
+        if not cb:
+            return
+
+        token = (tx_cmd[:1] if tx_cmd else "").upper()
+        if token and token in getattr(self, "_io_trace_skip_tokens", set()):
+            return
+
+        try:
+            cb({
+                "dev": "STM100",
+                "ok": bool(ok),
+                "tx": tx_cmd,
+                "rx": rx if rx is not None else "",
+                "detail": detail,
+            })
+        except Exception:
+            pass
 
     def _ensure_connected(self) -> None:
         if not self.is_connected:
@@ -222,6 +240,13 @@ class STM100(BaseSerialDevice):
 
                 code = payload[0] if payload else ""
                 body = payload[1:] if len(payload) > 1 else ""
+
+                ok = (code in _OK_CODES)
+                meaning = _CODE_MEANING.get(code, f"Unknown code={code!r}")
+                detail = f"code={code} ({meaning})"
+
+                self._emit_io_trace(tx_cmd=cmd, rx=payload, ok=ok, detail=detail)
+
                 return STMReply(code=code, body=body, raw=payload)
 
             except (TimeoutError, STM100ProtocolError, SerialDeviceError) as e:
@@ -236,6 +261,9 @@ class STM100(BaseSerialDevice):
 
                 # allow 초과 → reconnect(backoff)
                 if reconnect_left <= 0:
+                    # ✅ 최종 실패 trace 1회
+                    self._emit_io_trace(tx_cmd=cmd, rx=None, ok=False, detail=f"final_fail: {last_err!r}")
+
                     # 마지막은 안전하게 닫아둠
                     try:
                         self.close()

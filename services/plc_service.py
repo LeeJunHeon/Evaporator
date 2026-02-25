@@ -401,6 +401,10 @@ class PlcServiceWorker(QThread):
                 value  = getattr(cmd, "on", getattr(cmd, "value", getattr(cmd, "ma", "")))
                 detail = ""
 
+                # ✅ CmdWriteReg는 target을 대문자로 통일(로그 일관성)
+                if isinstance(cmd, CmdWriteReg):
+                    target = str(cmd.reg_name).upper()
+
                 # ✅ (개선1) CmdSetDacCurrent: target을 숫자 ch가 아니라 DAC_CH{n} 형태로
                 if isinstance(cmd, CmdSetDacCurrent):
                     target = f"DAC_CH{int(cmd.ch)}"
@@ -447,6 +451,10 @@ class PlcServiceWorker(QThread):
                 target = getattr(cmd, "coil_name", getattr(cmd, "reg_name", getattr(cmd, "ch", "")))
                 value  = getattr(cmd, "on", getattr(cmd, "value", getattr(cmd, "ma", "")))
                 detail = ""
+
+                # ✅ CmdWriteReg는 target을 대문자로 통일(로그 일관성)
+                if isinstance(cmd, CmdWriteReg):
+                    target = str(cmd.reg_name).upper()
 
                 # CmdSetDacCurrent: target 보정
                 if isinstance(cmd, CmdSetDacCurrent):

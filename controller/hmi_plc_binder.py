@@ -74,6 +74,12 @@ class HmiPlcBinder(QObject):
         self._last_states: Dict[str, bool] = {}
         self._connected: bool = False
 
+        # ✅ 상단 상태라인에는 "연결 상태만" 표시하기 위한 외부 장비 연결 상태 저장소
+        self._external_connected: Dict[str, bool] = {}
+
+        # (선택) 초기 표시
+        self._render_status_line()
+
         # Door 이동 중 인터락(시간 기반)
         self._door_busy_until: float = 0.0
         self._door_busy_timer = QTimer(self)
@@ -94,6 +100,29 @@ class HmiPlcBinder(QObject):
 
         # DAC 수동 입력 UI (있으면 자동으로 연결)
         self._wire_dac_controls()
+
+    def set_external_connected(self, name: str, ok: bool) -> None:
+        """main.py 등 외부에서 ACS 같은 장비 연결상태를 상단 상태라인에 반영."""
+        key = str(name).strip().upper()
+        if not key:
+            return
+        with self._state_lock:
+            self._external_connected[key] = bool(ok)
+        self._render_status_line()
+
+    def _render_status_line(self) -> None:
+        """상단 상태라인(processMonitor_HMI)에는 연결 상태만 표시."""
+        parts = []
+        parts.append("PLC CONNECTED" if self.is_connected() else "PLC DISCONNECTED")
+
+        with self._state_lock:
+            ext = dict(self._external_connected)
+
+        # 예: ACS CONNECTED / ACS DISCONNECTED
+        for k in sorted(ext.keys()):
+            parts.append(f"{k} {'CONNECTED' if ext[k] else 'DISCONNECTED'}")
+
+        self._set_hmi_status(" | ".join(parts))
 
     # ============================================================
     # Public API (Process/Engine에서 사용)

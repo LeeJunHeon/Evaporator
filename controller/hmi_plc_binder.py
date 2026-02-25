@@ -15,7 +15,8 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, Any
+from services.log_service import LogService
 
 from PySide6.QtCore import QObject, QSignalBlocker, Qt, QTimer
 from PySide6.QtWidgets import QMessageBox
@@ -62,10 +63,11 @@ class HmiPlcBinder(QObject):
         "water": "WATER_SW",
     }
 
-    def __init__(self, ui: object, settings: PLCSettings, parent: Optional[QObject] = None):
+    def __init__(self, ui: object, settings: PLCSettings, parent: Optional[QObject] = None, log: Optional[LogService] = None):
         super().__init__(parent)
         self.ui = ui
         self.settings = settings
+        self._log = log  # ✅ 공정 CSV(LogService) 주입
 
         # thread-safe state (다른 스레드에서도 읽을 수 있음)
         self._state_lock = threading.Lock()
@@ -83,6 +85,10 @@ class HmiPlcBinder(QObject):
         self._plc.sig_connected.connect(self._on_connected)
         self._plc.sig_error.connect(self._on_error)
         self._plc.sig_coils.connect(self._apply_states)  # PLCService는 coils dict를 emit
+
+        # ✅ PLC 명령 실행 trace → 공정 CSV로 저장
+        if hasattr(self._plc, "sig_cmd_trace"):
+            self._plc.sig_cmd_trace.connect(self._on_plc_cmd_trace)
 
         self._wire_ui()
 
@@ -158,6 +164,9 @@ class HmiPlcBinder(QObject):
         self._plc.sig_connected.connect(self._on_connected)
         self._plc.sig_error.connect(self._on_error)
         self._plc.sig_coils.connect(self._apply_states)
+
+        if hasattr(self._plc, "sig_cmd_trace"):
+            self._plc.sig_cmd_trace.connect(self._on_plc_cmd_trace)
 
         # ✅ old 객체는 Qt 이벤트루프에서 제거 예약
         try:
@@ -245,7 +254,7 @@ class HmiPlcBinder(QObject):
                 return
 
             # ✅ write는 PLCService로
-            self._plc.enqueue_write_coil("DOOR_SW", bool(on), momentary=False, pulse_ms=None)
+            self._plc.enqueue_write_coil("DOOR_SW", bool(on), momentary=False, pulse_ms=None, tag="HMI:DOOR_SW")
             self._begin_door_busy()
             self._set_hmi_status(f"DOOR_SW <- {int(bool(on))} (moving)")
             return
@@ -258,7 +267,7 @@ class HmiPlcBinder(QObject):
                 return
 
         # 일반 토글은 바로 write
-        self._plc.enqueue_write_coil(binding.coil_name, bool(on), momentary=binding.momentary, pulse_ms=None)
+        self._plc.enqueue_write_coil(binding.coil_name, bool(on), momentary=binding.momentary, pulse_ms=None, tag=f"HMI:{binding.coil_name}")
         self._set_hmi_status(f"{binding.coil_name} <- {int(bool(on))}")
 
     def _on_all_stop_clicked(self) -> None:
@@ -267,18 +276,17 @@ class HmiPlcBinder(QObject):
             return
 
         # ✅ 안전 순서(권장): MAIN_SHUTTER close → DAC=0 → POWER off → 나머지 off
-        self._plc.enqueue_write_coil("MAIN_SHUTTER_SW", False, tag="ALL_STOP")
+        self._plc.enqueue_write_coil("MAIN_SHUTTER_SW", False, tag="HMI:ALL_STOP")
 
-        self._plc.enqueue_write_reg("DAC_POWER_1", 0, tag="ALL_STOP")
-        self._plc.enqueue_write_reg("DAC_POWER_2", 0, tag="ALL_STOP")
+        self._plc.enqueue_write_reg("DAC_POWER_1", 0, tag="HMI:ALL_STOP")
+        self._plc.enqueue_write_reg("DAC_POWER_2", 0, tag="HMI:ALL_STOP")
 
-        self._plc.enqueue_write_coil("POWER_1_SW", False, tag="ALL_STOP")
-        self._plc.enqueue_write_coil("POWER_2_SW", False, tag="ALL_STOP")
-
+        self._plc.enqueue_write_coil("POWER_1_SW", False, tag="HMI:ALL_STOP")
+        self._plc.enqueue_write_coil("POWER_2_SW", False, tag="HMI:ALL_STOP")
         for b in self.BUTTONS:
             if b.coil_name in ("MAIN_SHUTTER_SW", "POWER_1_SW", "POWER_2_SW"):
                 continue
-            self._plc.enqueue_write_coil(b.coil_name, False, tag="ALL_STOP")
+            self._plc.enqueue_write_coil(b.coil_name, False, tag="HMI:ALL_STOP")
 
         self._set_hmi_status("ALL STOP sent (MAIN_SHUTTER close + DAC=0 + POWER OFF + others OFF)")
         self._set_hmi_log("ALL STOP (safe order)")
@@ -286,6 +294,57 @@ class HmiPlcBinder(QObject):
     # ============================================================
     # PLCService signals → UI apply
     # ============================================================
+    def _on_plc_cmd_trace(self, obj: object) -> None:
+        """
+        PLCServiceWorker에서 발생한 '실제 실행된 명령' trace.
+        - HMI에서 보낸 명령(tag이 HMI:로 시작)만 공정 CSV에 기록
+        """
+        try:
+            d = dict(obj or {})
+        except Exception:
+            return
+
+        tag = str(d.get("tag", "") or "")
+        if not tag.startswith("HMI:"):
+            return  # ✅ 공정(engine)에서 나온 PLC 명령과 중복 방지
+
+        if self._log is None:
+            return  # LogService가 주입되지 않으면 기록 불가
+
+        cmd = str(d.get("event", "") or "")
+        target = str(d.get("target", "") or "")
+        value = d.get("value", "")
+        detail = str(d.get("detail", "") or "")
+        ok = bool(d.get("ok", True))
+
+        # cmd(type명) → 공정 CSV용 event로 매핑
+        event = cmd
+        if cmd == "CmdWriteCoil":
+            event = "PULSE_COIL" if ("pulse_ms" in detail or "momentary=1" in detail) else "WRITE_COIL"
+            if isinstance(value, bool):
+                value = int(value)
+        elif cmd == "CmdWriteReg":
+            tu = target.upper()
+            event = "SET_DAC" if tu in ("DAC_POWER_1", "DAC_POWER_2") else "WRITE_REG"
+        elif cmd == "CmdSetDacCurrent":
+            event = "SET_DAC_MA"
+
+        # detail에 tag/성공여부를 같이 넣어 사람이 보기 좋게
+        detail2 = f"{tag} {'OK' if ok else 'ERR'}"
+        if detail:
+            detail2 += f" | {detail}"
+
+        try:
+            self._log.telemetry({
+                "step": "HMI",
+                "event": event,
+                "target": target,
+                "value": value,
+                "detail": detail2,
+            })
+        except Exception:
+            pass
+
     def _apply_states(self, states_obj: object) -> None:
         # PLCService.sig_coils -> Dict[str,bool]
         states: Dict[str, bool] = dict(states_obj or {})
@@ -509,7 +568,7 @@ class HmiPlcBinder(QObject):
 
         key = "DAC_POWER_1" if int(ch) == 1 else "DAC_POWER_2"
         try:
-            self._plc.enqueue_write_reg(key, int(v_clamped), tag=f"DAC{ch}")
+            self._plc.enqueue_write_reg(key, int(v_clamped), tag=f"HMI:DAC{ch}")
             self._set_hmi_status(f"{key} <- {int(v_clamped)}")
             self._set_hmi_log(f"DAC{ch} set: {int(v_clamped)}")
         except Exception as e:

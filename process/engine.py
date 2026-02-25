@@ -540,8 +540,8 @@ class ProcessEngine:
         # - DAC가 2000 이상인데도 dep.rate가 0 이하이면 "물질 부족"으로 중단
         material_shortage_dac = int(meta.get("material_shortage_dac", 2000) or 2000)
         material_shortage_rate_max = float(meta.get("material_shortage_rate_max", 0.0) or 0.0)  # <=
-        # "계속"을 엄밀히 하려면 지속시간을 쓰면 됨(초). 0이면 즉시 중단.
-        material_shortage_time_s = float(meta.get("material_shortage_time_s", 10.0) or 10.0)
+        # "계속"을 엄밀히 하려면 지속시간을 쓰면 됨(초). 10이면 10초 대기 후 중단.
+        material_shortage_time_s = float(meta.get("material_shortage_time_s", 10.0))
 
         # delay는 분 단위 입력(기존 UI) → 초로 변환
         delay_s = delay_min * 60.0
@@ -566,11 +566,17 @@ class ProcessEngine:
         shortage_start_ts: Optional[float] = None
 
         # --- 내부 유틸 ---
-        def _sleep_with_checks(total_s: float) -> None:
+        def _sleep_with_checks(total_s: float, *, where: str = "sleep") -> None:
+            nonlocal shortage_start_ts
             end_t = time.monotonic() + float(total_s)
             while True:
                 self._check_stop_pause(recipe, step)
                 self._tick_emit(recipe, step)
+
+                # ✅ sleep 중에도 rate를 읽어 material shortage 감시(10초 카운트가 정확해짐)
+                rt = self._get_rate()
+                if rt is not None:
+                    shortage_start_ts = _material_shortage_guard(float(rt), shortage_start_ts, where=where)
 
                 now = time.monotonic()
                 remain = end_t - now
@@ -579,11 +585,11 @@ class ProcessEngine:
 
                 time.sleep(min(0.1, remain))
 
-        def _ramp_sleep_by_dac(cur_dac: int) -> None:
+        def _ramp_sleep_by_dac(cur_dac: int, *, where: str) -> None:
             if int(cur_dac) >= int(ramp_fast_until_dac):
-                _sleep_with_checks(ramp_interval_slow_s)
+                _sleep_with_checks(ramp_interval_slow_s, where=where)
             else:
-                _sleep_with_checks(ramp_interval_fast_s)
+                _sleep_with_checks(ramp_interval_fast_s, where=where)
 
         def _in_band(rt: float, tgt: float, *, tol_ratio: float) -> bool:
             tol = max(1e-9, abs(float(tgt)) * float(tol_ratio))
@@ -636,7 +642,7 @@ class ProcessEngine:
                 return None
 
             if float(rt) <= float(material_shortage_rate_max):
-                now = time.time()
+                now = time.monotonic()
 
                 if float(material_shortage_time_s) <= 0:
                     raise EngineFailed(
@@ -702,7 +708,7 @@ class ProcessEngine:
                 break
 
             # ✅ stuck guard: 특정 DAC 이상인데 rate가 거의 0이면, 무작정 DAC 올리지 말고 중단
-            now = time.time()
+            now = time.monotonic()
             if dac >= stuck_dac_guard and rt < stuck_rate_abs:
                 if stuck_start_ts_pre is None:
                     stuck_start_ts_pre = now
@@ -727,7 +733,7 @@ class ProcessEngine:
                 message=f"POWER RAMP UP (PRE) / DAC={dac} / rate={rt:.3f}/{pre_rate:.3f} Å/s",
                 force=True,
             )
-            _ramp_sleep_by_dac(dac)
+            _ramp_sleep_by_dac(dac, where="pre_ramp_sleep")      # pre_ramp 쪽
 
         # 4) pre_rate 유지(1~2분)
         # - 요청사항: pre_rate(0.4) 도달 후 1~2분 "대기" → 그 다음 target로 ramp
@@ -783,7 +789,7 @@ class ProcessEngine:
                 break
 
             # ✅ stuck guard: 특정 DAC 이상인데 rate가 거의 0이면, 무작정 DAC 올리지 말고 중단
-            now = time.time()
+            now = time.monotonic()
             if dac >= stuck_dac_guard and rt < stuck_rate_abs:
                 if stuck_start_ts_target is None:
                     stuck_start_ts_target = now
@@ -808,7 +814,7 @@ class ProcessEngine:
                 message=f"POWER RAMP UP (TARGET) / DAC={dac} / rate={rt:.3f}/{target_rate:.3f} Å/s",
                 force=True,
             )
-            _ramp_sleep_by_dac(dac)
+            _ramp_sleep_by_dac(dac, where="target_ramp_sleep")   # target_ramp 쪽
 
         # 6) target_rate ±5% band 안으로 fine tune
         self._emit_status(message=f"EVAP fine tune: tol=±{rate_tol_ratio*100:.1f}%")
@@ -1434,7 +1440,7 @@ class ProcessEngine:
         - status emit: _status_emit_interval_s
         - telemetry: recipe.telemetry_interval_s
         """
-        now = time.time()
+        now = time.monotonic()
 
         if (now - self._last_status_emit_ts) >= self._status_emit_interval_s:
             self._emit_status(step_idx=self._current_step_idx, step_name=self._current_step_name)
@@ -1455,7 +1461,7 @@ class ProcessEngine:
         message: str = "",
         force: bool = False,
     ) -> None:
-        now = time.time()
+        now = time.monotonic()
         if not force and (now - self._last_status_emit_ts) < self._status_emit_interval_s:
             return
         self._last_status_emit_ts = now  # ✅ 여기서 갱신

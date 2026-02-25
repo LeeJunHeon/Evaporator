@@ -27,7 +27,7 @@ class DepositionPlotWidget(QWidget):
         parent: Optional[QWidget] = None,
         *,
         max_points: int = 600,
-        window_seconds: float = 300.0,
+        window_seconds: float = 150.0,
         power_title: str = "Power (DAC)",
         power_default_range: tuple[float, float] = (0.0, 4000.0),
     ):
@@ -151,6 +151,11 @@ class DepositionPlotWidget(QWidget):
     def _update_axes(self, t_now: float) -> None:
         major = float(getattr(self, "_x_major_s", 0.0) or 0.0)
 
+        # ✅ Dep.rate Y축 스케일링을 "현재 보이는 X-window" 기준으로 하려면,
+        #    아래에서 최종 x1/x2를 반드시 계산해 둬야 함.
+        x1: float
+        x2: float
+
         if major > 0:
             # ✅ 초반에는 0~window 고정(눈금/라벨 안정)
             if t_now < self._window_s:
@@ -163,7 +168,7 @@ class DepositionPlotWidget(QWidget):
             # ✅ x2는 항상 t_now를 포함하도록 "올림" 후 5초 경계로 맞춤
             x2 = float(math.ceil(x2 / major) * major)
 
-            # ✅ x1도 5초 경계로 내림(창 크기 약간 커질 수 있으나 눈금은 매우 깔끔)
+            # ✅ x1도 5초 경계로 내림
             x1 = max(0.0, x2 - self._window_s)
             x1 = float(math.floor(x1 / major) * major)
 
@@ -173,14 +178,15 @@ class DepositionPlotWidget(QWidget):
             self._ax_x.setRange(x1, x2)
             self._apply_x_tickcount_for_range(x1, x2)
         else:
-            # (혹시 major 미설정이면 기존 동작 유지)
             x1 = max(0.0, t_now - self._window_s)
             x2 = max(x1 + 1.0, t_now)
             self._ax_x.setRange(x1, x2)
 
-        # ---- 이하 Dep.rate Y축 자동 스케일은 기존 그대로 ----
+        # ---- Dep.rate Y축 자동 스케일: "현재 보이는 구간(x1~x2)"만 기준 ----
         if self._rate_buf:
-            ys = [v for _, v in self._rate_buf]
+            ys = [v for tt, v in self._rate_buf if x1 <= tt <= x2]
+            if not ys:
+                ys = [v for _, v in self._rate_buf]  # fallback
             y_max = max(ys)
             y_upper = max(1.0, y_max * 1.10)
             self._ax_rate.setRange(0.0, y_upper)

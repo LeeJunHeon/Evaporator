@@ -73,6 +73,7 @@ class ACSServiceWorker(QThread):
     sig_connected = Signal(bool)
     sig_pressure = Signal(object)   # float|None
     sig_snapshot = Signal(object)   # ACSSnapshot
+    sig_io_trace = Signal(object)   # ✅ {"dev":"ACS2000","ok":bool,"token":...,"tx":...,"rx":...,"detail":...,"ts":...}
 
     def __init__(
         self,
@@ -187,6 +188,9 @@ class ACSServiceWorker(QThread):
             reconnect_backoff_base_s=float(pol["reconnect_backoff_base_s"]),
             reconnect_backoff_factor=float(pol["reconnect_backoff_factor"]),
             reconnect_backoff_max_s=float(pol["reconnect_backoff_max_s"]),
+
+            # ✅ ACS2000 통신/압력 변화 trace를 서비스로 전달
+            io_trace_cb=self._on_acs_io_trace,
         )
     
     def _load_io_policy_from_ini(self) -> Dict[str, Any]:
@@ -223,6 +227,19 @@ class ACSServiceWorker(QThread):
             "reconnect_backoff_factor": _get_float("reconnect_backoff_factor", 1.7),
             "reconnect_backoff_max_s": _get_float("reconnect_backoff_max_s", 5.0),
         }
+    
+    def _on_acs_io_trace(self, d: dict) -> None:
+        """
+        devices/acs2000.py에서 io_trace_cb로 올라오는 trace를
+        서비스 시그널로 밖에 전달.
+        """
+        try:
+            d2 = dict(d or {})
+            d2.setdefault("dev", "ACS2000")
+            d2.setdefault("ts", time.time())
+            self.sig_io_trace.emit(d2)
+        except Exception:
+            pass
 
     def _safe_close(self) -> None:
         if self._acs is None:
@@ -489,6 +506,7 @@ class ACSService(QObject):
     sig_connected = Signal(bool)
     sig_pressure = Signal(object)
     sig_snapshot = Signal(object)
+    sig_io_trace = Signal(object)   # ✅ ACS trace를 밖으로
 
     def __init__(
         self,
@@ -518,6 +536,7 @@ class ACSService(QObject):
         self._worker.sig_connected.connect(self.sig_connected)
         self._worker.sig_pressure.connect(self.sig_pressure)
         self._worker.sig_snapshot.connect(self.sig_snapshot)
+        self._worker.sig_io_trace.connect(self.sig_io_trace)  # ✅ 추가
 
     def start(self) -> None:
         if not self._worker.isRunning():

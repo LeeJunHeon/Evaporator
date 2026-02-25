@@ -562,6 +562,9 @@ class ProcessEngine:
         # 2) 초기 DAC: 항상 0부터 시작
         dac = 0
 
+        # ✅ material shortage 타이머(전 구간 공통)
+        shortage_start_ts: Optional[float] = None
+
         # --- 내부 유틸 ---
         def _sleep_with_checks(total_s: float) -> None:
             end_t = time.monotonic() + float(total_s)
@@ -586,7 +589,8 @@ class ProcessEngine:
             tol = max(1e-9, abs(float(tgt)) * float(tol_ratio))
             return abs(float(rt) - float(tgt)) <= tol
 
-        def read_rate_or_abort() -> float:
+        def read_rate_or_abort(*, where: str) -> float:
+            nonlocal shortage_start_ts
             t0 = time.time()
             while True:
                 self._check_stop_pause(recipe, step)
@@ -594,7 +598,12 @@ class ProcessEngine:
 
                 rt = self._get_rate()
                 if rt is not None:
-                    return float(rt)
+                    rt_f = float(rt)
+
+                    # ✅ 모든 공정 구간에서 material shortage 감시
+                    shortage_start_ts = _material_shortage_guard(rt_f, shortage_start_ts, where=where)
+
+                    return rt_f
 
                 if (time.time() - t0) >= sensor_none_abort_s:
                     raise EngineFailed(step.name, f"EVAP: rate 센서 None 지속 {sensor_none_abort_s}s")
@@ -686,15 +695,11 @@ class ProcessEngine:
         t_ramp0 = time.time()
 
         stuck_start_ts_pre: Optional[float] = None
-        shortage_start_ts_pre: Optional[float] = None  # ✅ 추가
 
         while True:
-            rt = read_rate_or_abort()
+            rt = read_rate_or_abort(where="pre_ramp")
             if rt >= pre_rate:
                 break
-
-            # ✅ material shortage guard (요구사항)
-            shortage_start_ts_pre = _material_shortage_guard(rt, shortage_start_ts_pre, where="pre_ramp")
 
             # ✅ stuck guard: 특정 DAC 이상인데 rate가 거의 0이면, 무작정 DAC 올리지 말고 중단
             now = time.time()
@@ -718,7 +723,10 @@ class ProcessEngine:
 
             dac = min(dac_max, dac + ramp_step_dac)
             apply_dac()
-            self._emit_status(message=f"POWER RAMP UP (PRE) / DAC={dac} / rate={rt:.3f}/{pre_rate:.3f} Å/s")
+            self._emit_status(
+                message=f"POWER RAMP UP (PRE) / DAC={dac} / rate={rt:.3f}/{pre_rate:.3f} Å/s",
+                force=True,
+            )
             _ramp_sleep_by_dac(dac)
 
         # 4) pre_rate 유지(1~2분)
@@ -733,7 +741,7 @@ class ProcessEngine:
                 if remain_s <= 0:
                     break
 
-                rt = read_rate_or_abort()
+                rt = read_rate_or_abort(where="pre_hold")
 
                 # control 모드만 pre_rate 근처 유지 제어 (단, DAC 변경 텀 적용)
                 if pre_hold_mode == "control":
@@ -766,18 +774,13 @@ class ProcessEngine:
         t_ramp1 = time.time()
 
         stuck_start_ts_target: Optional[float] = None
-        shortage_start_ts_target: Optional[float] = None  # ✅ 추가
 
         while True:
-            rt = read_rate_or_abort()
+            rt = read_rate_or_abort(where="target_ramp")
 
             # target_rate의 하한(1 - tol)까지만 우선 도달시키고, 이후 fine tune
             if rt >= target_rate * (1.0 - rate_tol_ratio):
                 break
-
-            # ✅ material shortage guard (요구사항)
-            shortage_start_ts_target = _material_shortage_guard(rt, shortage_start_ts_target, where="target_ramp")
-
 
             # ✅ stuck guard: 특정 DAC 이상인데 rate가 거의 0이면, 무작정 DAC 올리지 말고 중단
             now = time.time()
@@ -801,7 +804,10 @@ class ProcessEngine:
 
             dac = min(dac_max, dac + ramp_step_dac)
             apply_dac()
-            self._emit_status(message=f"POWER RAMP UP (TARGET) / DAC={dac} / rate={rt:.3f}/{target_rate:.3f} Å/s")
+            self._emit_status(
+                message=f"POWER RAMP UP (TARGET) / DAC={dac} / rate={rt:.3f}/{target_rate:.3f} Å/s",
+                force=True,
+            )
             _ramp_sleep_by_dac(dac)
 
         # 6) target_rate ±5% band 안으로 fine tune
@@ -809,7 +815,7 @@ class ProcessEngine:
         t_tune0 = time.time()
         tune_timeout_s = float(meta.get("tune_timeout_s", 120.0) or 120.0)
         while True:
-            rt = read_rate_or_abort()
+            rt = read_rate_or_abort(where="fine_tune")
             if _in_band(rt, target_rate, tol_ratio=rate_tol_ratio):
                 break
 
@@ -839,7 +845,7 @@ class ProcessEngine:
             self._emit_status(message=f"SHUTTER DELAY / 0.00/{total_min:.2f} min", force=True)
 
             while True:
-                rt = read_rate_or_abort()
+                rt = read_rate_or_abort(where="shutter_delay")
 
                 # rate 급감 감지(셔터 열기 전)
                 if rt < target_rate * rate_drop_ratio:
@@ -891,16 +897,11 @@ class ProcessEngine:
         drop_hits = 0
         baseline_rate: float | None = None
 
-        shortage_start_ts_main: Optional[float] = None  # ✅ while 위에 추가(루프 들어가기 전)
-
         while True:
             self._check_stop_pause(recipe, step)
             self._tick_emit(recipe, step)
 
-            rt = read_rate_or_abort()
-
-            # ✅ material shortage guard (요구사항)
-            shortage_start_ts_main = _material_shortage_guard(rt, shortage_start_ts_main, where="main_process")
+            rt = read_rate_or_abort(where="main_process")
 
             th = read_th_or_abort()
 

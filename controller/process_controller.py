@@ -85,17 +85,24 @@ class ProcessController(QObject):
         except Exception:
             pass
 
-        # plc_service trace -> Process Window log
+        # --- PLC trace -> Process Window ---
         try:
             if hasattr(self.plc, "sig_cmd_trace"):
                 self.plc.sig_cmd_trace.connect(self._on_plc_cmd_trace)
         except Exception:
             pass
 
-        # stm_service trace -> Process Window log
+        # --- STM trace -> Process Window ---
         try:
             if self.stm is not None and hasattr(self.stm, "sig_io_trace"):
                 self.stm.sig_io_trace.connect(self._on_stm_io_trace)
+        except Exception:
+            pass
+
+        # --- ACS trace -> Process Window ---
+        try:
+            if self.acs is not None and hasattr(self.acs, "sig_io_trace"):
+                self.acs.sig_io_trace.connect(self._on_acs_io_trace)
         except Exception:
             pass
 
@@ -593,6 +600,28 @@ class ProcessController(QObject):
                 self.log.warn(msg, tag="STM", also_ui=True)
         except Exception:
             self.sig_ui_log.emit(f"[STM]{'[WARN]' if not ok else ''} {msg}")
+
+    def _on_acs_io_trace(self, obj: object) -> None:
+        try:
+            d = dict(obj or {})
+        except Exception:
+            return
+
+        ok = bool(d.get("ok", True))
+        token = str(d.get("token", "") or "")
+        detail = str(d.get("detail", "") or "")
+        tx = str(d.get("tx", "") or "")
+        rx = str(d.get("rx", "") or "")
+
+        # 기본은 token + detail 위주로 표시
+        msg = f"{token} {detail}".strip()
+        if not msg:
+            msg = f"TX={tx} | RX={rx}".strip()
+
+        if ok:
+            self.log.info(msg, tag="ACS", also_ui=True)
+        else:
+            self.log.warn(msg, tag="ACS", also_ui=True)
 
     # --------------------------------------------------------
     # UI log helpers

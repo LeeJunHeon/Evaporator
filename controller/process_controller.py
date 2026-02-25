@@ -92,10 +92,15 @@ class ProcessController(QObject):
         except Exception:
             pass
 
-        # --- STM trace -> Process Window ---
+        # --- STM trace/status/error -> Process Window ---
         try:
-            if self.stm is not None and hasattr(self.stm, "sig_io_trace"):
-                self.stm.sig_io_trace.connect(self._on_stm_io_trace)
+            if self.stm is not None:
+                if hasattr(self.stm, "sig_io_trace"):
+                    self.stm.sig_io_trace.connect(self._on_stm_io_trace)
+                if hasattr(self.stm, "sig_error"):
+                    self.stm.sig_error.connect(self._on_stm_error)
+                if hasattr(self.stm, "sig_connected"):
+                    self.stm.sig_connected.connect(self._on_stm_connected)
         except Exception:
             pass
 
@@ -601,6 +606,29 @@ class ProcessController(QObject):
                 self.log.warn(msg, tag="STM", also_ui=True)
         except Exception:
             self.sig_ui_log.emit(f"[STM]{'[WARN]' if not ok else ''} {msg}")
+
+    def _on_stm_connected(self, connected: bool) -> None:
+        """
+        STM 연결/해제 상태를 ProcessWindowLog에 남김.
+        """
+        try:
+            if connected:
+                self.log.info("connected", tag="STM", also_ui=True)
+            else:
+                self.log.warn("disconnected", tag="STM", also_ui=True)
+        except Exception:
+            self.sig_ui_log.emit(f"[STM]{' connected' if connected else ' disconnected'}")
+
+    def _on_stm_error(self, s: str) -> None:
+        """
+        STMService에서 올라오는 모든 오류를 ProcessWindowLog에 남김.
+        (poll 실패/재연결/SET 실패 등 포함)
+        """
+        msg = str(s)
+        try:
+            self.log.warn(msg, tag="STM", also_ui=True)
+        except Exception:
+            self.sig_ui_log.emit(f"[STM][WARN] {msg}")
 
     def _on_acs_io_trace(self, obj: object) -> None:
         try:

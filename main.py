@@ -334,10 +334,42 @@ class HmiWindow(QWidget):
         self._acs_service = acs_service
 
     def _set_process_controller_devices(self, stm: Any, acs: Any) -> None:
-        """ProcessController가 stm/acs를 참조한다면 여기서 갈아끼움."""
+        """
+        ProcessController가 stm/acs를 참조한다면 여기서 갈아끼움.
+
+        ✅ 목표:
+        - dep.rate/thickness 폴링(S/T)은 기존처럼 로그에서 제외
+        - 그 외 STM 명령(E/F/C/B/i/j/k...)은 ProcessWindowLog에 출력
+        - STM 연결/해제/오류도 ProcessWindowLog에 출력
+        """
         pc = self._process_controller
         if pc is None:
             return
+
+        # ---------- 1) 기존 STM 시그널 disconnect ----------
+        prev_stm = None
+        try:
+            prev_stm = getattr(pc, "stm", None) if hasattr(pc, "stm") else getattr(pc, "_stm", None)
+        except Exception:
+            prev_stm = None
+
+        if prev_stm is not None:
+            # io trace
+            if hasattr(prev_stm, "sig_io_trace") and hasattr(pc, "_on_stm_io_trace"):
+                with contextlib.suppress(Exception):
+                    prev_stm.sig_io_trace.disconnect(pc._on_stm_io_trace)
+
+            # error
+            if hasattr(prev_stm, "sig_error") and hasattr(pc, "_on_stm_error"):
+                with contextlib.suppress(Exception):
+                    prev_stm.sig_error.disconnect(pc._on_stm_error)
+
+            # connected
+            if hasattr(prev_stm, "sig_connected") and hasattr(pc, "_on_stm_connected"):
+                with contextlib.suppress(Exception):
+                    prev_stm.sig_connected.disconnect(pc._on_stm_connected)
+
+        # ---------- 2) 참조 교체 ----------
         for attr, val in (("stm", stm), ("acs", acs)):
             try:
                 if hasattr(pc, attr):
@@ -346,6 +378,20 @@ class HmiWindow(QWidget):
                     setattr(pc, f"_{attr}", val)
             except Exception:
                 pass
+
+        # ---------- 3) 새 STM 시그널 connect ----------
+        if stm is not None:
+            if hasattr(stm, "sig_io_trace") and hasattr(pc, "_on_stm_io_trace"):
+                with contextlib.suppress(Exception):
+                    stm.sig_io_trace.connect(pc._on_stm_io_trace)
+
+            if hasattr(stm, "sig_error") and hasattr(pc, "_on_stm_error"):
+                with contextlib.suppress(Exception):
+                    stm.sig_error.connect(pc._on_stm_error)
+
+            if hasattr(stm, "sig_connected") and hasattr(pc, "_on_stm_connected"):
+                with contextlib.suppress(Exception):
+                    stm.sig_connected.connect(pc._on_stm_connected)
 
     def open_config_dialog(self) -> None:
         """Config 팝업 → Save(=Accepted)면 즉시 장비 재연결 (기존 유지)"""
@@ -613,12 +659,10 @@ class ProcessWindow(QWidget):
             except Exception as e:
                 _append_text(self.ui.logWindow, f"[DEV][WARN] STM stop failed: {e!r}")
 
-        # ✅ 2) ProcessController에서 STM 참조만 끊는다(ACS는 유지)
+        # ✅ 2) ProcessController에서 STM 참조/시그널까지 정리(ACS는 유지)
         try:
-            pc = self._process_controller
-            if pc is not None:
-                if hasattr(pc, "stm"): setattr(pc, "stm", None)
-                if hasattr(pc, "_stm"): setattr(pc, "_stm", None)
+            if self.hmi_window is not None:
+                self.hmi_window._set_process_controller_devices(None, self._acs_service)
         except Exception:
             pass
 

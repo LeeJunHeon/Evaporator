@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import time
-from typing import Optional
+from typing import Optional, Callable, Any, Dict
 
 from utils.base_serial import BaseSerialDevice, SerialDeviceError
 
@@ -79,8 +79,18 @@ class ACS2000(BaseSerialDevice):
         reconnect_backoff_max_s: float = 5.0,
         **kwargs,
     ):
+        # ✅ (추가) 서비스가 주입하는 trace 콜백/옵션은 BaseSerialDevice로 넘기기 전에 pop
+        io_trace_cb = kwargs.pop("io_trace_cb", None)
+
         super().__init__(**kwargs)
         self._eom = _eom_bytes(eom)
+
+        # ✅ (추가) trace 콜백
+        self._io_trace_cb: Optional[Callable[[Dict[str, Any]], None]] = io_trace_cb
+
+        # ✅ (추가) “이전 로그값 대비 변화 시만” 찍기 위한 마지막 값
+        self._last_logged_pressure: Optional[float] = None
+        self._last_logged_con_status: Optional[int] = None
 
         # CR 뒤에 따라붙은 LF(또는 CR-only 응답에서 다음 프레임 첫 바이트)를 안전하게 처리하기 위한 프리패치
         self._rx_prefetch = bytearray()
@@ -156,6 +166,40 @@ class ACS2000(BaseSerialDevice):
         finally:
             ser.timeout = old_to
 
+    def _emit_io_trace(self, *, ok: bool, token: str, tx: str, rx: str = "", detail: str = "") -> None:
+        cb = getattr(self, "_io_trace_cb", None)
+        if not cb:
+            return
+        try:
+            cb({
+                "dev": "ACS2000",
+                "ok": bool(ok),
+                "token": str(token),
+                "tx": str(tx),
+                "rx": str(rx),
+                "detail": str(detail),
+                "ts": time.time(),
+            })
+        except Exception:
+            pass
+
+    def _emit_pressure_if_changed(self, *, pressure: float, source: str, raw: str, tx: str) -> None:
+        """
+        ✅ ‘이전 로그에 찍힌 압력값’과 달라졌을 때만 로그(trace) emit
+        - 요구사항 그대로: 20% 같은 임계치 없이 “값이 바뀌면”
+        """
+        try:
+            p = float(pressure)
+        except Exception:
+            return
+
+        last = getattr(self, "_last_logged_pressure", None)
+        if last is not None and p == last:
+            return
+
+        self._last_logged_pressure = p
+        self._emit_io_trace(ok=True, token=f"{source}_PRESSURE", tx=tx, rx=raw, detail=f"pressure={p}")
+
     # -------------------------
     # TX/RX
     # -------------------------
@@ -167,6 +211,10 @@ class ACS2000(BaseSerialDevice):
             raise ValueError("ACS2000 payload must start with '$'")
 
         tx = payload_no_eom.encode("ascii", errors="replace") + self._eom
+
+        token = payload_no_eom.strip()
+        token = token[1:] if token.startswith("$") else token
+        token = token.split(",", 1)[0].strip().upper()
 
         # ✅ 연결 보장(서비스가 connect 해도 안전하게 한번 더)
         if not self.is_connected:
@@ -191,6 +239,7 @@ class ACS2000(BaseSerialDevice):
             rx = self._read_until_cr_unlocked(timeout_s=rx_timeout_s)
 
         if not rx:
+            self._emit_io_trace(ok=False, token=token, tx=payload_no_eom, rx="", detail="no response")
             raise ACS2000ProtocolError(f"no response for '{payload_no_eom}'")
 
         reply = rx.decode("ascii", errors="replace").strip()
@@ -198,7 +247,11 @@ class ACS2000(BaseSerialDevice):
         # ✅ ERR 응답은 정상으로 취급하지 않음
         err_code = _extract_err_code(reply)
         if err_code is not None:
+            self._emit_io_trace(ok=False, token=token, tx=payload_no_eom, rx=reply, detail=f"ERR code={err_code}")
             raise ACS2000ProtocolError(f"ACS2000 error reply: {reply} (code={err_code})")
+        
+        if token != "PRD":
+            self._emit_io_trace(ok=True, token=token, tx=payload_no_eom, rx=reply, detail="")
 
         return reply
     
@@ -311,7 +364,10 @@ class ACS2000(BaseSerialDevice):
         cand = tokens[-1] if tokens else s
 
         try:
-            return float(cand)
+            p = float(cand)
+            # ✅ 변화 있을 때만 로그
+            self._emit_pressure_if_changed(pressure=p, source="PRD", raw=raw, tx=payload)
+            return p
         except ValueError:
             for t in reversed(s.replace(",", " ").split()):
                 try:
@@ -341,13 +397,40 @@ class ACS2000(BaseSerialDevice):
             with self._lock:
                 rx = self._read_until_cr_unlocked(timeout_s=timeout_s)
             if not rx:
+                self._emit_io_trace(ok=False, token="CON_STREAM", tx="$CON_STREAM", rx="", detail="timeout/no data")
                 raise ACS2000ProtocolError("stream timeout/no data")
             line = rx.decode("ascii", errors="replace").strip()
 
             # 스트림에서도 ERR이 올 가능성 대비
             err_code = _extract_err_code(line)
             if err_code is not None:
+                self._emit_io_trace(ok=False, token="CON_STREAM", tx="$CON_STREAM", rx=line, detail=f"ERR code={err_code}")
                 raise ACS2000ProtocolError(f"ACS2000 stream ERR: {line} (code={err_code})")
+            
+            # ✅ 정상 CON 라인: status/pressure 변화 기반 로그
+            try:
+                b, p = self.parse_con_line(line)
+
+                # status!=0이면(Or/Ur/NoGauge 등) 상태 에러는 “변화 시만” 로그
+                if b != 0:
+                    last_b = getattr(self, "_last_logged_con_status", None)
+                    if last_b is None or last_b != b:
+                        self._last_logged_con_status = b
+                        self._emit_io_trace(
+                            ok=False,
+                            token="CON_STATUS",
+                            tx="$CON_STREAM",
+                            rx=line,
+                            detail=f"status={b} ({CON_STATUS_MAP.get(b, '?')})",
+                        )
+                else:
+                    self._last_logged_con_status = 0
+                    if p is not None:
+                        # ✅ pressure는 “값이 바뀌면만”
+                        self._emit_pressure_if_changed(pressure=p, source="CON", raw=line, tx="$CON_STREAM")
+            except Exception:
+                # 파싱 실패는 일단 무시(원하면 여기서 ok=False trace로 올려도 됨)
+                pass
 
             return line
 

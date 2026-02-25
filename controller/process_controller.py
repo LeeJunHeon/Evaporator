@@ -266,7 +266,12 @@ class ProcessController(QObject):
 
         # 4) FTM ON + 1.5초 대기
         steps.append(ProcessStep(name="FTM_ON", type=StepType.PLC_WRITE_COIL, coil="FTM_SW", on=True))
-        steps.append(ProcessStep(name="WAIT_FTM_STM", type=StepType.WAIT_SECONDS, seconds=float(meta["wait_after_ftm_on_s"])))
+        steps.append(ProcessStep(
+            name="WAIT_FTM_STM",
+            type=StepType.WAIT_SECONDS,
+            seconds=float(meta["wait_after_ftm_on_s"]),
+            message="FTM/STM 안정화 대기",  # ✅ 상단 상태창에 이 문구가 그대로 표시됨
+        ))
 
         # 5) deposition 제어(엔진 내부 루프)
         steps.append(ProcessStep(name="EVAP_DEPOSITION_CONTROL", type=StepType.MARK, meta=meta))

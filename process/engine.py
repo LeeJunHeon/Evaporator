@@ -23,6 +23,7 @@ from __future__ import annotations
 import contextlib
 import time
 import uuid
+import math
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional, Tuple
 
@@ -751,9 +752,10 @@ class ProcessEngine:
                 if now_m >= next_ui_m:
                     self._emit_status(
                         message=(
-                            f"EVAP pre_hold({pre_hold_mode}) / remain {remain_s:.0f}s "
-                            f"/ DAC={dac} / rate={rt:.3f}/{pre_rate:.3f} Å/s"
+                            f"EVAP PRE 안정화 대기({pre_hold_mode}) | 남은시간 {self._fmt_hms(remain_s, ceil=True)} | "
+                            f"DAC={dac} | rate {rt:.3f}/{pre_rate:.3f} Å/s"
                         ),
+                        force=True,  # ✅ interval 때문에 스킵되지 않게 강제 갱신
                     )
                     next_ui_m = now_m + 1.0
 
@@ -1155,17 +1157,24 @@ class ProcessEngine:
             if remain_s <= 0:
                 # 마지막 1회 표시(완료 직전 상태)
                 if total_s > 0:
+                    prefix = (str(getattr(step, "message", "") or "").strip()) or (step.name or "WAIT")
                     self._emit_status(
-                        message=f"WAIT {total_s:.1f}s / {total_s:.1f}s elapsed (remain 0.0s)",
+                        message=f"{prefix} | 남은시간 00:00 (완료)",
                         force=True,
                     )
                 return
+
+            # ✅ 표시 제목: step.message가 있으면 그것을 우선 사용(“텍스트 직접 지정” 지원)
+            prefix = (str(getattr(step, "message", "") or "").strip()) or (step.name or "WAIT")
 
             # 1초마다 표시
             if now_m >= next_ui_m:
                 elapsed_s = now_m - start_m
                 self._emit_status(
-                    message=f"WAIT {total_s:.1f}s / {elapsed_s:.1f}s elapsed (remain {remain_s:.1f}s)",
+                    message=(
+                        f"{prefix} | 남은시간 {self._fmt_hms(remain_s, ceil=True)} "
+                        f"(경과 {self._fmt_hms(elapsed_s)} / 총 {self._fmt_hms(total_s)})"
+                    ),
                     force=True,
                 )
                 next_ui_m = now_m + 1.0
@@ -1235,7 +1244,8 @@ class ProcessEngine:
                 if step.stable_s is None or (now_m - stable_start_m) >= float(step.stable_s):
                     # 마지막 1회 표시(성공)
                     elapsed_s = now_m - start_m
-                    self._emit_status(message=f"WAIT {cond_desc} / {elapsed_s:.1f}s elapsed (done)", force=True)
+                    prefix = (str(getattr(step, "message", "") or "").strip()) or f"대기: {cond_desc}"
+                    self._emit_status(message=f"{prefix} | 조건 만족 (경과 {self._fmt_hms(elapsed_s)})", force=True)
                     return
             else:
                 stable_start_m = None
@@ -1243,11 +1253,19 @@ class ProcessEngine:
             # UI 표시(조건/경과/남은)
             if now_m >= next_ui_m:
                 elapsed_s = now_m - start_m
+                # ✅ 표시 제목: step.message가 있으면 그것을 우선 사용(“텍스트 직접 지정” 지원)
+                prefix = (str(getattr(step, "message", "") or "").strip())
+                if not prefix:
+                    # 기본값(기존 cond_desc는 유지하되, 사용자 지정 메시지가 있으면 그게 우선)
+                    prefix = f"대기: {cond_desc}"
+
                 if deadline_m is None:
-                    remain_part = "remain ∞"
+                    remain_txt = "∞"
                 else:
                     remain_s = max(0.0, deadline_m - now_m)
-                    remain_part = f"remain {remain_s:.1f}s"
+                    remain_txt = self._fmt_hms(remain_s, ceil=True)
+
+                elapsed_txt = self._fmt_hms(elapsed_s)
 
                 extra_parts = []
 
@@ -1268,7 +1286,7 @@ class ProcessEngine:
 
                 extra = (" / " + " / ".join(extra_parts)) if extra_parts else ""
                 self._emit_status(
-                    message=f"WAIT {cond_desc} / {elapsed_s:.1f}s elapsed ({remain_part}){extra}",
+                    message=f"{prefix} | 남은시간 {remain_txt} (경과 {elapsed_txt}){extra}",
                     force=True,
                 )
                 next_ui_m = now_m + 1.0
@@ -1590,6 +1608,22 @@ class ProcessEngine:
             })
         except Exception:
             pass
+
+    @staticmethod
+    def _fmt_hms(sec: float, *, ceil: bool = False) -> str:
+        """
+        초(sec)를 'MM:SS' 또는 'H:MM:SS'로 변환.
+        - remain(남은시간)은 ceil=True 권장(0이 너무 빨리 뜨는 것 방지)
+        """
+        x = float(sec)
+        if ceil:
+            total = int(max(0, math.ceil(x)))
+        else:
+            total = int(max(0, x))
+
+        h, rem = divmod(total, 3600)
+        m, s = divmod(rem, 60)
+        return f"{h:d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
 
     # --------------------------------------------------------
     # Utilities

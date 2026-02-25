@@ -85,6 +85,7 @@ class STMServiceWorker(QThread):
     sig_thickness = Signal(object)  # float|None
     sig_rate = Signal(object)       # float|None
     sig_snapshot = Signal(object)   # STMSnapshot
+    sig_io_trace = Signal(object)   # ✅ {"dev":"STM100","ok":bool,"tx":str,"rx":str,"detail":str,"ts":float}
 
     def __init__(
         self,
@@ -283,6 +284,10 @@ class STMServiceWorker(QThread):
             reconnect_backoff_base_s=float(pol["reconnect_backoff_base_s"]),
             reconnect_backoff_factor=float(pol["reconnect_backoff_factor"]),
             reconnect_backoff_max_s=float(pol["reconnect_backoff_max_s"]),
+
+            # ✅ STM100 통신(TX/RX) trace를 서비스로 전달
+            io_trace_cb=self._on_stm_io_trace,
+            io_trace_skip_tokens={"S", "T"},   # (stm100.py 기본도 S/T skip이지만, 여기서도 명시)
         )
 
     def _safe_close(self) -> None:
@@ -293,6 +298,19 @@ class STMServiceWorker(QThread):
         except Exception:
             pass
         self._stm = None
+
+    def _on_stm_io_trace(self, d: dict) -> None:
+        """
+        devices/stm100.py에서 io_trace_cb로 올라오는 통신 trace를
+        STMServiceWorker 시그널로 밖으로 전달.
+        """
+        try:
+            d2 = dict(d or {})
+            d2.setdefault("dev", "STM100")
+            d2.setdefault("ts", time.time())
+            self.sig_io_trace.emit(d2)
+        except Exception:
+            pass
 
     def _set_connected(self, v: bool) -> None:
         v = bool(v)
@@ -505,6 +523,7 @@ class STMService(QObject):
     sig_thickness = Signal(object)
     sig_rate = Signal(object)
     sig_snapshot = Signal(object)
+    sig_io_trace = Signal(object)   # ✅ STM100 TX/RX trace
 
     def __init__(
         self,
@@ -529,6 +548,7 @@ class STMService(QObject):
         self._worker.sig_thickness.connect(self.sig_thickness)
         self._worker.sig_rate.connect(self.sig_rate)
         self._worker.sig_snapshot.connect(self.sig_snapshot)
+        self._worker.sig_io_trace.connect(self.sig_io_trace)  # ✅ 추가
 
     def start(self) -> None:
         if not self._worker.isRunning():

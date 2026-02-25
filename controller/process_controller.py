@@ -85,6 +85,13 @@ class ProcessController(QObject):
         except Exception:
             pass
 
+        # plc_service trace -> Process Window log
+        try:
+            if hasattr(self.plc, "sig_cmd_trace"):
+                self.plc.sig_cmd_trace.connect(self._on_plc_cmd_trace)
+        except Exception:
+            pass
+
     # --------------------------------------------------------
     # Recipe I/O
     # --------------------------------------------------------
@@ -509,6 +516,46 @@ class ProcessController(QObject):
             })
         except Exception:
             pass
+
+    def _on_plc_cmd_trace(self, obj: object) -> None:
+        try:
+            d = dict(obj or {})
+        except Exception:
+            return
+
+        ok = bool(d.get("ok", True))
+        cmd = str(d.get("event", "") or "")
+        target = str(d.get("target", "") or "")
+        value = d.get("value", "")
+        tag = str(d.get("tag", "") or "")
+        detail = str(d.get("detail", "") or "")
+
+        # Cmd 이름 -> 사람이 보기 좋은 event명으로 변환(원하면 그대로 CmdWriteCoil로 찍어도 됨)
+        event = cmd
+        if cmd == "CmdWriteCoil":
+            event = "PULSE_COIL" if ("pulse_ms" in detail or "momentary=1" in detail) else "WRITE_COIL"
+            if isinstance(value, bool):
+                value = int(value)
+        elif cmd == "CmdWriteReg":
+            tu = target.upper()
+            event = "SET_DAC" if tu in ("DAC_POWER_1", "DAC_POWER_2") else "WRITE_REG"
+        elif cmd == "CmdSetDacCurrent":
+            event = "SET_DAC_MA"
+
+        prefix = f"{tag} " if tag else ""
+        msg = f"{prefix}{event} {target} = {value}"
+        if detail:
+            msg += f" ({detail})"
+
+        # ✅ Process Window에 출력
+        try:
+            if ok:
+                self.log.info(msg, tag="PLC", also_ui=True)
+            else:
+                self.log.warn(msg, tag="PLC", also_ui=True)
+        except Exception:
+            # fallback
+            self.sig_ui_log.emit(f"[PLC]{'[WARN]' if not ok else ''} {msg}")
 
     # --------------------------------------------------------
     # UI log helpers

@@ -442,17 +442,40 @@ class PlcServiceWorker(QThread):
                 # 명령 실패는 “즉시 재연결” 트리거
                 raise PLCCommandError(f"cmd failed, will retry after reconnect: {cmd!r} ({e!r})")
 
-            # ✅ 재시도 소진: 그때만 future에 예외 확정
-            if self._retry_cmd is cmd:
-                self._retry_cmd = None
+            # ✅ 최종 실패 trace (재시도 소진)
+            try:
+                target = getattr(cmd, "coil_name", getattr(cmd, "reg_name", getattr(cmd, "ch", "")))
+                value  = getattr(cmd, "on", getattr(cmd, "value", getattr(cmd, "ma", "")))
+                detail = ""
 
-            if cmd.reply is not None:
-                try:
-                    cmd.reply.set_exception(e)
-                except Exception:
-                    pass
+                # CmdSetDacCurrent: target 보정
+                if isinstance(cmd, CmdSetDacCurrent):
+                    target = f"DAC_CH{int(cmd.ch)}"
 
-            raise PLCCommandError(f"cmd failed (no retries left): {cmd!r} ({e!r})")
+                # 펄스 코일이면 pulse_ms 표시(성공 trace와 동일 규칙)
+                if isinstance(cmd, CmdWriteCoil) and cmd.pulse_ms is not None:
+                    if cmd.momentary:
+                        detail = f"momentary=1,pulse_ms={int(cmd.pulse_ms)}"
+                    else:
+                        detail = f"pulse_ms={int(cmd.pulse_ms)}"
+
+                # 실패 이유 추가
+                if detail:
+                    detail = f"{detail} | ERR={e!r}"
+                else:
+                    detail = f"ERR={e!r}"
+
+                self.sig_cmd_trace.emit({
+                    "ok": False,
+                    "event": type(cmd).__name__,
+                    "target": target,
+                    "value": value,
+                    "tag": getattr(cmd, "tag", ""),
+                    "detail": detail,
+                    "result": None,
+                })
+            except Exception:
+                pass
         
 
     async def _sleep_with_command_break(self, plc: AsyncPLC, seconds: float) -> None:

@@ -98,6 +98,12 @@ def _dt_str(ts: Optional[float] = None) -> str:
     return dt.strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _time_str(ts: Optional[float] = None) -> str:
+    # ✅ CSV 텔레메트리용: 시간만 저장
+    dt = datetime.fromtimestamp(_now_ts(ts))
+    return dt.strftime("%H:%M:%S")
+
+
 def _date_dir(ts: Optional[float] = None) -> str:
     dt = datetime.fromtimestamp(_now_ts(ts))
     return dt.strftime("%Y-%m-%d")
@@ -482,7 +488,11 @@ class LogWriterWorker(QThread):
         # 1) time (t -> time 흡수)
         if "time" not in row2 and "t" in row2:
             row2["time"] = row2.pop("t")
-        row2.setdefault("time", _dt_str(now_ts))
+        row2.setdefault("time", _time_str(now_ts))
+
+        # ✅ 들어오는 time 값이 "YYYY-MM-DD HH:MM:SS" 형태여도 시간만 남김
+        if isinstance(row2.get("time"), str):
+            row2["time"] = row2["time"].strip().split()[-1][:8]
 
         # 2) elapsed_sec (elapsed_s -> elapsed_sec 흡수)
         if "elapsed_sec" not in row2:

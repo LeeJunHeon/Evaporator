@@ -1115,6 +1115,23 @@ def main():
     plc_binder.start()
     app.aboutToQuit.connect(plc_binder.stop)
 
+    # ✅ HMI 로그는 PLC binder가 찍는 포맷([HH:MM:SS] ...)으로 통일
+    def _hmi_log(msg: object) -> None:
+        s = str(msg).rstrip('\n')
+        # 1) 가능하면 HmiPlcBinder의 로그 포맷/스크롤 정책을 그대로 사용
+        try:
+            fn = getattr(plc_binder, '_set_hmi_log', None)
+            if callable(fn):
+                fn(s)
+                return
+        except Exception:
+            pass
+        # 2) fallback: 시간 프리픽스만 붙여서 직접 append
+        try:
+            _append_text(getattr(hmi.ui, 'hmiLogWindow', None), f"[{time.strftime('%H:%M:%S')}] {s}")
+        except Exception:
+            pass
+
     # ✅ STM은 Start에서(FTM ON 후) 연결한다.
     stm_service: Any = None
 
@@ -1169,12 +1186,12 @@ def main():
 
         acs_service.sig_pressure.connect(_update_pressure)
         acs_service.sig_connected.connect(_acs_connected)
-        acs_service.sig_error.connect(lambda s: _append_text(getattr(hmi.ui, "hmiLogWindow", None), s))
+        acs_service.sig_error.connect(_hmi_log)
 
         acs_service.start()
     except Exception as e:
         acs_service = None
-        _append_text(getattr(hmi.ui, "hmiLogWindow", None), f"[BOOT][WARN] ACSService init failed: {e!r}")
+        _hmi_log(f"[BOOT][WARN] ACSService init failed: {e!r}")
 
     # ------------------------------
     # LogService (신규)
@@ -1203,7 +1220,7 @@ def main():
         )
     except Exception as e:
         process_controller = None
-        _append_text(getattr(hmi.ui, "hmiLogWindow", None), f"[BOOT][WARN] ProcessController init failed: {e!r}")
+        _hmi_log(f"[BOOT][WARN] ProcessController init failed: {e!r}")
 
     # 종료 시 신규 서비스 정리
     def _shutdown_new_services() -> None:

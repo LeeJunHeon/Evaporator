@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import time
+import re
 from dataclasses import dataclass
 from typing import Optional, Tuple, Callable, Set, Any
 
@@ -35,6 +36,9 @@ _CODE_MEANING = {
     "J": "Illegal Command Modifier (No reset)",
     "K": "Illegal Command Modifier (Power lost flag set)",
 }
+
+_UNAVAILABLE_MARKERS = {"--------", "---------", "N/A", "NA"}
+_INT_RE = re.compile(r"^[+-]?\d+$")
 
 
 def _fmt_compact_float(x: float, *, max_decimals: int = 3) -> str:
@@ -316,9 +320,25 @@ class STM100(BaseSerialDevice):
         return self.command("@")
 
     def get_thickness_angstrom(self) -> float:
-        # S -> "-0001595" 같은 정수 문자열
+        """
+        S : thickness value (Å)
+        - 정상 예: "-0001595" 같은 정수 문자열
+        - 간헐적으로 '' 또는 '--------' 같은 “측정 불가/응답 불완전”이 올 수 있어 방어 처리
+        """
         s = self.command("S")
-        return float(int(s))
+        ss = (s or "").strip()
+
+        if not ss:
+            raise STM100ProtocolError("STM-100: empty thickness response")
+        if ss in _UNAVAILABLE_MARKERS or set(ss) == {"-"}:
+            raise STM100ProtocolError(f"STM-100: thickness unavailable: {s!r}")
+        if not _INT_RE.fullmatch(ss):
+            raise STM100ProtocolError(f"STM-100: invalid thickness response: {s!r}")
+
+        try:
+            return float(int(ss))
+        except ValueError as e:
+            raise STM100ProtocolError(f"STM-100: invalid thickness response: {s!r}") from e
     
     def get_rate_angstrom_per_s(self) -> float:
         """
@@ -326,13 +346,38 @@ class STM100(BaseSerialDevice):
         메뉴얼 형식: leading space 또는 '-' + NNN.N 형태가 흔함.
         command()는 body를 strip하므로 float 변환만 안정적으로 처리.
         """
-        s = self.command("T")  # body(str), strip됨
-        if not s:
+        s = self.command("T")
+        ss = (s or "").strip()
+        if not ss:
             raise STM100ProtocolError("STM-100: empty rate response")
+        if ss in _UNAVAILABLE_MARKERS or set(ss) == {"-"}:
+            raise STM100ProtocolError(f"STM-100: rate unavailable: {s!r}")
         try:
-            return float(s)
+            return float(ss)
         except ValueError as e:
             raise STM100ProtocolError(f"STM-100: invalid rate response: {s!r}") from e
+        
+    def ack_power_failure_flag(self) -> None:
+        """
+        L : Acknowledge "B" response (power lost flag reset)
+        - 응답 코드가 B로 계속 오는 상황을 정리하기 위한 용도
+        """
+        self.command("L")
+
+    def get_crystal_fail_status(self) -> bool:
+        """
+        M : Get the Crystal Fail Status
+        - '@' : crystal good
+        - '!' : crystal fail
+        반환: True=정상, False=Fail
+        """
+        s = self.command("M")
+        ss = (s or "").strip()
+        if ss == "@":
+            return True
+        if ss == "!":
+            return False
+        raise STM100ProtocolError(f"STM-100: invalid crystal status: {s!r}")
 
     # ------------------------------------------------------------
     # Film parameter / Zero helpers (필수: density, z-factor, zero)
@@ -428,8 +473,17 @@ class STM100(BaseSerialDevice):
             raise ValueError("film_no must be 1..9")
         cmd = f"j{n}?"
         _ensure_cmd_len(cmd)
+
         s = self.query_text(cmd)
-        return float(s)
+        ss = (s or "").strip()
+        if not ss:
+            raise STM100ProtocolError("STM-100: empty film density response")
+        if ss in _UNAVAILABLE_MARKERS or set(ss) == {"-"}:
+            raise STM100ProtocolError(f"STM-100: film density unavailable: {s!r}")
+        try:
+            return float(ss)
+        except ValueError as e:
+            raise STM100ProtocolError(f"STM-100: invalid film density response: {s!r}") from e
 
     def set_film_z_factor(self, film_no: int, z: float) -> None:
         """
@@ -456,8 +510,17 @@ class STM100(BaseSerialDevice):
             raise ValueError("film_no must be 1..9")
         cmd = f"k{n}?"
         _ensure_cmd_len(cmd)
+
         s = self.query_text(cmd)
-        return float(s)
+        ss = (s or "").strip()
+        if not ss:
+            raise STM100ProtocolError("STM-100: empty film z-factor response")
+        if ss in _UNAVAILABLE_MARKERS or set(ss) == {"-"}:
+            raise STM100ProtocolError(f"STM-100: film z-factor unavailable: {s!r}")
+        try:
+            return float(ss)
+        except ValueError as e:
+            raise STM100ProtocolError(f"STM-100: invalid film z-factor response: {s!r}") from e
 
     def apply_material_params(
         self,

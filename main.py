@@ -6,6 +6,7 @@ import sys
 import time
 import contextlib
 import re                      # ✅ 추가
+import warnings                # ✅ 추가: disconnect 경고 억제용(안전장치)
 from uuid import uuid4          # ✅ 추가
 from datetime import datetime
 from pathlib import Path
@@ -507,6 +508,10 @@ class ProcessWindow(QWidget):
         self._stm_service: Any = None
         self._acs_service: Any = None
 
+        # ✅ UI에 "실제로 connect된 STM 인스턴스" 추적용(경고/중복 connect 방지)
+        self._stm_ui_bound: bool = False
+        self._stm_ui_stm: Any = None
+
         self._material_1 = None
         self._material_2 = None
 
@@ -573,17 +578,58 @@ class ProcessWindow(QWidget):
         self.hmi_window.activateWindow()
 
     def _bind_stm_ui(self, stm):
+        """
+        ✅ 핵심: disconnect는 '현재 self._stm_service'가 아니라
+                '실제로 UI에 connect 되었던 STM 인스턴스'에서만 해야 한다.
+        """
+        if stm is None:
+            self._unbind_stm_ui()
+            return
+
+        # 이미 같은 stm에 바인딩되어 있으면 중복 connect 방지
+        if self._stm_ui_bound and (self._stm_ui_stm is stm):
+            return
+
+        # 이전에 UI에 연결돼 있던 stm만 정확히 해제
         self._unbind_stm_ui()
+
+        # 새 stm에 연결
         stm.sig_rate.connect(self._on_stm_rate)
         stm.sig_thickness.connect(self._on_stm_thickness)
 
+        # 바인딩 상태 기록
+        self._stm_ui_stm = stm
+        self._stm_ui_bound = True
+
+
     def _unbind_stm_ui(self):
-        if not self._stm_service:
+        """
+        ✅ '연결했던 적이 없는 객체'에서 disconnect를 시도하면
+        Failed to disconnect RuntimeWarning이 뜬다.
+        ✅ 그래서: UI에 연결했던 stm을 따로 기억해두고 그 stm만 disconnect한다.
+        """
+        stm = self._stm_ui_stm
+        if (not self._stm_ui_bound) or (stm is None):
+            self._stm_ui_stm = None
+            self._stm_ui_bound = False
             return
-        try: self._stm_service.sig_rate.disconnect(self._on_stm_rate)
-        except: pass
-        try: self._stm_service.sig_thickness.disconnect(self._on_stm_thickness)
-        except: pass
+
+        # 안전장치: PySide가 disconnect 실패를 RuntimeWarning으로 찍는 경우까지 억제
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+
+            try:
+                stm.sig_rate.disconnect(self._on_stm_rate)
+            except Exception:
+                pass
+
+            try:
+                stm.sig_thickness.disconnect(self._on_stm_thickness)
+            except Exception:
+                pass
+
+        self._stm_ui_stm = None
+        self._stm_ui_bound = False
 
     def _on_stm_rate(self, rate):
         # ✅ 값만 저장 (UI/그래프는 1초 타이머에서)

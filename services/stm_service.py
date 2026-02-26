@@ -26,7 +26,7 @@ from concurrent.futures import Future
 from PySide6.QtCore import QObject, QThread, Signal
 
 from config.serial_config import load_settings
-from devices.stm100 import STM100, STM100ProtocolError
+from devices.stm100 import STM100, STM100ProtocolError, STM100ValueUnavailableError
 
 
 # ============================================================
@@ -485,8 +485,10 @@ class STMServiceWorker(QThread):
             return True
 
         except Exception as e:
-            # ✅ 측정불가(예: '', '--------')는 "연결 실패"로 누적하지 않음
-            if not isinstance(e, STM100ProtocolError):
+            # ✅ '값 자체가 없음'만 fail 누적 제외
+            if isinstance(e, STM100ValueUnavailableError):
+                pass
+            else:
                 self._fail_count += 1
 
             self.sig_error.emit(f"[STMService] poll failed: {e!r} (fail={self._fail_count})")

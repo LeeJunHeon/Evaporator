@@ -13,6 +13,10 @@ class STM100ProtocolError(SerialDeviceError):
     """프레임/체크섬/응답코드 등 STM-100 프로토콜 레벨 오류"""
 
 
+class STM100ValueUnavailableError(STM100ProtocolError):
+    """측정 불가/빈값/-------- 등 '값 자체가 없는' 케이스(통신 단절과 구분)"""
+
+
 class STM100CommandError(SerialDeviceError):
     """STM-100이 '정상(A/B)'이 아닌 응답코드를 반환했을 때"""
 
@@ -354,9 +358,9 @@ class STM100(BaseSerialDevice):
         ss = (s or "").strip()
 
         if not ss:
-            raise STM100ProtocolError("STM-100: empty thickness response")
+            raise STM100ValueUnavailableError("STM-100: empty thickness response")
         if ss in _UNAVAILABLE_MARKERS or set(ss) == {"-"}:
-            raise STM100ProtocolError(f"STM-100: thickness unavailable: {s!r}")
+            raise STM100ValueUnavailableError(f"STM-100: thickness unavailable: {s!r}")
         if not _INT_RE.fullmatch(ss):
             raise STM100ProtocolError(f"STM-100: invalid thickness response: {s!r}")
 

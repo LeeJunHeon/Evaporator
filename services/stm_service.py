@@ -67,6 +67,15 @@ class _CmdZeroThickness:
     future: Future
 
 
+@dataclass(frozen=True)
+class _CmdReadCrystalHealth:
+    """
+    공정 시작 전 점검용: LIFE(%)/FREQ(Hz)/CRYSTAL FAIL 상태를 한 번에 읽는다.
+    결과는 devices/stm100.py의 get_crystal_health_snapshot() dict 그대로 반환.
+    """
+    future: Future
+
+
 # ============================================================
 # Worker Thread
 # ============================================================
@@ -166,6 +175,17 @@ class STMServiceWorker(QThread):
             fut.set_exception(e)
         return fut
 
+    def request_read_crystal_health(self) -> Future:
+        """
+        공정 시작 전 점검용: 워커 스레드에서만 STM100을 만지도록 Future 기반으로 읽기 요청
+        """
+        fut: Future = Future()
+        try:
+            self._cmd_q.put_nowait(_CmdReadCrystalHealth(future=fut))
+        except Exception as e:
+            fut.set_exception(e)
+        return fut
+
     def get_last_snapshot(self) -> Optional[STMSnapshot]:
         return self._last_snapshot
 
@@ -219,7 +239,14 @@ class STMServiceWorker(QThread):
                     pass
                 continue
 
-            # _CmdReload 등은 Future가 없으니 무시
+            if isinstance(cmd, _CmdReadCrystalHealth):
+                fut = cmd.future
+                try:
+                    if fut is not None and not fut.done():
+                        fut.set_exception(RuntimeError(reason))
+                except Exception:
+                    pass
+                continue
 
     def _load_io_policy_from_ini(self) -> Dict[str, Any]:
         """
@@ -408,6 +435,32 @@ class STMServiceWorker(QThread):
                     self._safe_close()
                     self._set_connected(False)
                     self._next_try = time.time() + self._reconnect_interval_s
+                continue
+
+            if isinstance(cmd, _CmdReadCrystalHealth):
+                fut = cmd.future
+                try:
+                    self._ensure_connected_for_cmd()
+                    assert self._stm is not None
+
+                    # ✅ devices/stm100.py에 추가한 스냅샷 API 사용
+                    snap = self._stm.get_crystal_health_snapshot()
+
+                    fut.set_result(snap)
+
+                except Exception as e:
+                    try:
+                        fut.set_exception(e)
+                    except Exception:
+                        pass
+
+                    self.sig_error.emit(f"[STMService] read_crystal_health failed: {e!r}")
+
+                    # 끊김/오류로 보고 재연결 사이클로
+                    self._safe_close()
+                    self._set_connected(False)
+                    self._next_try = time.time() + self._reconnect_interval_s
+
                 continue
 
     def _try_connect(self, now: float) -> None:
@@ -643,4 +696,15 @@ class STMService(QObject):
             fut.set_exception(RuntimeError("STMService is not running"))
             return fut
         return self._worker.request_zero_thickness(mode=mode)
+
+
+    def submit_read_crystal_health(self) -> Future:
+        """
+        공정 시작 전 점검용: LIFE(%)/FREQ(Hz)/CRYSTAL FAIL snapshot을 Future로 반환
+        """
+        if not self.is_running():
+            fut: Future = Future()
+            fut.set_exception(RuntimeError("STMService is not running"))
+            return fut
+        return self._worker.request_read_crystal_health()
 

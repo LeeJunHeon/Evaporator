@@ -1148,19 +1148,21 @@ class ProcessWindow(QWidget):
 
     def _apply_material(self, channel: int, data: dict[str, Any]) -> None:
         mat = str(data.get("material", "")).strip()
-        den = data.get("density_g_cm3")
-        z = data.get("z_factor")
+
+        # ✅ None/"" 방어 + 문자열 숫자도 허용
+        den = float(data.get("density_g_cm3") or 0.0)
+        z = float(data.get("z_factor") or 0.0)
 
         if channel == 1:
             self._material_1 = dict(data)
             self.ui.materialEdit.setText(mat or "Select")
-            self.ui.materialDensityEdit1.setText(f"{float(den):.4f}")
-            self.ui.materialZfactorEdit1.setText(f"{float(z):.4f}")
+            self.ui.materialDensityEdit1.setText(f"{den:.4f}")
+            self.ui.materialZfactorEdit1.setText(f"{z:.4f}")
         else:
             self._material_2 = dict(data)
             self.ui.materialEdit2.setText(mat or "Select")
-            self.ui.materialDensityEdit2.setText(f"{float(den):.4f}")
-            self.ui.materialZfactorEdit2.setText(f"{float(z):.4f}")
+            self.ui.materialDensityEdit2.setText(f"{den:.4f}")
+            self.ui.materialZfactorEdit2.setText(f"{z:.4f}")
 
     # ================== 그래프 설정 ==================
     def _init_rt_plot(self) -> None:

@@ -251,6 +251,11 @@ class ProcessController(QObject):
             "stuck_rate_abs": 0.05,
             "stuck_time_s": 60.0,
 
+            # ✅ (추가) material shortage 기본값 (ramp_cfg 없을 때도 기본 동작 유지)
+            "material_shortage_dac": 2000,
+            "material_shortage_rate_max": 0.0,
+            "material_shortage_time_s": 10.0,
+
             # --- shutter delay 후 STM zero 모드 ---
             "zero_mode": "B",
 
@@ -260,6 +265,46 @@ class ProcessController(QObject):
             # ✅ 셔터 리스트만
             "source_shutter_coils": source_shutter_coils,
         }
+
+        # ✅ (추가) main.py에서 전달된 material별 ramp 파라미터를 meta에 반영
+        # - ramp_cfg가 없으면(구버전/미선택) 기존 meta 기본값 그대로 사용
+        ramp_cfg = run_cfg.get("ramp")
+        if isinstance(ramp_cfg, dict) and ramp_cfg:
+            def _apply(k: str, cast):
+                if k not in ramp_cfg:
+                    return False
+                v = ramp_cfg.get(k)
+                if v is None or v == "":
+                    return False
+                try:
+                    meta[k] = cast(v)
+                    return True
+                except Exception:
+                    return False
+
+            # int 계열
+            _apply("ramp_step_dac", lambda x: int(float(x)))
+            _apply("ramp_seg1_max_dac", lambda x: int(float(x)))
+            _apply("ramp_seg2_max_dac", lambda x: int(float(x)))
+            _apply("ignite_dac", lambda x: int(float(x)))
+            _apply("fine_step_dac", lambda x: int(float(x)))
+            _apply("material_shortage_dac", lambda x: int(float(x)))
+
+            # float 계열
+            _apply("ramp_interval_seg1_s", float)
+            seg2_over = _apply("ramp_interval_seg2_s", float)
+            after_over = _apply("ramp_interval_after_seg2_s", float)
+            if seg2_over and not after_over:
+                # ramp_cfg에서 after를 따로 안 주면 seg2 interval을 따라가게(불일치 방지)
+                meta["ramp_interval_after_seg2_s"] = float(meta["ramp_interval_seg2_s"])
+
+            _apply("ignite_rate_min", float)
+            _apply("ignite_timeout_s", float)
+            _apply("pre_rate", float)
+            _apply("pre_hold_s", float)
+            _apply("dac_adjust_interval_s", float)
+            _apply("material_shortage_rate_max", float)
+            _apply("material_shortage_time_s", float)
 
         # ✅ steps는 리스트 만든 다음 조건부 append로 구성(문법 오류 방지)
         steps: list[ProcessStep] = [

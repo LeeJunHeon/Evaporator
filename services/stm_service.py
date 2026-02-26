@@ -26,7 +26,7 @@ from concurrent.futures import Future
 from PySide6.QtCore import QObject, QThread, Signal
 
 from config.serial_config import load_settings
-from devices.stm100 import STM100
+from devices.stm100 import STM100, STM100ProtocolError
 
 
 # ============================================================
@@ -432,6 +432,19 @@ class STMServiceWorker(QThread):
             self._set_connected(True)
             self._fail_count = 0
             self._conn_backoff_s = float(self._conn_backoff_base_s)  # ✅ 성공 시 reset
+
+            # ✅ (1) power lost flag(B) 정리: L ack (실패해도 연결은 유지)
+            try:
+                self._stm.ack_power_failure_flag()
+            except Exception as e:
+                self.sig_error.emit(f"[STMService] ack_power_failure_flag failed: {e!r}")
+
+            # ✅ (2) 1회 프라임 read: 첫 응답 ''/-------- 완화 (실패해도 연결은 유지)
+            try:
+                _ = self._stm.get_thickness_angstrom()
+                _ = self._stm.get_rate_angstrom_per_s()
+            except Exception as e:
+                self.sig_error.emit(f"[STMService] prime read failed: {e!r}")
         except Exception as e:
             self._set_connected(False)
             self.sig_error.emit(f"[STMService] connect failed: {e!r}")
@@ -472,7 +485,10 @@ class STMServiceWorker(QThread):
             return True
 
         except Exception as e:
-            self._fail_count += 1
+            # ✅ 측정불가(예: '', '--------')는 "연결 실패"로 누적하지 않음
+            if not isinstance(e, STM100ProtocolError):
+                self._fail_count += 1
+
             self.sig_error.emit(f"[STMService] poll failed: {e!r} (fail={self._fail_count})")
 
             # ✅ 이번 폴링은 값 없음 → None으로 상태 갱신 + 외부로 emit
@@ -498,7 +514,7 @@ class STMServiceWorker(QThread):
             except Exception:
                 pass
 
-            # 기존 정책: 실패 누적이면 close → reconnect 사이클
+            # ✅ 연결 실패 누적일 때만 close/reconnect
             if self._fail_count >= self._max_fail_before_close:
                 self._safe_close()
                 self._set_connected(False)

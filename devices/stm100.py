@@ -407,10 +407,15 @@ class STM100(BaseSerialDevice):
 
     def get_density(self) -> float:
         s = self.command("E", modifier="?")
-        if not s:
+        ss = (s or "").strip()
+
+        if not ss:
             raise STM100ProtocolError("STM-100: empty density response")
+        if ss in _UNAVAILABLE_MARKERS or set(ss) == {"-"}:
+            raise STM100ProtocolError(f"STM-100: density unavailable: {s!r}")
+
         try:
-            return float(s)
+            return float(ss)
         except ValueError as e:
             raise STM100ProtocolError(f"STM-100: invalid density response: {s!r}") from e
 
@@ -426,10 +431,15 @@ class STM100(BaseSerialDevice):
 
     def get_z_factor(self) -> float:
         s = self.command("F", modifier="?")
-        if not s:
+        ss = (s or "").strip()
+
+        if not ss:
             raise STM100ProtocolError("STM-100: empty z-factor response")
+        if ss in _UNAVAILABLE_MARKERS or set(ss) == {"-"}:
+            raise STM100ProtocolError(f"STM-100: z-factor unavailable: {s!r}")
+
         try:
-            return float(s)
+            return float(ss)
         except ValueError as e:
             raise STM100ProtocolError(f"STM-100: invalid z-factor response: {s!r}") from e
 

@@ -14,11 +14,105 @@ from __future__ import annotations
 import time
 import math
 from collections import deque
-from typing import Deque, Optional, Tuple
+from typing import Deque, Optional, Tuple, Callable
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QPoint
 from PySide6.QtGui import QPainter, QBrush, QColor, QPen
 from PySide6.QtWidgets import QWidget, QVBoxLayout
+
+from PySide6.QtCharts import QChart, QChartView, QLineSeries, QValueAxis  # type: ignore
+
+
+class _InteractiveChartView(QChartView):
+    """
+    - 좌클릭 드래그: X축 팬(과거/미래 이동)
+      (QChart.scroll(dx, 0) 사용 → 축 range가 실제로 이동)
+    - 더블클릭: 라이브 팔로우 복귀
+    """
+    def __init__(
+        self,
+        chart: QChart,
+        parent: Optional[QWidget] = None,
+        *,
+        on_user_interact: Optional[Callable[[], None]] = None,
+        on_pan_finished: Optional[Callable[[], None]] = None,
+        on_double_click: Optional[Callable[[], None]] = None,
+    ):
+        super().__init__(chart, parent)
+        self._on_user_interact = on_user_interact
+        self._on_pan_finished = on_pan_finished
+        self._on_double_click = on_double_click
+
+        self._panning = False
+        self._last_pos = QPoint()
+
+        try:
+            self.setRubberBand(QChartView.NoRubberBand)
+        except Exception:
+            pass
+
+        try:
+            self.setMouseTracking(True)
+        except Exception:
+            pass
+
+        try:
+            self.setCursor(Qt.OpenHandCursor)
+        except Exception:
+            pass
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton:
+            self._panning = True
+            self._last_pos = event.pos()
+            try:
+                self.setCursor(Qt.ClosedHandCursor)
+            except Exception:
+                pass
+
+            if self._on_user_interact:
+                self._on_user_interact()
+
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._panning:
+            delta = event.pos() - self._last_pos
+            self._last_pos = event.pos()
+
+            # dx를 반대로 주면 "드래그 방향"이 직관적으로 맞음
+            try:
+                self.chart().scroll(-delta.x(), 0.0)
+            except Exception:
+                pass
+
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton and self._panning:
+            self._panning = False
+            try:
+                self.setCursor(Qt.OpenHandCursor)
+            except Exception:
+                pass
+
+            if self._on_pan_finished:
+                self._on_pan_finished()
+
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton and self._on_double_click:
+            self._on_double_click()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
 
 
 class DepositionPlotWidget(QWidget):
@@ -38,10 +132,12 @@ class DepositionPlotWidget(QWidget):
         self._p_def_min, self._p_def_max = float(power_default_range[0]), float(power_default_range[1])
 
         self._t0: Optional[float] = None
-        self._rate_buf: Deque[Tuple[float, float]] = deque(maxlen=self._max_points)
-        # Power 축은 DAC 고정 범위로 쓰므로 power_buf 불필요 -> 삭제
+        self._last_t: float = 0.0
 
-        from PySide6.QtCharts import QChart, QChartView, QLineSeries, QValueAxis  # type: ignore
+        # ✅ 핵심 상태: 사용자 조작이 없으면 라이브 팔로우, 과거 조회 중이면 화면 고정
+        self._follow_live: bool = True
+
+        self._rate_buf: Deque[Tuple[float, float]] = deque(maxlen=self._max_points)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -66,7 +162,7 @@ class DepositionPlotWidget(QWidget):
         # X axis (time)
         self._ax_x = QValueAxis()
         self._ax_x.setLabelFormat("%.0f")
-        self._ax_x.setTitleText("Time (s)")  # ✅ 하단 값 의미 표시(초)
+        self._ax_x.setTitleText("Time (s)")
         self._chart.addAxis(self._ax_x, Qt.AlignBottom)
 
         # Left Y axis (rate)
@@ -88,13 +184,19 @@ class DepositionPlotWidget(QWidget):
         self._power_series.attachAxis(self._ax_x)
         self._power_series.attachAxis(self._ax_power)
 
-        self._view = QChartView(self._chart)
+        # ✅ 인터랙티브 뷰(드래그 팬 + 더블클릭 라이브복귀)
+        self._view = _InteractiveChartView(
+            self._chart,
+            self,
+            on_user_interact=self._on_user_interact,
+            on_pan_finished=self._on_pan_finished,
+            on_double_click=self.reset_to_live,
+        )
         self._view.setRenderHint(QPainter.Antialiasing, True)
         lay.addWidget(self._view, 1)
 
-        # view 생성 직전 또는 _reset_axes() 직전에 호출
-        self._apply_tick_density(segments=10)  # ✅ 10칸(=tick 11개) 정도
-        self._sync_axis_label_colors()         # ✅ 축 라벨을 선 색으로
+        self._apply_tick_density(segments=10)
+        self._sync_axis_label_colors()
 
         # ✅ X축: 큰 눈금 5초, 작은 눈금 1초
         self._configure_x_axis_ticks(major_s=5.0, minor_s=1.0)
@@ -103,16 +205,25 @@ class DepositionPlotWidget(QWidget):
 
     def clear(self) -> None:
         self._t0 = None
+        self._last_t = 0.0
+        self._follow_live = True
+
         self._rate_buf.clear()
         self._rate_series.clear()
         self._power_series.clear()
         self._reset_axes()
+
+    def reset_to_live(self) -> None:
+        """더블클릭 등으로 강제 라이브 복귀"""
+        self._follow_live = True
+        self._update_axes(self._last_t)
 
     def append(self, *, rate: Optional[float], power: Optional[float]) -> None:
         now = time.monotonic()
         if self._t0 is None:
             self._t0 = now
         t = now - self._t0
+        self._last_t = float(t)
 
         if rate is not None:
             r = float(rate)
@@ -133,7 +244,111 @@ class DepositionPlotWidget(QWidget):
             if self._power_series.count() > self._max_points:
                 self._power_series.removePoints(0, self._power_series.count() - self._max_points)
 
-        self._update_axes(t)
+        # ✅ 핵심:
+        # - 사용자 조작 없으면 화면도 계속 앞으로(라이브)
+        # - 과거 조회 중이면 화면은 고정(하지만 데이터는 계속 쌓임)
+        if self._follow_live:
+            self._update_axes(t)
+        else:
+            self._update_axes_manual(t)
+
+    def _on_user_interact(self) -> None:
+        # 사용자가 드래그 시작하면 라이브 팔로우 끔(화면 고정 모드)
+        self._follow_live = False
+
+    def _on_pan_finished(self) -> None:
+        # 드래그가 끝난 시점에:
+        # - range를 데이터 범위 안으로 클램프
+        # - 오른쪽 끝(라이브)에 도달했으면 자동 라이브 복귀
+        self._update_axes_manual(self._last_t)
+
+    def _get_x_range(self) -> Tuple[float, float]:
+        try:
+            return float(self._ax_x.min()), float(self._ax_x.max())
+        except Exception:
+            return 0.0, float(self._window_s)
+
+    def _set_x_range(self, x1: float, x2: float) -> None:
+        self._ax_x.setRange(float(x1), float(x2))
+        self._apply_x_tickcount_for_range(float(x1), float(x2))
+
+    def _compute_live_range(self, t_now: float) -> Tuple[float, float]:
+        major = float(getattr(self, "_x_major_s", 0.0) or 0.0)
+
+        if major > 0:
+            if t_now < self._window_s:
+                x1 = 0.0
+                x2 = float(self._window_s)
+            else:
+                x2 = float(t_now)
+                x1 = max(0.0, x2 - self._window_s)
+
+            x2 = float(math.ceil(x2 / major) * major)
+            x1 = max(0.0, x2 - self._window_s)
+            x1 = float(math.floor(x1 / major) * major)
+
+            if x2 <= x1:
+                x2 = x1 + major
+            return x1, x2
+
+        x1 = max(0.0, float(t_now) - self._window_s)
+        x2 = max(x1 + 1.0, float(t_now))
+        return x1, x2
+
+    def _clamp_manual_range(self, x1: float, x2: float, live_x2: float) -> Tuple[float, float]:
+        span = max(1.0, float(x2) - float(x1))
+
+        # 미래로 너무 가면(live_x2 밖) 오른쪽 끝을 live_x2로 당김
+        if x2 > live_x2:
+            x2 = float(live_x2)
+            x1 = x2 - span
+
+        # 0보다 작아지면 0으로 당김
+        if x1 < 0.0:
+            x1 = 0.0
+            x2 = min(float(live_x2), x1 + span)
+
+        # span 유지 보정
+        if x2 <= x1:
+            x2 = min(float(live_x2), x1 + 1.0)
+
+        return float(x1), float(x2)
+
+    def _maybe_resume_live(self, current_x2: float, live_x2: float) -> None:
+        if self._follow_live:
+            return
+
+        major = float(getattr(self, "_x_major_s", 0.0) or 0.0)
+        eps = 1.0
+        if major > 0:
+            eps = max(0.5, major * 0.6)  # 5초 major면 약 3초 내면 "오른쪽 끝 도달"로 판단
+
+        if abs(float(live_x2) - float(current_x2)) <= eps:
+            self._follow_live = True
+            # 즉시 라이브 윈도우로 복귀
+            self._update_axes(self._last_t)
+
+    def _update_rate_axis_for_range(self, x1: float, x2: float) -> None:
+        if not self._rate_buf:
+            return
+
+        ys = [v for tt, v in self._rate_buf if float(x1) <= tt <= float(x2)]
+        if not ys:
+            ys = [v for _, v in self._rate_buf]  # fallback
+
+        y_max = max(ys)
+        y_upper = max(1.0, y_max * 1.10)
+        self._ax_rate.setRange(0.0, y_upper)
+
+        try:
+            if y_upper < 2.0:
+                self._ax_rate.setLabelFormat("%.3f")
+            elif y_upper < 10.0:
+                self._ax_rate.setLabelFormat("%.2f")
+            else:
+                self._ax_rate.setLabelFormat("%.1f")
+        except Exception:
+            pass
 
     def _reset_axes(self) -> None:
         x2 = max(10.0, self._window_s)
@@ -142,63 +357,30 @@ class DepositionPlotWidget(QWidget):
         if major > 0:
             x2 = float(math.ceil(x2 / major) * major)
 
-        self._ax_x.setRange(0.0, x2)
-        self._apply_x_tickcount_for_range(0.0, x2)
+        self._set_x_range(0.0, x2)
 
         self._ax_rate.setRange(0.0, 1.0)
         self._ax_power.setRange(self._p_def_min, self._p_def_max)
 
     def _update_axes(self, t_now: float) -> None:
-        major = float(getattr(self, "_x_major_s", 0.0) or 0.0)
+        # ✅ 라이브 팔로우: 기존 로직 그대로
+        x1, x2 = self._compute_live_range(float(t_now))
+        self._set_x_range(x1, x2)
+        self._update_rate_axis_for_range(x1, x2)
 
-        # ✅ Dep.rate Y축 스케일링을 "현재 보이는 X-window" 기준으로 하려면,
-        #    아래에서 최종 x1/x2를 반드시 계산해 둬야 함.
-        x1: float
-        x2: float
+    def _update_axes_manual(self, t_now: float) -> None:
+        # ✅ 과거 조회 중:
+        # - 화면 x range는 유지
+        # - 다만 데이터 범위 밖으로 나가면 clamp
+        # - y축 autoscale은 현재 보이는 구간 기준으로 계속 업데이트
+        _, live_x2 = self._compute_live_range(float(t_now))
+        x1, x2 = self._get_x_range()
+        x1, x2 = self._clamp_manual_range(x1, x2, float(live_x2))
+        self._set_x_range(x1, x2)
+        self._update_rate_axis_for_range(x1, x2)
 
-        if major > 0:
-            # ✅ 초반에는 0~window 고정(눈금/라벨 안정)
-            if t_now < self._window_s:
-                x1 = 0.0
-                x2 = float(self._window_s)
-            else:
-                x2 = float(t_now)
-                x1 = max(0.0, x2 - self._window_s)
-
-            # ✅ x2는 항상 t_now를 포함하도록 "올림" 후 5초 경계로 맞춤
-            x2 = float(math.ceil(x2 / major) * major)
-
-            # ✅ x1도 5초 경계로 내림
-            x1 = max(0.0, x2 - self._window_s)
-            x1 = float(math.floor(x1 / major) * major)
-
-            if x2 <= x1:
-                x2 = x1 + major
-
-            self._ax_x.setRange(x1, x2)
-            self._apply_x_tickcount_for_range(x1, x2)
-        else:
-            x1 = max(0.0, t_now - self._window_s)
-            x2 = max(x1 + 1.0, t_now)
-            self._ax_x.setRange(x1, x2)
-
-        # ---- Dep.rate Y축 자동 스케일: "현재 보이는 구간(x1~x2)"만 기준 ----
-        if self._rate_buf:
-            ys = [v for tt, v in self._rate_buf if x1 <= tt <= x2]
-            if not ys:
-                ys = [v for _, v in self._rate_buf]  # fallback
-            y_max = max(ys)
-            y_upper = max(1.0, y_max * 1.10)
-            self._ax_rate.setRange(0.0, y_upper)
-            try:
-                if y_upper < 2.0:
-                    self._ax_rate.setLabelFormat("%.3f")
-                elif y_upper < 10.0:
-                    self._ax_rate.setLabelFormat("%.2f")
-                else:
-                    self._ax_rate.setLabelFormat("%.1f")
-            except Exception:
-                pass
+        # ✅ 사용자가 다시 오른쪽 끝으로 이동하면 자동 라이브 복귀
+        self._maybe_resume_live(current_x2=x2, live_x2=float(live_x2))
 
     def _apply_tick_density(self, *, segments: int = 10) -> None:
         """축 눈금(칸) 수를 늘림. segments=10이면 tickCount=11."""
@@ -216,7 +398,6 @@ class DepositionPlotWidget(QWidget):
         except Exception:
             pass
 
-        # minor tick은 과하면 복잡해져서 기본 0 권장 (원하면 1~2로 늘리면 더 촘촘해짐)
         for ax in (self._ax_x, self._ax_rate, self._ax_power):
             try:
                 ax.setMinorTickCount(0)
@@ -228,10 +409,9 @@ class DepositionPlotWidget(QWidget):
         rate_color = self._rate_series.pen().color()
         power_color = self._power_series.pen().color()
 
-        # 혹시 둘 다 기본 검정으로 잡히는 환경이면(테마 영향) 안전하게 지정
         if rate_color == power_color:
-            rate_color = QColor("#1f77b4")  # 파란 계열
-            power_color = QColor("#2ca02c") # 초록 계열
+            rate_color = QColor("#1f77b4")
+            power_color = QColor("#2ca02c")
             try:
                 self._rate_series.setPen(QPen(rate_color, 2))
             except Exception:
@@ -241,7 +421,6 @@ class DepositionPlotWidget(QWidget):
             except Exception:
                 pass
 
-        # ✅ 축 제목만 색칠(눈금 숫자까지 색칠하면 가독성이 떨어질 수 있어서)
         try:
             self._ax_rate.setTitleBrush(QBrush(rate_color))
         except Exception:
@@ -251,7 +430,6 @@ class DepositionPlotWidget(QWidget):
         except Exception:
             pass
 
-        # 축 라인까지 같이 칠하고 싶으면(더 직관적):
         try:
             self._ax_rate.setLinePen(QPen(rate_color))
         except Exception:
@@ -267,7 +445,6 @@ class DepositionPlotWidget(QWidget):
         self._x_minor_s = float(minor_s)
         self._x_use_tick_interval = False
 
-        # minor tick: 5초 사이에 1초 간격이면 4개
         minor_cnt = 0
         if self._x_minor_s > 0 and self._x_major_s > self._x_minor_s:
             div = int(round(self._x_major_s / self._x_minor_s))
@@ -278,7 +455,6 @@ class DepositionPlotWidget(QWidget):
         except Exception:
             pass
 
-        # minor grid line이 보이면 “작은 눈금(1초)” 느낌이 훨씬 확실
         try:
             if hasattr(self._ax_x, "setMinorGridLineVisible"):
                 self._ax_x.setMinorGridLineVisible(True)
@@ -287,7 +463,6 @@ class DepositionPlotWidget(QWidget):
         except Exception:
             pass
 
-        # 가능하면 tickInterval(5초)로 고정 (환경에 따라 없을 수 있어 fallback 준비)
         try:
             if hasattr(self._ax_x, "setTickType") and hasattr(self._ax_x, "setTickInterval"):
                 TickType = getattr(type(self._ax_x), "TickType", None)
@@ -308,7 +483,7 @@ class DepositionPlotWidget(QWidget):
             return
         span = max(0.0, float(x2) - float(x1))
         ticks = int(round(span / major)) + 1
-        ticks = max(2, min(200, ticks))  # 과도 방지
+        ticks = max(2, min(200, ticks))
         try:
             self._ax_x.setTickCount(ticks)
         except Exception:

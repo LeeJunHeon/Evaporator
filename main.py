@@ -682,17 +682,36 @@ class ProcessWindow(QWidget):
         FREQ_MAX_MHZ = 6.1
 
         def _abort(title: str, msg: str) -> bool:
-            # 화면/파일 로그에 이유 남기기
-            _append_text(getattr(self.ui, "logWindow", None), f"[PRECHECK][ABORT] {msg}")
-            QMessageBox.warning(self, title, msg)
-
-            # ✅ Start 실패이므로 run 파일 닫기 + 상태 초기화 (기존 패턴과 동일)
+            # ✅ (추가) Start 중단 → run 파일 닫기 + 상태 초기화
             with contextlib.suppress(Exception):
                 w = getattr(self, "_process_window_log_writer", None)
                 if w and hasattr(w, "close_run"):
                     w.close_run()
             self._active_run_id = None
             self._active_recipe_name = ""
+
+            # ✅ (핵심 추가) 프리체크 실패 시, 프리체크 때문에 켜둔 센서/서비스를 확실히 정리
+            with contextlib.suppress(Exception):
+                # 1) STM UI 시그널 해제(있으면)
+                self._unbind_stm_ui()
+
+            with contextlib.suppress(Exception):
+                # 2) STM 서비스 stop
+                if getattr(self, "_stm_service", None):
+                    self._stm_service.stop()
+                self._stm_service = None
+                if getattr(self, "hmi_window", None) is not None:
+                    self.hmi_window._stm_service = None
+
+            with contextlib.suppress(Exception):
+                # 3) FTM_SW OFF (프리체크 위해 ON 했던 것 원복)
+                binder = getattr(self.hmi_window, "_plc_binder", None)
+                if binder is not None:
+                    binder.enqueue_write("FTM_SW", False)
+                    _append_text(getattr(self.ui, "logWindow", None), "[DEV] FTM_SW -> OFF (precheck abort)")
+
+            QMessageBox.warning(self, title, msg)
+            _append_text(getattr(self.ui, "logWindow", None), f"[PRECHECK][BLOCK] {title}: {msg}")
             return False
 
         stm = getattr(self, "_stm_service", None)
@@ -883,9 +902,22 @@ class ProcessWindow(QWidget):
 
         # ✅ 2) 그 다음 FTM ON → STM 연결
         if not self._ensure_sensors_connected_fresh():
-            QMessageBox.warning(self, "Device", "STM 연결 실패")
+            QMessageBox.warning(self, "Device Connect Failed", "STM 연결 실패")
 
-            # ✅ (추가) Start 실패 → run 파일 닫기 + 상태 초기화
+            # ✅ (추가) 연결 실패 시에도 FTM/STM 흔적 정리(FTM ON 잔상 방지)
+            with contextlib.suppress(Exception):
+                binder = getattr(self.hmi_window, "_plc_binder", None)
+                if binder is not None:
+                    binder.enqueue_write("FTM_SW", False)
+                    _append_text(getattr(self.ui, "logWindow", None), "[DEV] FTM_SW -> OFF (connect fail)")
+
+            with contextlib.suppress(Exception):
+                if getattr(self, "_stm_service", None):
+                    self._stm_service.stop()
+                self._stm_service = None
+                if getattr(self, "hmi_window", None) is not None:
+                    self.hmi_window._stm_service = None
+
             with contextlib.suppress(Exception):
                 w = getattr(self, "_process_window_log_writer", None)
                 if w and hasattr(w, "close_run"):

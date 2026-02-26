@@ -534,8 +534,20 @@ class ProcessEngine:
         # ✅ 미세 조정(목표 근접 시): 기본 10 step 이내에서 동적 보정
         fine_step_dac = int(meta.get("fine_step_dac", 10) or 10)
 
-        # ✅ target_rate 도달 판정: tol 이내 N회 연속
-        target_stable_hits = int(meta.get("target_stable_hits", 5) or 5)
+        # ✅ ignite 안정화 판정(연속 N회, 기본 3회)
+        ignite_stable_hits = int(meta.get("ignite_stable_hits", 3) or 3)
+        ignite_stable_interval_s = max(0.1, float(meta.get("ignite_stable_interval_s", 1.0) or 1.0))
+
+        # ✅ pre_rate 도달 판정(연속 N회, 기본 3회) — 스파이크 1번으로 ramp 종료되는 것 방지
+        pre_stable_hits = int(meta.get("pre_stable_hits", 3) or 3)
+        pre_stable_interval_s = max(0.1, float(meta.get("pre_stable_interval_s", 1.0) or 1.0))
+
+        # ✅ target_ramp 종료 판정(연속 N회, 기본 3회) — 스파이크 1번으로 target_ramp 탈출 방지
+        target_ramp_stable_hits = int(meta.get("target_ramp_stable_hits", 3) or 3)
+        target_ramp_stable_interval_s = max(0.1, float(meta.get("target_ramp_stable_interval_s", 1.0) or 1.0))
+
+        # ✅ target_rate 도달 판정: tol 이내 N회 연속 (기본 3회로 변경)
+        target_stable_hits = int(meta.get("target_stable_hits", 3) or 3)
         target_stable_interval_s = max(0.1, float(meta.get("target_stable_interval_s", 1.0) or 1.0))
 
         rate_drop_ratio = float(meta.get("rate_drop_ratio", 0.30) or 0.30)  # 70% 급감 => 30% 이하
@@ -600,23 +612,31 @@ class ProcessEngine:
 
         ignite_wait_active: bool = False
         ignite_wait_start_m: Optional[float] = None
+        ignite_ok_hits: int = 0  # ✅ rate>=ignite_rate_min 연속 카운트
 
         def _handle_ignite_wait(rt: float, *, where: str) -> bool:
-            nonlocal ignite_wait_active, ignite_wait_start_m
+            nonlocal ignite_wait_active, ignite_wait_start_m, ignite_ok_hits
 
             if int(dac) != int(ignite_dac):
                 ignite_wait_active = False
                 ignite_wait_start_m = None
+                ignite_ok_hits = 0
                 return False
 
             rtf = float(rt)
 
-            # ✅ 이미 대기 상태면: 0.1(ignite_rate_min) 될 때까지 계속 유지
+            # ✅ 이미 대기 상태면: rate>=ignite_rate_min 을 N회 연속 확인할 때까지 계속 유지
             if ignite_wait_active:
                 if rtf >= float(ignite_rate_min):
+                    ignite_ok_hits += 1
+                else:
+                    ignite_ok_hits = 0
+
+                if ignite_ok_hits >= max(1, int(ignite_stable_hits)):
                     ignite_wait_active = False
                     ignite_wait_start_m = None
-                    self._emit_status(message=f"IGNITE OK: rate={rtf:.3f}", force=True)
+                    ignite_ok_hits = 0
+                    self._emit_status(message=f"IGNITE OK: rate={rtf:.3f} (hits={ignite_stable_hits})", force=True)
                     return False
 
                 if ignite_wait_start_m is not None and (time.monotonic() - float(ignite_wait_start_m)) >= float(ignite_timeout_s):
@@ -628,8 +648,12 @@ class ProcessEngine:
             if rtf <= float(ignite_trigger_rate_max):
                 ignite_wait_active = True
                 ignite_wait_start_m = time.monotonic()
+                ignite_ok_hits = 0
                 self._emit_status(
-                    message=f"IGNITE WAIT: DAC={dac} rate={rtf:.3f} → rate>={ignite_rate_min:.3f} 대기(최대 {ignite_timeout_s:.0f}s)",
+                    message=(
+                        f"IGNITE WAIT: DAC={dac} rate={rtf:.3f} → "
+                        f"rate>={ignite_rate_min:.3f} 을 {ignite_stable_hits}회 연속 확인(최대 {ignite_timeout_s:.0f}s)"
+                    ),
                     force=True,
                 )
                 return True
@@ -766,16 +790,32 @@ class ProcessEngine:
 
         stuck_start_ts_pre: Optional[float] = None
 
+        # ✅ pre_rate는 "연속 N회" 확인 후 통과(기본 3회)
+        pre_ok_hits: int = 0
+
         while True:
             rt = read_rate_or_abort(where="pre_ramp")
+
             if rt >= pre_rate:
-                break
+                pre_ok_hits += 1
+                self._emit_status(
+                    message=f"PRE RATE CHECK {pre_ok_hits}/{pre_stable_hits} | DAC={dac} | rate={rt:.3f}/{pre_rate:.3f} Å/s",
+                    force=True,
+                )
+                if pre_ok_hits >= max(1, int(pre_stable_hits)):
+                    break
+
+                # DAC는 올리지 말고, 다음 샘플(폴링)까지 기다렸다가 재확인
+                _sleep_with_checks(pre_stable_interval_s, where="pre_rate_confirm")
+                continue
+            else:
+                pre_ok_hits = 0
 
             # ✅ [추가] ignite_dac(1500)에서 rate=0이면 0.1 될 때까지 대기(최대 5분)
             if _handle_ignite_wait(rt, where="pre_ramp"):
                 # ignite 대기 중에는 stuck 타이머도 리셋(요구사항 충돌 방지)
                 stuck_start_ts_pre = None
-                _sleep_with_checks(0.2, where="ignite_wait/pre_ramp")
+                _sleep_with_checks(ignite_stable_interval_s, where="ignite_wait/pre_ramp")
                 continue
 
             # ✅ stuck guard(ignite 대기 아닐 때만)
@@ -856,15 +896,34 @@ class ProcessEngine:
 
         stuck_start_ts_target: Optional[float] = None
 
+        # ✅ target_ramp 탈출도 "연속 N회" 확인 후 통과(기본 3회)
+        target_ramp_ok_hits: int = 0
+        target_ramp_threshold = float(target_rate) * (1.0 - float(rate_tol_ratio))
+
         while True:
             rt = read_rate_or_abort(where="target_ramp")
-            if rt >= target_rate * (1.0 - rate_tol_ratio):
-                break
+
+            if rt >= target_ramp_threshold:
+                target_ramp_ok_hits += 1
+                self._emit_status(
+                    message=(
+                        f"TARGET RAMP CHECK {target_ramp_ok_hits}/{target_ramp_stable_hits} | "
+                        f"DAC={dac} | rate={rt:.3f}/{target_rate:.3f} Å/s"
+                    ),
+                    force=True,
+                )
+                if target_ramp_ok_hits >= max(1, int(target_ramp_stable_hits)):
+                    break
+
+                _sleep_with_checks(target_ramp_stable_interval_s, where="target_ramp_confirm")
+                continue
+            else:
+                target_ramp_ok_hits = 0
 
             # ✅ ignite 대기 적용(1500에서 rate=0이면 0.1까지)
             if _handle_ignite_wait(rt, where="target_ramp"):
                 stuck_start_ts_target = None
-                _sleep_with_checks(0.2, where="ignite_wait/target_ramp")
+                _sleep_with_checks(ignite_stable_interval_s, where="ignite_wait/target_ramp")
                 continue
 
             # ✅ stuck guard(ignite 대기 아닐 때만)

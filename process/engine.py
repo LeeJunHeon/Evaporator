@@ -512,6 +512,14 @@ class ProcessEngine:
 
         meta = dict(step.meta or {})
 
+        def _meta_f(key: str, default: float) -> float:
+            v = meta.get(key, None)
+            return float(default) if v is None else float(v)
+
+        def _meta_i(key: str, default: int) -> int:
+            v = meta.get(key, None)
+            return int(default) if v is None else int(float(v))
+
         use_p1 = bool(meta.get("use_power1", False))
         use_p2 = bool(meta.get("use_power2", False))
 
@@ -531,8 +539,8 @@ class ProcessEngine:
             raise EngineFailed(step.name, "EVAP: delay_min must be >= 0")
 
         # --- 공정 파라미터(기본값은 요구사항 기준) ---
-        pre_rate = float(meta.get("pre_rate", 0.4) or 0.4)                  # Å/s
-        pre_hold_s = float(meta.get("pre_hold_s", 120.0) or 120.0)          # s
+        pre_rate = float(meta.get("pre_rate", 0.4) or 0.4)    # Å/s
+        pre_hold_s = _meta_f("pre_hold_s", 120.0)             # s
 
         # ✅ pre_rate 도달 후 대기(hold) 동작
         # - fixed  : dep.rate가 pre_rate 도달하면 '그 DAC 그대로' 1~2분 대기(파워 흔들림 방지)
@@ -598,10 +606,17 @@ class ProcessEngine:
         material_shortage_dac = int(meta.get("material_shortage_dac", 2000) or 2000)
         material_shortage_rate_max = float(meta.get("material_shortage_rate_max", 0.0) or 0.0)  # <=
         # "계속"을 엄밀히 하려면 지속시간을 쓰면 됨(초). 10이면 10초 대기 후 중단.
-        material_shortage_time_s = float(meta.get("material_shortage_time_s", 10.0) or 10.0)
+        material_shortage_time_s = _meta_f("material_shortage_time_s", 10.0)  # ✅ 0이면 즉시 중단 로직이 살아남
 
         # delay는 분 단위 입력(기존 UI) → 초로 변환
         delay_s = delay_min * 60.0
+
+        if ramp_step_dac <= 0:
+            raise EngineFailed(step.name, "EVAP: ramp_step_dac must be > 0")
+        if ramp_seg2_max_dac < ramp_seg1_max_dac:
+            raise EngineFailed(step.name, "EVAP: ramp_seg2_max_dac must be >= ramp_seg1_max_dac")
+        if material_shortage_time_s < 0:
+            raise EngineFailed(step.name, "EVAP: material_shortage_time_s must be >= 0")
 
         # 0) MAIN_SHUTTER는 닫힌 상태에서 시작(한 번 더 안전 close)
         self._plc_write_coil("MAIN_SHUTTER_SW", False, tag="EVAP_INIT")
@@ -1487,37 +1502,37 @@ class ProcessEngine:
                     # 기본값(기존 cond_desc는 유지하되, 사용자 지정 메시지가 있으면 그게 우선)
                     prefix = f"대기: {cond_desc}"
 
-            # deadline_m은 (위에서) 기본값이 들어가므로 보통 None이 아님
-            if deadline_m is None:
-                remain_txt = self._fmt_hms(0.0, ceil=True)
-            else:
-                remain_s = max(0.0, deadline_m - now_m)
-                remain_txt = self._fmt_hms(remain_s, ceil=True)
-
-            elapsed_txt = self._fmt_hms(elapsed_s)
-
-            extra_parts = []
-            if step.stable_s is not None and float(step.stable_s) > 0:
-                stable_s = float(step.stable_s)
-                stable_elapsed = 0.0 if stable_start_m is None else max(0.0, now_m - stable_start_m)
-                stable_elapsed = min(stable_elapsed, stable_s)
-                extra_parts.append(f"stable {stable_elapsed:.1f}/{stable_s:.1f}s")
-
-            if sensor_value_fn is not None:
-                lab = sensor_label or "sensor"
-                if v is None:
-                    extra_parts.append(f"{lab}=None")
+                # deadline_m은 (위에서) 기본값이 들어가므로 보통 None이 아님
+                if deadline_m is None:
+                    remain_txt = self._fmt_hms(0.0, ceil=True)
                 else:
-                    extra_parts.append(f"{lab}={float(v):.3f}")
+                    remain_s = max(0.0, deadline_m - now_m)
+                    remain_txt = self._fmt_hms(remain_s, ceil=True)
 
-            extra = (" / " + " / ".join(extra_parts)) if extra_parts else ""
+                elapsed_txt = self._fmt_hms(elapsed_s)
 
-            # ✅ 표시 포맷 통일: [남은 ..] prefix | 경과 .. / stable .. / sensor ..
-            self._emit_status(
-                message=f"[남은 {remain_txt}] {prefix} | 경과 {elapsed_txt}{extra}",
-                force=True,
-            )
-            next_ui_m = now_m + 1.0
+                extra_parts = []
+                if step.stable_s is not None and float(step.stable_s) > 0:
+                    stable_s = float(step.stable_s)
+                    stable_elapsed = 0.0 if stable_start_m is None else max(0.0, now_m - stable_start_m)
+                    stable_elapsed = min(stable_elapsed, stable_s)
+                    extra_parts.append(f"stable {stable_elapsed:.1f}/{stable_s:.1f}s")
+
+                if sensor_value_fn is not None:
+                    lab = sensor_label or "sensor"
+                    if v is None:
+                        extra_parts.append(f"{lab}=None")
+                    else:
+                        extra_parts.append(f"{lab}={float(v):.3f}")
+
+                extra = (" / " + " / ".join(extra_parts)) if extra_parts else ""
+
+                # ✅ 표시 포맷 통일: [남은 ..] prefix | 경과 .. / stable .. / sensor ..
+                self._emit_status(
+                    message=f"[남은 {remain_txt}] {prefix} | 경과 {elapsed_txt}{extra}",
+                    force=True,
+                )
+                next_ui_m = now_m + 1.0
 
             # sleep(남은 시간이 짧으면 그만큼만)
             if deadline_m is None:

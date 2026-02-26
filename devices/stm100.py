@@ -41,6 +41,31 @@ _UNAVAILABLE_MARKERS = {"--------", "---------", "N/A", "NA"}
 _INT_RE = re.compile(r"^[+-]?\d+$")
 
 
+def _strip_echo_token(s: str, token: str) -> str:
+    """
+    STM-100 응답이 'U 5319234', 'V 012.4', 'M !' 처럼 토큰을 포함해 올 수도 있어
+    토큰이 앞에 붙어있으면 제거해 값만 남긴다.
+
+    - 예) "U 5319234" -> "5319234"
+    - 예) "V012.4"    -> "012.4"
+    - 예) "M !"       -> "!"
+    """
+    ss = (s or "").strip()
+    if not ss:
+        return ""
+
+    t = (token or "").strip().upper()
+    if not t or len(t) != 1:
+        return ss
+
+    # 응답 첫 글자가 토큰이면 제거
+    if ss[:1].upper() == t:
+        rest = ss[1:].strip()
+        return rest
+
+    return ss
+
+
 def _fmt_compact_float(x: float, *, max_decimals: int = 3) -> str:
     """
     STM-100 DATA(최대 10 bytes) 제한을 고려한 compact float 포맷.
@@ -367,17 +392,104 @@ class STM100(BaseSerialDevice):
     def get_crystal_fail_status(self) -> bool:
         """
         M : Get the Crystal Fail Status
-        - '@' : crystal good
-        - '!' : crystal fail
-        반환: True=정상, False=Fail
+
+        ⚠️ 주의(호환 유지):
+        - 함수명이 fail_status 이지만, 기존 코드 호환을 위해 반환 의미는 그대로 유지:
+        True  = crystal GOOD(정상)
+        False = crystal FAIL(불량/Fail)
         """
         s = self.command("M")
-        ss = (s or "").strip()
+        ss = _strip_echo_token(s, "M")
+
         if ss == "@":
-            return True
+            return True   # 정상(GOOD)
         if ss == "!":
-            return False
+            return False  # FAIL
+
         raise STM100ProtocolError(f"STM-100: invalid crystal status: {s!r}")
+    
+    def is_crystal_fail(self) -> bool:
+        """
+        True=FAIL, False=GOOD 형태가 필요할 때 쓰는 별칭(혼동 방지용)
+        """
+        return not self.get_crystal_fail_status()
+
+
+    def get_sensor_frequency_hz(self) -> int:
+        """
+        U : Return sensor freq. (Hz)
+        - 매뉴얼 예시: U 5319234 (Hz)
+        """
+        s = self.command("U")
+        ss = _strip_echo_token(s, "U")
+
+        if not ss:
+            raise STM100ProtocolError("STM-100: empty frequency response")
+        if ss in _UNAVAILABLE_MARKERS or set(ss) == {"-"}:
+            raise STM100ProtocolError(f"STM-100: frequency unavailable: {s!r}")
+
+        # 보통 정수 Hz
+        if not _INT_RE.fullmatch(ss):
+            raise STM100ProtocolError(f"STM-100: invalid frequency response: {s!r}")
+
+        try:
+            hz = int(ss)
+        except ValueError as e:
+            raise STM100ProtocolError(f"STM-100: invalid frequency response: {s!r}") from e
+
+        if hz <= 0:
+            raise STM100ProtocolError(f"STM-100: invalid frequency value: {hz} (raw={s!r})")
+
+        return hz
+
+
+    def get_sensor_frequency_mhz(self) -> float:
+        """
+        공정 시작 전 sanity check 편의용(MHz)
+        """
+        return self.get_sensor_frequency_hz() / 1_000_000.0
+
+
+    def get_crystal_life_percent(self) -> float:
+        """
+        V : Return crystal life (%)
+        - 매뉴얼 예시: V 012.4  => 12.4%
+        """
+        s = self.command("V")
+        ss = _strip_echo_token(s, "V")
+
+        if not ss:
+            raise STM100ProtocolError("STM-100: empty crystal life response")
+        if ss in _UNAVAILABLE_MARKERS or set(ss) == {"-"}:
+            raise STM100ProtocolError(f"STM-100: crystal life unavailable: {s!r}")
+
+        try:
+            life = float(ss)
+        except ValueError as e:
+            raise STM100ProtocolError(f"STM-100: invalid crystal life response: {s!r}") from e
+
+        # 정상 범위 방어
+        if not (0.0 <= life <= 100.0):
+            raise STM100ProtocolError(f"STM-100: crystal life out of range: {life} (raw={s!r})")
+
+        return life
+
+
+    def get_crystal_health_snapshot(self) -> dict[str, Any]:
+        """
+        공정 시작 전 '한 번에' 읽기 편의용 스냅샷.
+        (Start 로직에서 이 dict만 받아서 조건판단하면 됨)
+        """
+        crystal_ok = self.get_crystal_fail_status()  # True=GOOD, False=FAIL
+        freq_hz = self.get_sensor_frequency_hz()
+        life = self.get_crystal_life_percent()
+        return {
+            "crystal_ok": crystal_ok,
+            "crystal_fail": (not crystal_ok),
+            "freq_hz": freq_hz,
+            "freq_mhz": freq_hz / 1_000_000.0,
+            "life_percent": life,
+        }
 
     # ------------------------------------------------------------
     # Film parameter / Zero helpers (필수: density, z-factor, zero)

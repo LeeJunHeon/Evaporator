@@ -1404,7 +1404,7 @@ def main():
     try:
         acs_service = ACSService(
             ini_path=ini_path,
-            poll_s=0.25,                # 워커 루프(읽기 템포). 스트림은 장비가 1초마다 보냄
+            poll_s=1.0,                # 워커 루프(읽기 템포). 스트림은 장비가 1초마다 보냄
             reconnect_interval_s=1.0,   # 실패 시 재시도 템포
             use_stream=True,            # ✅ CON 모드
             stream_interval_a=1,        # ✅ 1초

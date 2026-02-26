@@ -17,6 +17,31 @@ class MaterialRow:
     material: str
     density_g_cm3: float
     z_factor: float
+
+    # ---- per-material ramp/control defaults (기존 하드코딩 값과 동일하게) ----
+    ramp_step_dac: int = 100
+
+    ramp_seg1_max_dac: int = 700
+    ramp_interval_seg1_s: float = 10.0
+
+    ramp_seg2_max_dac: int = 1500
+    ramp_interval_seg2_s: float = 30.0
+
+    ignite_dac: int = 1500
+    ignite_rate_min: float = 0.1
+    ignite_timeout_s: float = 300.0  # (원래 엔진이 timeout 없으면, process_controller 수정 시 반영)
+
+    pre_rate: float = 0.4
+    pre_hold_s: float = 120.0
+
+    dac_adjust_interval_s: float = 10.0
+    fine_step_dac: int = 10
+
+    material_shortage_dac: int = 2000
+    material_shortage_rate_max: float = 0.0
+    material_shortage_time_s: float = 10.0
+
+    # NOTE: UI에서는 제거하지만, 기존 json에 남아있을 수 있어 호환용으로 유지(원하면 나중에 완전 제거 가능)
     note: str = ""
 
 
@@ -34,6 +59,44 @@ def _to_float(v: Any, default: float = 0.0) -> float:
         return float(s)
     except Exception:
         return float(default)
+    
+
+def _to_int(v: Any, default: int = 0) -> int:
+    try:
+        s = _to_str(v)
+        if not s:
+            return int(default)
+        s = s.replace("*", "").strip()
+        return int(float(s))
+    except Exception:
+        return int(default)
+    
+
+_COLS = [
+    ("Material", "material", "str"),
+    ("Density (g/cm³)", "density_g_cm3", "float>0"),
+    ("Z factor", "z_factor", "float>0"),
+
+    ("ramp_step_dac", "ramp_step_dac", "int>0"),
+    ("seg1_max_dac", "ramp_seg1_max_dac", "int>0"),
+    ("seg1_interval_s", "ramp_interval_seg1_s", "float>0"),
+    ("seg2_max_dac", "ramp_seg2_max_dac", "int>0"),
+    ("seg2_interval_s", "ramp_interval_seg2_s", "float>0"),
+
+    ("ignite_dac", "ignite_dac", "int>=0"),
+    ("ignite_rate_min", "ignite_rate_min", "float>=0"),
+    ("ignite_timeout_s", "ignite_timeout_s", "float>0"),
+
+    ("pre_rate", "pre_rate", "float>=0"),
+    ("pre_hold_s", "pre_hold_s", "float>=0"),
+
+    ("dac_adjust_interval_s", "dac_adjust_interval_s", "float>0"),
+    ("fine_step_dac", "fine_step_dac", "int>0"),
+
+    ("shortage_dac", "material_shortage_dac", "int>=0"),
+    ("shortage_rate_max", "material_shortage_rate_max", "float>=0"),
+    ("shortage_time_s", "material_shortage_time_s", "float>=0"),
+]
 
 
 class MaterialCatalogDialog(QDialog):
@@ -63,15 +126,19 @@ class MaterialCatalogDialog(QDialog):
         root.addWidget(self.infoLabel)
 
         self.table = QTableWidget(self)
-        self.table.setColumnCount(4)
-        self.table.setHorizontalHeaderLabels(["Material", "Density (g/cm³)", "Z factor", "Note"])
+
+        self.table.setColumnCount(len(_COLS))
+        self.table.setHorizontalHeaderLabels([c[0] for c in _COLS])
+
+        hdr = self.table.horizontalHeader()
+        for c in range(len(_COLS)):
+            hdr.setSectionResizeMode(c, QHeaderView.ResizeToContents)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
         root.addWidget(self.table, 1)
 
         btn_row = QHBoxLayout()
@@ -117,7 +184,8 @@ class MaterialCatalogDialog(QDialog):
             obj = json.loads(self._json_path.read_text(encoding="utf-8"))
 
             # ✅ 포맷 고정: {"version":1, "items":[...]}만 허용
-            if not (isinstance(obj, dict) and obj.get("version") == 1 and isinstance(obj.get("items"), list)):
+            ver = int(obj.get("version", 0) or 0)
+            if not (isinstance(obj, dict) and isinstance(obj.get("items"), list) and ver in (1, 2)):
                 QMessageBox.warning(self, "Invalid file",
                                     f"material_catalog.json 포맷이 올바르지 않습니다.\n"
                                     f"기대 포맷: {{'version':1,'items':[...]}} \n\n경로:\n{self._json_path}")
@@ -136,6 +204,31 @@ class MaterialCatalogDialog(QDialog):
                 z = _to_float(it.get("z_factor"), default=0.0)
                 note = _to_str(it.get("note"))
                 mats.append(MaterialRow(material=m, density_g_cm3=d, z_factor=z, note=note))
+
+            # 키가 없으면 default로
+            mats.append(
+                MaterialRow(
+                    material=m,
+                    density_g_cm3=d,
+                    z_factor=z,
+                    ramp_step_dac=_to_int(it.get("ramp_step_dac"), 100),
+                    ramp_seg1_max_dac=_to_int(it.get("ramp_seg1_max_dac"), 700),
+                    ramp_interval_seg1_s=_to_float(it.get("ramp_interval_seg1_s"), 10.0),
+                    ramp_seg2_max_dac=_to_int(it.get("ramp_seg2_max_dac"), 1500),
+                    ramp_interval_seg2_s=_to_float(it.get("ramp_interval_seg2_s"), 30.0),
+                    ignite_dac=_to_int(it.get("ignite_dac"), 1500),
+                    ignite_rate_min=_to_float(it.get("ignite_rate_min"), 0.1),
+                    ignite_timeout_s=_to_float(it.get("ignite_timeout_s"), 300.0),
+                    pre_rate=_to_float(it.get("pre_rate"), 0.4),
+                    pre_hold_s=_to_float(it.get("pre_hold_s"), 120.0),
+                    dac_adjust_interval_s=_to_float(it.get("dac_adjust_interval_s"), 10.0),
+                    fine_step_dac=_to_int(it.get("fine_step_dac"), 10),
+                    material_shortage_dac=_to_int(it.get("material_shortage_dac"), 2000),
+                    material_shortage_rate_max=_to_float(it.get("material_shortage_rate_max"), 0.0),
+                    material_shortage_time_s=_to_float(it.get("material_shortage_time_s"), 10.0),
+                    note=_to_str(it.get("note")),
+                )
+            )
 
             return mats
 

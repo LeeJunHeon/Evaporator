@@ -775,10 +775,27 @@ class Ui_Form(object):
 
         # ✅ 상태 표시용 라인에딧: 입력 불가(표시 전용)
         for le in (self.processMonitor_HMI, self.processMonitor_Process):
-            le.setStyleSheet("background: white; border: 1px solid #d0d0d0;")
+            # ✅ 가독성: 패딩(여백) 추가
+            le.setStyleSheet("background: white; border: 1px solid #d0d0d0; padding-left: 10px;")
             le.setReadOnly(True)
             le.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             le.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
+            # ✅ 세로 중앙 정렬(한 줄 상태라인이 보기 좋아짐)
+            le.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+
+        # ✅ Process State(공정 상태) 폰트 크게
+        if hasattr(self, "processMonitor_Process"):
+            f = QFont("Consolas")
+            f.setPointSize(16)   # 필요하면 17~18로 올려도 됨
+            f.setBold(True)
+            self.processMonitor_Process.setFont(f)
+
+        # ✅ HMI State(장비 상태)도 조금 키우기(원하면 동일하게 16으로)
+        if hasattr(self, "processMonitor_HMI"):
+            f2 = QFont("Consolas")
+            f2.setPointSize(13)
+            f2.setBold(True)
+            self.processMonitor_HMI.setFont(f2)
 
         readonly_display = [
             self.materialDensityEdit1, self.materialDensityEdit2,

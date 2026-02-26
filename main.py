@@ -482,6 +482,38 @@ class HmiWindow(QWidget):
 # Process 창
 # ============================================================
 class ProcessWindow(QWidget):
+    # ✅ Material catalog에서 가져올 ramp 파라미터 키 목록
+    _RAMP_KEYS = (
+        "ramp_step_dac",
+        "ramp_seg1_max_dac",
+        "ramp_interval_seg1_s",
+        "ramp_seg2_max_dac",
+        "ramp_interval_seg2_s",
+        "ignite_dac",
+        "ignite_rate_min",
+        "ignite_timeout_s",
+        "pre_rate",
+        "pre_hold_s",
+        "dac_adjust_interval_s",
+        "fine_step_dac",
+        "material_shortage_dac",
+        "material_shortage_rate_max",
+        "material_shortage_time_s",
+    )
+
+    # ✅ float 비교가 필요한 키(듀얼 파워 동일성 검사에 사용)
+    _RAMP_FLOAT_KEYS = {
+        "ramp_interval_seg1_s",
+        "ramp_interval_seg2_s",
+        "ignite_rate_min",
+        "ignite_timeout_s",
+        "pre_rate",
+        "pre_hold_s",
+        "dac_adjust_interval_s",
+        "material_shortage_rate_max",
+        "material_shortage_time_s",
+    }
+
     def __init__(self):
         super().__init__()
         self.ui = Ui_Form()
@@ -983,11 +1015,19 @@ class ProcessWindow(QWidget):
         sel = MaterialCatalogDialog.pick(base_dir=_BASE_DIR, parent=self)
         if not sel:
             return
-        self._apply_material(channel, {
-            "material": sel.material,
-            "density_g_cm3": sel.density_g_cm3,
-            "z_factor": sel.z_factor,
-        })
+
+        data = {
+            "material": getattr(sel, "material", ""),
+            "density_g_cm3": getattr(sel, "density_g_cm3", 0.0),
+            "z_factor": getattr(sel, "z_factor", 0.0),
+        }
+
+        # ✅ ramp 파라미터들까지 함께 저장 (구버전 sel에도 안전하게 getattr)
+        for k in getattr(self, "_RAMP_KEYS", ()):
+            if hasattr(sel, k):
+                data[k] = getattr(sel, k)
+
+        self._apply_material(channel, data)
 
     def _apply_material(self, channel: int, data: dict[str, Any]) -> None:
         mat = str(data.get("material", "")).strip()
@@ -1287,12 +1327,55 @@ class ProcessWindow(QWidget):
                         "Material1/Material2가 서로 다릅니다. 동일하게 맞춰주세요.",
                     )
                     return None
+
+                # ✅ (추가) ramp 파라미터 동일성 검사
+                diff_keys: list[str] = []
+                for k in getattr(self, "_RAMP_KEYS", ()):
+                    v1 = (self._material_1 or {}).get(k, None)
+                    v2 = (self._material_2 or {}).get(k, None)
+
+                    # 둘 다 없으면 OK(구버전 JSON 등)
+                    if v1 is None and v2 is None:
+                        continue
+                    # 한쪽만 있으면 불일치
+                    if (v1 is None) != (v2 is None):
+                        diff_keys.append(k)
+                        continue
+
+                    try:
+                        if k in getattr(self, "_RAMP_FLOAT_KEYS", set()):
+                            if abs(float(v1) - float(v2)) > 1e-9:
+                                diff_keys.append(k)
+                        else:
+                            if int(float(v1)) != int(float(v2)):
+                                diff_keys.append(k)
+                    except Exception:
+                        if v1 != v2:
+                            diff_keys.append(k)
+
+                if diff_keys:
+                    QMessageBox.warning(
+                        self,
+                        "Input",
+                        "Power1+Power2 동시 사용은 '동일 Ramp 설정' 가정입니다.\n"
+                        "Material1/Material2의 ramp 파라미터가 서로 다릅니다:\n"
+                        + ", ".join(diff_keys),
+                    )
+                    return None
+                
         else:
             base_mat = self._material_1 if p1 else self._material_2
 
         mat_name = str((base_mat or {}).get("material", "")).strip()
         den = float((base_mat or {}).get("density_g_cm3", 0.0) or 0.0)
         zf = float((base_mat or {}).get("z_factor", 0.0) or 0.0)
+
+        # ✅ (추가) base_mat에서 ramp 파라미터 묶어서 run_cfg로 전달
+        ramp_cfg: dict[str, Any] = {}
+        for k in getattr(self, "_RAMP_KEYS", ()):
+            v = (base_mat or {}).get(k, None)
+            if v is not None:
+                ramp_cfg[k] = v
 
         if not mat_name:
             QMessageBox.warning(self, "Input", "Material 이름이 비어있습니다. Material을 다시 선택하세요.")
@@ -1311,7 +1394,7 @@ class ProcessWindow(QWidget):
             return None
 
         cfg: dict[str, Any] = {
-            "process_name": pname,   # ✅ 추가
+            "process_name": pname,
 
             "use_power1": p1,
             "use_power2": p2,
@@ -1320,6 +1403,12 @@ class ProcessWindow(QWidget):
             "density": den,
             "z_factor": zf,
 
+            # ✅ (추가) material별 ramp 파라미터를 run_cfg로 전달
+            # - 사용자가 catalog에서 안 바꿔도 기본값이 들어온 상태라 그대로 전달됨
+            # - 구버전 catalog(키 없음)인 경우 ramp_cfg가 비어있을 수 있고,
+            #   그때는 controller/engine 쪽 기본값 로직이 사용되면 됨
+            "ramp": ramp_cfg,
+
             "target_rate": float(target_rate),
             "target_thickness": float(target_thk),
             "delay_min": float(delay_min),
@@ -1327,6 +1416,7 @@ class ProcessWindow(QWidget):
             "material_1": self._material_1,
             "material_2": self._material_2,
         }
+
         return cfg
     # ================== UI 값 파싱 ==================
 

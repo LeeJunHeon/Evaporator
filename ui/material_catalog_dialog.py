@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -81,29 +82,29 @@ def _to_int(v: Any, default: int = 0) -> int:
 
 
 _COLS = [
-    ("Material", "material", "str"),
-    ("Density (g/cm³)", "density_g_cm3", "float>0"),
-    ("Z factor", "z_factor", "float>0"),
+    ("Material", "material", "str", "물질 이름 (예: Al, Au, SiO2)"),
+    ("Density (g/cm³)", "density_g_cm3", "float>0", "필수. 0보다 커야 함"),
+    ("Z factor", "z_factor", "float>0", "필수. 0보다 커야 함"),
 
-    ("ramp_step_dac", "ramp_step_dac", "int>0"),
-    ("seg1_max_dac", "ramp_seg1_max_dac", "int>0"),
-    ("seg1_interval_s", "ramp_interval_seg1_s", "float>0"),
-    ("seg2_max_dac", "ramp_seg2_max_dac", "int>0"),
-    ("seg2_interval_s", "ramp_interval_seg2_s", "float>0"),
+    ("DAC 증가폭", "ramp_step_dac", "int>0", "Ramp에서 DAC를 한 번에 올리는 값"),
+    ("구간1 끝(DAC)", "ramp_seg1_max_dac", "int>0", "예: 700"),
+    ("구간1 간격(s)", "ramp_interval_seg1_s", "float>0", "예: 10초"),
+    ("구간2 끝(DAC)", "ramp_seg2_max_dac", "int>0", "예: 1500"),
+    ("구간2 간격(s)", "ramp_interval_seg2_s", "float>0", "예: 30초"),
 
-    ("ignite_dac", "ignite_dac", "int>=0"),
-    ("ignite_rate_min", "ignite_rate_min", "float>=0"),
-    ("ignite_timeout_s", "ignite_timeout_s", "float>0"),
+    ("Ignite DAC", "ignite_dac", "int>=0", "Ignite 판단을 시작하는 DAC"),
+    ("Ignite 최소 Rate(Å/s)", "ignite_rate_min", "float>=0", "0.1 등"),
+    ("Ignite 타임아웃(s)", "ignite_timeout_s", "float>0", "Ignite 대기 최대 시간"),
 
-    ("pre_rate", "pre_rate", "float>=0"),
-    ("pre_hold_s", "pre_hold_s", "float>=0"),
+    ("Pre-rate(Å/s)", "pre_rate", "float>=0", "예: 0.4 도달 시 pre-hold 시작"),
+    ("Pre-hold(s)", "pre_hold_s", "float>=0", "예: 120초 대기"),
 
-    ("dac_adjust_interval_s", "dac_adjust_interval_s", "float>0"),
-    ("fine_step_dac", "fine_step_dac", "int>0"),
+    ("DAC 변경 텀(s)", "dac_adjust_interval_s", "float>0", "제어 중 DAC 변경 최소 간격"),
+    ("Fine step(DAC)", "fine_step_dac", "int>0", "미세 조정용 DAC step"),
 
-    ("shortage_dac", "material_shortage_dac", "int>=0"),
-    ("shortage_rate_max", "material_shortage_rate_max", "float>=0"),
-    ("shortage_time_s", "material_shortage_time_s", "float>=0"),
+    ("Shortage DAC", "material_shortage_dac", "int>=0", "예: 2000 이상인데 rate가 낮으면"),
+    ("Shortage Rate(Å/s)", "material_shortage_rate_max", "float>=0", "예: 0.0 이하"),
+    ("Shortage time(s)", "material_shortage_time_s", "float>=0", "예: 10초 지속 시 중단"),
 ]
 
 
@@ -143,6 +144,11 @@ class MaterialCatalogDialog(QDialog):
         self.table = QTableWidget(self)
         self.table.setColumnCount(len(_COLS))
         self.table.setHorizontalHeaderLabels([c[0] for c in _COLS])
+
+        for c in range(len(_COLS)):
+            item = self.table.horizontalHeaderItem(c)
+            if item and len(_COLS[c]) >= 4:
+                item.setToolTip(_COLS[c][3])
 
         hdr = self.table.horizontalHeader()
         for c in range(len(_COLS)):
@@ -338,31 +344,91 @@ class MaterialCatalogDialog(QDialog):
             if not it:
                 return ""
             return _to_str(it.data(Qt.UserRole))
+        
+        def _fail(row_idx: int, col_idx: int, msg: str) -> None:
+            # 문제 셀로 커서 이동 + 행 선택해서 수정하기 쉽게
+            self.table.setCurrentCell(row_idx, col_idx)
+            self.table.selectRow(row_idx)
+            QMessageBox.warning(self, "Invalid", msg)
+
+        def _parse_float_cell(row_idx: int, col_idx: int, field: str, default: float, *, allow_blank_default: bool) -> float:
+            raw = _to_str(cell(row_idx, col_idx))
+            if raw == "":
+                if allow_blank_default:
+                    return float(default)
+                _fail(row_idx, col_idx, f"{row_idx+1}행({field}): 값이 비어있습니다.")
+                raise ValueError
+
+            s = raw.replace("*", "").strip()
+            try:
+                v = float(s)
+            except Exception:
+                _fail(row_idx, col_idx, f"{row_idx+1}행({field}): '{raw}' 는 숫자가 아닙니다.")
+                raise ValueError
+
+            if not math.isfinite(v):
+                _fail(row_idx, col_idx, f"{row_idx+1}행({field}): nan/inf 는 허용되지 않습니다.")
+                raise ValueError
+            return v
+
+        def _parse_int_cell(row_idx: int, col_idx: int, field: str, default: int, *, allow_blank_default: bool) -> int:
+            raw = _to_str(cell(row_idx, col_idx))
+            if raw == "":
+                if allow_blank_default:
+                    return int(default)
+                _fail(row_idx, col_idx, f"{row_idx+1}행({field}): 값이 비어있습니다.")
+                raise ValueError
+
+            s = raw.replace("*", "").strip()
+            try:
+                fv = float(s)
+            except Exception:
+                _fail(row_idx, col_idx, f"{row_idx+1}행({field}): '{raw}' 는 정수가 아닙니다.")
+                raise ValueError
+
+            if not math.isfinite(fv):
+                _fail(row_idx, col_idx, f"{row_idx+1}행({field}): nan/inf 는 허용되지 않습니다.")
+                raise ValueError
+
+            iv = int(round(fv))
+            if abs(fv - iv) > 1e-9:
+                _fail(row_idx, col_idx, f"{row_idx+1}행({field}): 정수만 입력 가능합니다. (입력값: '{raw}')")
+                raise ValueError
+
+            return iv
 
         for r in range(self.table.rowCount()):
-            material = _to_str(cell(r, 0))
-            density = _to_float(cell(r, 1), default=0.0)
-            zfac = _to_float(cell(r, 2), default=0.0)
+            try:
+                material = _to_str(cell(r, 0))
 
-            ramp_step_dac = _to_int(cell(r, 3), _DEF.ramp_step_dac)
-            seg1_max = _to_int(cell(r, 4), _DEF.ramp_seg1_max_dac)
-            seg1_int = _to_float(cell(r, 5), _DEF.ramp_interval_seg1_s)
-            seg2_max = _to_int(cell(r, 6), _DEF.ramp_seg2_max_dac)
-            seg2_int = _to_float(cell(r, 7), _DEF.ramp_interval_seg2_s)
+                # 필수값: 빈칸이면 막기
+                density = _parse_float_cell(r, 1, "Density", 0.0, allow_blank_default=False)
+                zfac = _parse_float_cell(r, 2, "Z factor", 0.0, allow_blank_default=False)
 
-            ignite_dac = _to_int(cell(r, 8), _DEF.ignite_dac)
-            ignite_rate_min = _to_float(cell(r, 9), _DEF.ignite_rate_min)
-            ignite_timeout_s = _to_float(cell(r, 10), _DEF.ignite_timeout_s)
+                # 나머지 값들: 빈칸이면 default 사용(=기존값 유지), 형식 오류는 막기
+                ramp_step_dac = _parse_int_cell(r, 3, "ramp_step_dac", _DEF.ramp_step_dac, allow_blank_default=True)
+                seg1_max = _parse_int_cell(r, 4, "seg1_max_dac", _DEF.ramp_seg1_max_dac, allow_blank_default=True)
+                seg1_int = _parse_float_cell(r, 5, "seg1_interval_s", _DEF.ramp_interval_seg1_s, allow_blank_default=True)
+                seg2_max = _parse_int_cell(r, 6, "seg2_max_dac", _DEF.ramp_seg2_max_dac, allow_blank_default=True)
+                seg2_int = _parse_float_cell(r, 7, "seg2_interval_s", _DEF.ramp_interval_seg2_s, allow_blank_default=True)
 
-            pre_rate = _to_float(cell(r, 11), _DEF.pre_rate)
-            pre_hold_s = _to_float(cell(r, 12), _DEF.pre_hold_s)
+                ignite_dac = _parse_int_cell(r, 8, "ignite_dac", _DEF.ignite_dac, allow_blank_default=True)
+                ignite_rate_min = _parse_float_cell(r, 9, "ignite_rate_min", _DEF.ignite_rate_min, allow_blank_default=True)
+                ignite_timeout_s = _parse_float_cell(r, 10, "ignite_timeout_s", _DEF.ignite_timeout_s, allow_blank_default=True)
 
-            dac_adjust_interval_s = _to_float(cell(r, 13), _DEF.dac_adjust_interval_s)
-            fine_step_dac = _to_int(cell(r, 14), _DEF.fine_step_dac)
+                pre_rate = _parse_float_cell(r, 11, "pre_rate", _DEF.pre_rate, allow_blank_default=True)
+                pre_hold_s = _parse_float_cell(r, 12, "pre_hold_s", _DEF.pre_hold_s, allow_blank_default=True)
 
-            shortage_dac = _to_int(cell(r, 15), _DEF.material_shortage_dac)
-            shortage_rate_max = _to_float(cell(r, 16), _DEF.material_shortage_rate_max)
-            shortage_time_s = _to_float(cell(r, 17), _DEF.material_shortage_time_s)
+                dac_adjust_interval_s = _parse_float_cell(r, 13, "dac_adjust_interval_s", _DEF.dac_adjust_interval_s, allow_blank_default=True)
+                fine_step_dac = _parse_int_cell(r, 14, "fine_step_dac", _DEF.fine_step_dac, allow_blank_default=True)
+
+                shortage_dac = _parse_int_cell(r, 15, "material_shortage_dac", _DEF.material_shortage_dac, allow_blank_default=True)
+                shortage_rate_max = _parse_float_cell(r, 16, "material_shortage_rate_max", _DEF.material_shortage_rate_max, allow_blank_default=True)
+                shortage_time_s = _parse_float_cell(r, 17, "material_shortage_time_s", _DEF.material_shortage_time_s, allow_blank_default=True)
+
+            except ValueError:
+                # _fail()에서 메시지/포커싱까지 했으므로 조용히 중단
+                return None
 
             if not material:
                 QMessageBox.warning(self, "Invalid", f"{r+1}행: Material이 비어있습니다.")

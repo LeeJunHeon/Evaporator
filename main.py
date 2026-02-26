@@ -518,8 +518,6 @@ class ProcessWindow(QWidget):
         self.ui.materialEdit.clicked.connect(lambda: self._open_material_dialog(1))
         self.ui.materialEdit2.clicked.connect(lambda: self._open_material_dialog(2))
 
-        self.ui.hmiBtn.clicked.connect(self.goto_hmi_window)
-
         self.ui.startProcess.clicked.connect(self._on_start_clicked)   
         self.ui.stopProcess.clicked.connect(self._on_stop_clicked)   
 
@@ -569,13 +567,6 @@ class ProcessWindow(QWidget):
                 pc.sig_finished.connect(self._on_finished)
             except Exception:
                 pass
-
-    def goto_hmi_window(self):
-        if not self.hmi_window:
-            return
-        self.hmi_window.show()
-        self.hmi_window.raise_()
-        self.hmi_window.activateWindow()
 
     def _bind_stm_ui(self, stm):
         """
@@ -1141,8 +1132,8 @@ class ProcessWindow(QWidget):
 
     def _reset_process_ui(self) -> None:
         """공정 종료 후: 입력값/물질 선택/그래프/표시값 초기화."""
-        # 입력값(있으면 전부 비우기)
-        for wname in ("deprateEdit", "deprateEdit2", "powerEdit", "powerEdit2", "thicknessEdit", "delayEdit"):
+        # ✅ 실제로 쓰는 입력칸만 정리 + Process Name까지 포함
+        for wname in ("processNameEdit", "deprateEdit", "deprateEdit2", "thicknessEdit", "delayEdit"):
             w = getattr(self.ui, wname, None)
             if w is not None and hasattr(w, "setText"):
                 with contextlib.suppress(Exception):

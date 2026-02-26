@@ -550,13 +550,12 @@ class Ui_Form(object):
         # ✅ Process Name (HMI 버튼 자리 대체)
         self.processNameLabel = QLabel(self.page_2)
         self.processNameLabel.setObjectName("processNameLabel")
-        self.processNameLabel.setGeometry(QRect(0, 50, 191, 20))
+        self.processNameLabel.setGeometry(QRect(0, 60, 191, 20))
         self.processNameLabel.setAlignment(Qt.AlignmentFlag.AlignLeading | Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
         self.processNameEdit = QLineEdit(self.page_2)
         self.processNameEdit.setObjectName("processNameEdit")
-        # 라벨(20) 아래에 입력칸(41) → 기존 hmiBtn(61) 영역을 그대로 사용(간격 깔끔)
-        self.processNameEdit.setGeometry(QRect(0, 70, 191, 41))
+        self.processNameEdit.setGeometry(QRect(0, 85, 191, 26))
 
         self.sourcePower1 = QCheckBox(self.page_2)
         self.sourcePower1.setObjectName("sourcePower1")

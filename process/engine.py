@@ -367,12 +367,20 @@ class ProcessEngine:
             return
 
         if t == StepType.WAIT_THICKNESS_GEQ:
-            target = float(step.thickness_target)
+            raw = getattr(step, "thickness_target_a", None)
+            if raw is None:
+                raw = getattr(step, "thickness_target", None)
+
+            if raw is None:
+                raise EngineFailed(step.name, "WAIT_THICKNESS_GEQ requires thickness_target_a(thickness_target)")
+
+            target = float(raw)
+
             self._wait_condition(
                 recipe=recipe,
                 step=step,
                 cond_fn=lambda: self._get_thickness_ok_geq(target),
-                cond_desc=f"thickness >= {target} Å",
+                cond_desc=f"thickness >= {target:g} Å",
                 sensor_value_fn=self._get_thickness,
                 sensor_label="STM thickness",
             )
@@ -1009,7 +1017,7 @@ class ProcessEngine:
 
         # 6) target_rate ±5% band 안으로 fine tune
         self._emit_status(message=f"EVAP fine tune: tol=±{rate_tol_ratio*100:.1f}% / stable_hits={target_stable_hits}")
-        t_tune0 = time.time()
+        t_tune0 = time.monotonic()
         tune_timeout_s = float(meta.get("tune_timeout_s", 120.0) or 120.0)
 
         stable_hits = 0

@@ -10,6 +10,7 @@ import warnings                # ✅ 추가: disconnect 경고 억제용(안전�
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Any
+from concurrent.futures import TimeoutError as FuturesTimeoutError  # ✅ 추가
 
 # ✅ 어디서 실행하든(import 깨짐 방지) 가장 먼저 보정
 _BASE_DIR = Path(__file__).resolve().parent
@@ -666,6 +667,118 @@ class ProcessWindow(QWidget):
         except Exception:
             self._last_thickness = None
 
+    def _check_stm_crystal_health_before_start(self) -> bool:
+        """
+        Start 버튼 눌렀을 때:
+        - STM 연결된 후(U/V 등) LIFE/FREQ/CRYSTAL FAIL을 읽어서
+        - 조건 만족할 때만 공정을 시작하도록 gate.
+        """
+        # --- 설정값(원하면 나중에 config로 빼도 됨) ---
+        LIFE_MIN_PERCENT = 80.0
+
+        # STM-100 스펙: 6 MHz crystal, max freq shift 1 MHz
+        # → 정상적인 U(Hz) 값 sanity 범위(너무 타이트하게 잡지 않음)
+        FREQ_MIN_MHZ = 5.0
+        FREQ_MAX_MHZ = 6.1
+
+        def _abort(title: str, msg: str) -> bool:
+            # 화면/파일 로그에 이유 남기기
+            _append_text(getattr(self.ui, "logWindow", None), f"[PRECHECK][ABORT] {msg}")
+            QMessageBox.warning(self, title, msg)
+
+            # ✅ Start 실패이므로 run 파일 닫기 + 상태 초기화 (기존 패턴과 동일)
+            with contextlib.suppress(Exception):
+                w = getattr(self, "_process_window_log_writer", None)
+                if w and hasattr(w, "close_run"):
+                    w.close_run()
+            self._active_run_id = None
+            self._active_recipe_name = ""
+            return False
+
+        stm = getattr(self, "_stm_service", None)
+        if stm is None:
+            return _abort("STM", "STM 서비스가 없습니다. (STM 연결 실패)")
+
+        if not hasattr(stm, "submit_read_crystal_health"):
+            return _abort(
+                "STM",
+                "STM 서비스에 submit_read_crystal_health()가 없습니다.\n"
+                "services/stm_service.py 수정이 반영됐는지 확인하세요."
+            )
+
+        # 1) LIFE/FREQ 스냅샷 읽기
+        try:
+            fut = stm.submit_read_crystal_health()
+            snap = fut.result(timeout=3.0)
+        except FuturesTimeoutError:
+            return _abort("STM", "STM LIFE/FREQ 읽기 Timeout (통신/전원/케이블/FTM_SW 상태 확인 필요)")
+        except Exception as e:
+            return _abort("STM", f"STM LIFE/FREQ 읽기 실패: {e!r}")
+
+        # 2) 값 파싱
+        crystal_fail = bool(snap.get("crystal_fail", False))
+        life = snap.get("life_percent", None)
+        freq_mhz = snap.get("freq_mhz", None)
+
+        # freq_mhz 없으면 freq_hz로 계산 시도(방어)
+        if freq_mhz is None:
+            fhz = snap.get("freq_hz", None)
+            try:
+                freq_mhz = (float(fhz) / 1_000_000.0) if fhz is not None else None
+            except Exception:
+                freq_mhz = None
+
+        # 3) 조건 판정 + 이유 만들기
+        reasons = []
+
+        if crystal_fail:
+            reasons.append("CRYSTAL FAIL 상태")
+
+        try:
+            if life is None:
+                reasons.append("LIFE 값을 읽지 못함")
+            else:
+                life_f = float(life)
+                if life_f < LIFE_MIN_PERCENT:
+                    reasons.append(f"LIFE {life_f:.1f}% < {LIFE_MIN_PERCENT:.1f}%")
+        except Exception:
+            reasons.append(f"LIFE 값이 숫자가 아님: {life!r}")
+
+        try:
+            if freq_mhz is None:
+                reasons.append("FREQ 값을 읽지 못함")
+            else:
+                fmhz = float(freq_mhz)
+                if not (FREQ_MIN_MHZ <= fmhz <= FREQ_MAX_MHZ):
+                    reasons.append(f"FREQ {fmhz:.3f} MHz (정상범위 {FREQ_MIN_MHZ}~{FREQ_MAX_MHZ} MHz 밖)")
+        except Exception:
+            reasons.append(f"FREQ 값이 숫자가 아님: {freq_mhz!r}")
+
+        # 4) 실패면 공정 시작 차단
+        if reasons:
+            # 표시용으로 실제 읽은 값도 같이 보여주기
+            life_str = "None" if life is None else f"{float(life):.1f}%"
+            freq_str = "None" if freq_mhz is None else f"{float(freq_mhz):.3f} MHz"
+
+            msg = (
+                "STM 크리스탈 상태 불량으로 공정을 시작하지 않습니다.\n\n"
+                f"- LIFE: {life_str}\n"
+                f"- FREQ: {freq_str}\n\n"
+                "사유:\n- " + "\n- ".join(reasons)
+            )
+            return _abort("STM Pre-check", msg)
+
+        # 5) 통과 로그
+        try:
+            _append_text(
+                getattr(self.ui, "logWindow", None),
+                f"[PRECHECK] STM OK: LIFE {float(life):.1f}% | FREQ {float(freq_mhz):.3f} MHz"
+            )
+        except Exception:
+            _append_text(getattr(self.ui, "logWindow", None), f"[PRECHECK] STM OK: {snap!r}")
+
+        return True
+
     def _ensure_sensors_connected_fresh(self) -> bool:
         ini_path = self.hmi_window._ini_path
 
@@ -779,6 +892,10 @@ class ProcessWindow(QWidget):
                     w.close_run()
             self._active_run_id = None
             self._active_recipe_name = ""
+            return
+        
+        # ✅ 2.5) STM 크리스탈 상태(LIFE/FREQ) 사전 점검: 통과 시에만 공정 진행
+        if not self._check_stm_crystal_health_before_start():
             return
 
         # ✅ 3) STM UI 바인딩 + RT 시작

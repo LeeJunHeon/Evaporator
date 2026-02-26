@@ -7,7 +7,8 @@
 - 인디케이터(원형 LED) 스타일
 만 적용한 "가벼운" 버전입니다.
 
-※ Process 버튼(processBtn) / HMI 버튼(hmiBtn)은 기본 스타일 그대로 둡니다.
+※ Process 페이지의 기존 hmiBtn은 제거하고,
+   공정 이름(Process Name) 입력칸(processNameEdit)을 추가합니다.
 """
 
 from PySide6.QtCore import QCoreApplication, QMetaObject, QRect, Qt
@@ -415,7 +416,7 @@ class Ui_Form(object):
         # Density label (위에 1개로 통합)
         self.materialRhoLabel1 = QLabel(self.page_2)
         self.materialRhoLabel1.setObjectName("materialRhoLabel1")
-        self.materialRhoLabel1.setGeometry(QRect(0, 200, 191, 20))
+        self.materialRhoLabel1.setGeometry(QRect(0, 206, 191, 20))
         self.materialRhoLabel1.setAlignment(Qt.AlignmentFlag.AlignLeading | Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
         # 기존 오른쪽 ρ 라벨은 사용 안함 → 숨김(겹침 방지)
@@ -426,18 +427,18 @@ class Ui_Form(object):
         # Density edits (PowerRamp처럼 2칸, 높이 26)
         self.materialDensityEdit1 = QLineEdit(self.page_2)
         self.materialDensityEdit1.setObjectName("materialDensityEdit1")
-        self.materialDensityEdit1.setGeometry(QRect(0, 220, 91, 26))
+        self.materialDensityEdit1.setGeometry(QRect(0, 226, 91, 26))
         self.materialDensityEdit1.setReadOnly(True)
 
         self.materialDensityEdit2 = QLineEdit(self.page_2)
         self.materialDensityEdit2.setObjectName("materialDensityEdit2")
-        self.materialDensityEdit2.setGeometry(QRect(100, 220, 91, 26))
+        self.materialDensityEdit2.setGeometry(QRect(100, 226, 91, 26))
         self.materialDensityEdit2.setReadOnly(True)
 
         # Z-factor label (위에 1개로 통합)
         self.materialZLabel1 = QLabel(self.page_2)
         self.materialZLabel1.setObjectName("materialZLabel1")
-        self.materialZLabel1.setGeometry(QRect(0, 250, 191, 20))
+        self.materialZLabel1.setGeometry(QRect(0, 256, 191, 20))
         self.materialZLabel1.setAlignment(Qt.AlignmentFlag.AlignLeading | Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
         # 기존 오른쪽 Z 라벨은 사용 안함 → 숨김
@@ -448,37 +449,37 @@ class Ui_Form(object):
         # Z-factor edits (2칸, 높이 26)
         self.materialZfactorEdit1 = QLineEdit(self.page_2)
         self.materialZfactorEdit1.setObjectName("materialZfactorEdit1")
-        self.materialZfactorEdit1.setGeometry(QRect(0, 270, 91, 26))
+        self.materialZfactorEdit1.setGeometry(QRect(0, 276, 91, 26))
         self.materialZfactorEdit1.setReadOnly(True)
 
         self.materialZfactorEdit2 = QLineEdit(self.page_2)
         self.materialZfactorEdit2.setObjectName("materialZfactorEdit2")
-        self.materialZfactorEdit2.setGeometry(QRect(100, 270, 91, 26))
+        self.materialZfactorEdit2.setGeometry(QRect(100, 276, 91, 26))
         self.materialZfactorEdit2.setReadOnly(True)
 
         # ✅ Cur Rate: 라벨 1개(전체폭) + Edit 1개
         self.currentRateLabel = QLabel(self.page_2)
         self.currentRateLabel.setObjectName("currentRateLabel")
-        self.currentRateLabel.setGeometry(QRect(0, 450, 191, 20))
+        self.currentRateLabel.setGeometry(QRect(0, 456, 191, 20))
 
         self.currentRateEdit = QLineEdit(self.page_2)
-        self.currentRateEdit.setGeometry(QRect(0, 470, 191, 26))
+        self.currentRateEdit.setGeometry(QRect(0, 476, 191, 26))
         self.currentRateEdit.setReadOnly(True)
 
         # ✅ Cur Thick (Edit 끝 +4 = 다음 라벨)
         self.currentThicknessLabel = QLabel(self.page_2)
         self.currentThicknessLabel.setObjectName("currentThicknessLabel")
-        self.currentThicknessLabel.setGeometry(QRect(0, 500, 191, 20))
+        self.currentThicknessLabel.setGeometry(QRect(0, 506, 191, 20))
 
         self.currentThicknessEdit = QLineEdit(self.page_2)
         self.currentThicknessEdit.setObjectName("currentThicknessEdit")
-        self.currentThicknessEdit.setGeometry(QRect(0, 520, 191, 26))
+        self.currentThicknessEdit.setGeometry(QRect(0, 526, 191, 26))
         self.currentThicknessEdit.setReadOnly(True)
 
         # ✅ Recipe (Edit 끝 +4)
         self.recipeBtn = QPushButton(self.page_2)
         self.recipeBtn.setObjectName("recipeBtn")
-        self.recipeBtn.setGeometry(QRect(0, 550, 191, 41))
+        self.recipeBtn.setGeometry(QRect(0, 556, 191, 41))
 
         self.graphWidget = QWidget(self.page_2)
         self.graphWidget.setObjectName("graphWidget")
@@ -487,25 +488,18 @@ class Ui_Form(object):
 
         self.deprateEdit = QLineEdit(self.page_2)
         self.deprateEdit.setObjectName("deprateEdit")
-        self.deprateEdit.setGeometry(QRect(0, 320, 91, 26))
+        self.deprateEdit.setGeometry(QRect(0, 326, 91, 26))
         self.deprateEdit2 = QLineEdit(self.page_2)
         self.deprateEdit2.setObjectName("deprateEdit2")
-        self.deprateEdit2.setGeometry(QRect(100, 320, 91, 26))
-
-        # self.powerEdit = QLineEdit(self.page_2)
-        # self.powerEdit.setObjectName("powerEdit")
-        # self.powerEdit.setGeometry(QRect(0, 420, 91, 26))
-        # self.powerEdit2 = QLineEdit(self.page_2)
-        # self.powerEdit2.setObjectName("powerEdit2")
-        # self.powerEdit2.setGeometry(QRect(100, 420, 91, 26))
+        self.deprateEdit2.setGeometry(QRect(100, 326, 91, 26))
 
         self.thicknessEdit = QLineEdit(self.page_2)
         self.thicknessEdit.setObjectName("thicknessEdit")
-        self.thicknessEdit.setGeometry(QRect(0, 370, 191, 26))
+        self.thicknessEdit.setGeometry(QRect(0, 376, 191, 26))
 
         self.delayEdit = QLineEdit(self.page_2)
         self.delayEdit.setObjectName("delayEdit")
-        self.delayEdit.setGeometry(QRect(0, 420, 191, 26))
+        self.delayEdit.setGeometry(QRect(0, 426, 191, 26))
 
         self.materialLabel = QLabel(self.page_2)
         self.materialLabel.setObjectName("materialLabel")
@@ -515,11 +509,11 @@ class Ui_Form(object):
         # ✅ Start/Stop (Recipe 끝 +4)
         self.stopProcess = QPushButton(self.page_2)
         self.stopProcess.setObjectName("stopProcess")
-        self.stopProcess.setGeometry(QRect(100, 595, 91, 71))
+        self.stopProcess.setGeometry(QRect(100, 601, 91, 71))
 
         self.startProcess = QPushButton(self.page_2)
         self.startProcess.setObjectName("startProcess")
-        self.startProcess.setGeometry(QRect(0, 595, 91, 71))
+        self.startProcess.setGeometry(QRect(0, 601, 91, 71))
 
         self.logWindow = QPlainTextEdit(self.page_2)
         self.logWindow.setObjectName("logWindow")
@@ -532,22 +526,17 @@ class Ui_Form(object):
 
         self.thicknessLabel = QLabel(self.page_2)
         self.thicknessLabel.setObjectName("thicknessLabel")
-        self.thicknessLabel.setGeometry(QRect(0, 350, 181, 20))
+        self.thicknessLabel.setGeometry(QRect(0, 356, 181, 20))
         self.thicknessLabel.setAlignment(Qt.AlignmentFlag.AlignLeading | Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
         self.delayLabel = QLabel(self.page_2)
         self.delayLabel.setObjectName("delayLabel")
-        self.delayLabel.setGeometry(QRect(0, 400, 191, 20))
+        self.delayLabel.setGeometry(QRect(0, 406, 191, 20))
         self.delayLabel.setAlignment(Qt.AlignmentFlag.AlignLeading | Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-
-        # self.pwoerLabel = QLabel(self.page_2)
-        # self.pwoerLabel.setObjectName("pwoerLabel")
-        # self.pwoerLabel.setGeometry(QRect(0, 400, 181, 20))
-        # self.pwoerLabel.setAlignment(Qt.AlignmentFlag.AlignLeading | Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
         self.deprateLabel = QLabel(self.page_2)
         self.deprateLabel.setObjectName("deprateLabel")
-        self.deprateLabel.setGeometry(QRect(0, 300, 181, 20))
+        self.deprateLabel.setGeometry(QRect(0, 306, 181, 20))
         self.deprateLabel.setAlignment(Qt.AlignmentFlag.AlignLeading | Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
         self.evaporatorLabel = QLabel(self.page_2)
@@ -558,10 +547,16 @@ class Ui_Form(object):
         self.evaporatorLabel.setFont(font2)
         self.evaporatorLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        # ✅ 기본 스타일 유지
-        self.hmiBtn = QPushButton(self.page_2)
-        self.hmiBtn.setObjectName("hmiBtn")
-        self.hmiBtn.setGeometry(QRect(0, 50, 191, 61))
+        # ✅ Process Name (HMI 버튼 자리 대체)
+        self.processNameLabel = QLabel(self.page_2)
+        self.processNameLabel.setObjectName("processNameLabel")
+        self.processNameLabel.setGeometry(QRect(0, 50, 191, 20))
+        self.processNameLabel.setAlignment(Qt.AlignmentFlag.AlignLeading | Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+
+        self.processNameEdit = QLineEdit(self.page_2)
+        self.processNameEdit.setObjectName("processNameEdit")
+        # 라벨(20) 아래에 입력칸(41) → 기존 hmiBtn(61) 영역을 그대로 사용(간격 깔끔)
+        self.processNameEdit.setGeometry(QRect(0, 70, 191, 41))
 
         self.sourcePower1 = QCheckBox(self.page_2)
         self.sourcePower1.setObjectName("sourcePower1")
@@ -634,7 +629,11 @@ class Ui_Form(object):
         #self.pwoerLabel.setText(QCoreApplication.translate("Form", "Power Ramp", None))
         self.deprateLabel.setText(QCoreApplication.translate("Form", "Dep.Rate (Å/s)", None))
         self.evaporatorLabel.setText(QCoreApplication.translate("Form", "Evaporator", None))
-        self.hmiBtn.setText(QCoreApplication.translate("Form", "HMI", None))
+
+        # ✅ Process Name
+        self.processNameLabel.setText(QCoreApplication.translate("Form", "Process Name", None))
+        self.processNameEdit.setPlaceholderText(QCoreApplication.translate("Form", "예) Al_100nm_CH1", None))
+
         self.sourcePower1.setText(QCoreApplication.translate("Form", "Power 1", None))
         self.sourcePower2.setText(QCoreApplication.translate("Form", "Power 2", None))
 

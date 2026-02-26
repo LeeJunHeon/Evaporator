@@ -302,11 +302,18 @@ class ProcessController(QObject):
             steps.append(ProcessStep(name="SHUTTER_2_CLOSE", type=StepType.PLC_WRITE_COIL, coil="SHUTTER_2_SW", on=False))
         steps.append(ProcessStep(name="FTM_OFF", type=StepType.PLC_WRITE_COIL, coil="FTM_SW", on=False))
 
+        # ✅ 입력받은 공정명 (main.py에서 run_cfg로 넘어옴)
+        process_name = str(run_cfg.get("process_name", "")).strip()
+        if not process_name:
+            # 방어: 기존 동작 fallback
+            process_name = f"EVAP_{material}"
+
         recipe = ProcessRecipe(
-            recipe_name=f"EVAP_{material}",
+            recipe_name=process_name,   # ✅ 변경
             steps=steps,
             telemetry_interval_s=1.0,
             meta={
+                "process_name": process_name,  # ✅ 추적용으로 meta에도 남김(선택이지만 추천)
                 "material_name": material,
                 "use_power1": use_p1,
                 "use_power2": use_p2,
@@ -317,6 +324,7 @@ class ProcessController(QObject):
                 "delay_min": delay_min,
             },
         )
+        
         recipe.validate(strict=True)
         return recipe
 

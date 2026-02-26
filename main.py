@@ -7,7 +7,6 @@ import time
 import contextlib
 import re                      # ✅ 추가
 import warnings                # ✅ 추가: disconnect 경고 억제용(안전장치)
-from uuid import uuid4          # ✅ 추가
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Any
@@ -723,10 +722,15 @@ class ProcessWindow(QWidget):
         if run_cfg is None:
             return
 
-        # ✅ (추가) run_id 생성 + 공정별 ProcessWindowLog 파일 open
-        self._active_run_id = datetime.now().strftime("%Y%m%d_%H%M%S") + "_" + uuid4().hex[:6]
+        # ✅ (변경) run_id: 날짜+시간만(초 단위) / recipe_name: 입력받은 Process Name
+        self._active_run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        pname = str(run_cfg.get("process_name", "") or "").strip()
         mat = str(run_cfg.get("material_name", "") or "").strip()
-        self._active_recipe_name = f"EVAP_{mat}" if mat else "EVAP"
+
+        # process_name이 비어있을 가능성까지 방어(원칙상 _collect_ui_run_cfg에서 이미 막힘)
+        self._active_recipe_name = pname if pname else (f"EVAP_{mat}" if mat else "EVAP")
+
         with contextlib.suppress(Exception):
             w = getattr(self, "_process_window_log_writer", None)
             if w and hasattr(w, "open_run"):
@@ -1297,7 +1301,18 @@ class ProcessWindow(QWidget):
             QMessageBox.warning(self, "Input", "Material density/z-factor 값이 올바르지 않습니다.")
             return None
 
+        # ✅ Process Name (필수)
+        pname = ""
+        w = getattr(self.ui, "processNameEdit", None)
+        if w is not None and hasattr(w, "text"):
+            pname = str(w.text()).strip()
+        if not pname:
+            QMessageBox.warning(self, "Input", "Process Name을 입력하세요.")
+            return None
+
         cfg: dict[str, Any] = {
+            "process_name": pname,   # ✅ 추가
+
             "use_power1": p1,
             "use_power2": p2,
 
@@ -1305,13 +1320,10 @@ class ProcessWindow(QWidget):
             "density": den,
             "z_factor": zf,
 
-            # ✅ 목표 dep.rate는 이것 하나만
             "target_rate": float(target_rate),
-
             "target_thickness": float(target_thk),
             "delay_min": float(delay_min),
 
-            # (참고용: 동일 물질 체크/디버깅용)
             "material_1": self._material_1,
             "material_2": self._material_2,
         }

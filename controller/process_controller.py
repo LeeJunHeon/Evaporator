@@ -13,6 +13,7 @@ ProcessController
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Optional, Union, Any
 
@@ -304,6 +305,9 @@ class ProcessController(QObject):
 
         # ✅ 입력받은 공정명 (main.py에서 run_cfg로 넘어옴)
         process_name = str(run_cfg.get("process_name", "")).strip()
+        process_name = re.sub(r'[<>:"/\\|?*]+', "_", process_name)
+        process_name = re.sub(r"\s+", "_", process_name).strip("._ ")
+
         if not process_name:
             # 방어: 기존 동작 fallback
             process_name = f"EVAP_{material}"
@@ -324,7 +328,7 @@ class ProcessController(QObject):
                 "delay_min": delay_min,
             },
         )
-        
+
         recipe.validate(strict=True)
         return recipe
 

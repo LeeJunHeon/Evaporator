@@ -617,7 +617,13 @@ class ProcessEngine:
         # --- 내부 유틸 ---
         def _sleep_with_checks(total_s: float, *, where: str = "sleep") -> None:
             nonlocal shortage_start_ts
-            end_t = time.monotonic() + float(total_s)
+            total_s = float(total_s)
+            end_t = time.monotonic() + total_s
+
+            # ✅ 1초마다 카운트다운 표시(짧은 sleep은 생략 가능)
+            next_ui_m = time.monotonic()
+            show_ui = total_s >= 1.0
+
             while True:
                 self._check_stop_pause(recipe, step)
                 self._tick_emit(recipe, step)
@@ -632,19 +638,28 @@ class ProcessEngine:
                 if remain <= 0:
                     return
 
+                if show_ui and now >= next_ui_m:
+                    self._emit_status(
+                        message=f"[남은 {self._fmt_hms(remain, ceil=True)}] 대기중 ({where})",
+                        force=True,
+                    )
+                    next_ui_m = now + 1.0
+
                 time.sleep(min(0.1, remain))
 
         ignite_wait_active: bool = False
         ignite_wait_start_m: Optional[float] = None
         ignite_ok_hits: int = 0  # ✅ rate>=ignite_rate_min 연속 카운트
+        ignite_next_ui_m: float = 0.0  # ✅ ignite 대기 카운트다운 UI 갱신 타이밍
 
         def _handle_ignite_wait(rt: float, *, where: str) -> bool:
-            nonlocal ignite_wait_active, ignite_wait_start_m, ignite_ok_hits
+            nonlocal ignite_wait_active, ignite_wait_start_m, ignite_ok_hits, ignite_next_ui_m
 
             if int(dac) != int(ignite_dac):
                 ignite_wait_active = False
                 ignite_wait_start_m = None
                 ignite_ok_hits = 0
+                ignite_next_ui_m = 0.0
                 return False
 
             rtf = float(rt)
@@ -656,14 +671,27 @@ class ProcessEngine:
                 else:
                     ignite_ok_hits = 0
 
+                now_m = time.monotonic()
+                if ignite_wait_start_m is not None and now_m >= ignite_next_ui_m:
+                    remain_s = max(0.0, float(ignite_timeout_s) - (now_m - float(ignite_wait_start_m)))
+                    self._emit_status(
+                        message=(
+                            f"[남은 {self._fmt_hms(remain_s, ceil=True)}] IGNITE WAIT | "
+                            f"DAC={dac} | rate={rtf:.3f} | ok {ignite_ok_hits}/{ignite_stable_hits}"
+                        ),
+                        force=True,
+                    )
+                    ignite_next_ui_m = now_m + 1.0
+
                 if ignite_ok_hits >= max(1, int(ignite_stable_hits)):
                     ignite_wait_active = False
                     ignite_wait_start_m = None
                     ignite_ok_hits = 0
+                    ignite_next_ui_m = 0.0
                     self._emit_status(message=f"IGNITE OK: rate={rtf:.3f} (hits={ignite_stable_hits})", force=True)
                     return False
 
-                if ignite_wait_start_m is not None and (time.monotonic() - float(ignite_wait_start_m)) >= float(ignite_timeout_s):
+                if ignite_wait_start_m is not None and (now_m - float(ignite_wait_start_m)) >= float(ignite_timeout_s):
                     raise EngineFailed(step.name, f"IGNITE WAIT TIMEOUT: DAC={dac}, rate={rtf:.3f} < {ignite_rate_min:.3f}")
 
                 return True
@@ -673,10 +701,11 @@ class ProcessEngine:
                 ignite_wait_active = True
                 ignite_wait_start_m = time.monotonic()
                 ignite_ok_hits = 0
+                ignite_next_ui_m = ignite_wait_start_m  # 시작 즉시 표시되게
                 self._emit_status(
                     message=(
-                        f"IGNITE WAIT: DAC={dac} rate={rtf:.3f} → "
-                        f"rate>={ignite_rate_min:.3f} 을 {ignite_stable_hits}회 연속 확인(최대 {ignite_timeout_s:.0f}s)"
+                        f"[남은 {self._fmt_hms(float(ignite_timeout_s), ceil=True)}] IGNITE WAIT START | "
+                        f"DAC={dac} rate={rtf:.3f} → rate>={ignite_rate_min:.3f} hits={ignite_stable_hits}"
                     ),
                     force=True,
                 )
@@ -706,7 +735,7 @@ class ProcessEngine:
 
         def read_rate_or_abort(*, where: str) -> float:
             nonlocal shortage_start_ts
-            t0 = time.time()
+            t0 = time.monotonic()
             while True:
                 self._check_stop_pause(recipe, step)
                 self._tick_emit(recipe, step)
@@ -720,13 +749,13 @@ class ProcessEngine:
 
                     return rt_f
 
-                if (time.time() - t0) >= sensor_none_abort_s:
+                if (time.monotonic() - t0) >= sensor_none_abort_s:
                     raise EngineFailed(step.name, f"EVAP: rate 센서 None 지속 {sensor_none_abort_s}s")
 
                 time.sleep(0.1)
 
         def read_th_or_abort() -> float:
-            t0 = time.time()
+            t0 = time.monotonic()
             while True:
                 self._check_stop_pause(recipe, step)
                 self._tick_emit(recipe, step)
@@ -735,7 +764,7 @@ class ProcessEngine:
                 if th is not None:
                     return float(th)
 
-                if (time.time() - t0) >= sensor_none_abort_s:
+                if (time.monotonic() - t0) >= sensor_none_abort_s:
                     raise EngineFailed(step.name, f"EVAP: thickness 센서 None 지속 {sensor_none_abort_s}s")
 
                 time.sleep(0.1)
@@ -996,7 +1025,7 @@ class ProcessEngine:
             if stable_hits >= max(1, int(target_stable_hits)):
                 break
 
-            if (time.time() - t_tune0) > tune_timeout_s:
+            if (time.monotonic() - t_tune0) > tune_timeout_s:
                 raise EngineFailed(step.name, f"EVAP: target_rate fine tune timeout {tune_timeout_s}s (rt={rt:.3f})")
 
             new_dac = self._evap_adjust_dac(
@@ -1376,9 +1405,18 @@ class ProcessEngine:
     ) -> None:
         # ✅ WAIT 표시(조건/경과/남은): monotonic 기반(시스템 시간 변경 영향 최소화)
         start_m = time.monotonic()
+
+        # ✅ timeout: step.timeout_s 우선, 없으면 recipe.default_wait_timeout_s(없으면 3600s) 적용
+        timeout_s = getattr(step, "timeout_s", None)
+        if timeout_s is None:
+            timeout_s = float(getattr(recipe, "default_wait_timeout_s", 3600.0) or 3600.0)
+            # 사용자가 "진짜 무한대"를 원하면 recipe.default_wait_timeout_s=0(또는 음수)로 두면 됨
+            if timeout_s <= 0:
+                timeout_s = None
+
         deadline_m: Optional[float] = None
-        if step.timeout_s is not None:
-            deadline_m = start_m + float(step.timeout_s)
+        if timeout_s is not None:
+            deadline_m = start_m + float(timeout_s)
 
         poll_s = max(0.05, float(step.poll_s or 0.2))
 
@@ -1441,37 +1479,37 @@ class ProcessEngine:
                     # 기본값(기존 cond_desc는 유지하되, 사용자 지정 메시지가 있으면 그게 우선)
                     prefix = f"대기: {cond_desc}"
 
-                if deadline_m is None:
-                    remain_txt = "∞"
+            # deadline_m은 (위에서) 기본값이 들어가므로 보통 None이 아님
+            if deadline_m is None:
+                remain_txt = self._fmt_hms(0.0, ceil=True)
+            else:
+                remain_s = max(0.0, deadline_m - now_m)
+                remain_txt = self._fmt_hms(remain_s, ceil=True)
+
+            elapsed_txt = self._fmt_hms(elapsed_s)
+
+            extra_parts = []
+            if step.stable_s is not None and float(step.stable_s) > 0:
+                stable_s = float(step.stable_s)
+                stable_elapsed = 0.0 if stable_start_m is None else max(0.0, now_m - stable_start_m)
+                stable_elapsed = min(stable_elapsed, stable_s)
+                extra_parts.append(f"stable {stable_elapsed:.1f}/{stable_s:.1f}s")
+
+            if sensor_value_fn is not None:
+                lab = sensor_label or "sensor"
+                if v is None:
+                    extra_parts.append(f"{lab}=None")
                 else:
-                    remain_s = max(0.0, deadline_m - now_m)
-                    remain_txt = self._fmt_hms(remain_s, ceil=True)
+                    extra_parts.append(f"{lab}={float(v):.3f}")
 
-                elapsed_txt = self._fmt_hms(elapsed_s)
+            extra = (" / " + " / ".join(extra_parts)) if extra_parts else ""
 
-                extra_parts = []
-
-                # stable 진행률(있을 때만)
-                if step.stable_s is not None and float(step.stable_s) > 0:
-                    stable_s = float(step.stable_s)
-                    stable_elapsed = 0.0 if stable_start_m is None else max(0.0, now_m - stable_start_m)
-                    stable_elapsed = min(stable_elapsed, stable_s)
-                    extra_parts.append(f"stable {stable_elapsed:.1f}/{stable_s:.1f}s")
-
-                # 센서 값(있을 때만)
-                if sensor_value_fn is not None:
-                    lab = sensor_label or "sensor"
-                    if v is None:
-                        extra_parts.append(f"{lab}=None")
-                    else:
-                        extra_parts.append(f"{lab}={float(v):.3f}")
-
-                extra = (" / " + " / ".join(extra_parts)) if extra_parts else ""
-                self._emit_status(
-                    message=f"{prefix} | 남은시간 {remain_txt} (경과 {elapsed_txt}){extra}",
-                    force=True,
-                )
-                next_ui_m = now_m + 1.0
+            # ✅ 표시 포맷 통일: [남은 ..] prefix | 경과 .. / stable .. / sensor ..
+            self._emit_status(
+                message=f"[남은 {remain_txt}] {prefix} | 경과 {elapsed_txt}{extra}",
+                force=True,
+            )
+            next_ui_m = now_m + 1.0
 
             # sleep(남은 시간이 짧으면 그만큼만)
             if deadline_m is None:

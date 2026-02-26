@@ -357,7 +357,12 @@ class ProcessEngine:
                 recipe=recipe,
                 step=step,
                 cond_fn=lambda: self._get_pressure_ok_leq(target),
-                cond_desc=f"pressure <= {target}",
+                cond_desc=f"압력 ≤ {target:g}",
+                # ✅ 압력도 표시하고 싶으면 sensor_value_fn을 넣되,
+                #    압력계가 순간 None이어도 바로 실패하지 않게 abort는 꺼둠(0.0)
+                sensor_value_fn=self._get_pressure,
+                sensor_label="압력",
+                sensor_missing_abort_s=0.0,
             )
             return
 
@@ -367,7 +372,7 @@ class ProcessEngine:
                 recipe=recipe,
                 step=step,
                 cond_fn=lambda: self._get_thickness_ok_geq(target),
-                cond_desc=f"thickness >= {target}",
+                cond_desc=f"thickness >= {target} Å",
                 sensor_value_fn=self._get_thickness,
                 sensor_label="STM thickness",
             )
@@ -380,9 +385,9 @@ class ProcessEngine:
                 recipe=recipe,
                 step=step,
                 cond_fn=lambda: self._get_rate_ok_in_range(mn, mx),
-                cond_desc=f"rate in [{mn}, {mx}] A/s",
+                cond_desc=f"dep.rate [{mn}, {mx}] Å/s",
                 sensor_value_fn=self._get_rate,   # ✅ 추가
-                sensor_label="STM rate",          # ✅ 추가
+                sensor_label="STM dep.rate",          # ✅ 추가
             )
             return
 
@@ -393,7 +398,7 @@ class ProcessEngine:
                 recipe=recipe,
                 step=step,
                 cond_fn=lambda: self._get_coil_is(coil, exp),
-                cond_desc=f"coil {coil} == {exp}",
+                cond_desc=f"coil {coil} == {'ON' if exp else 'OFF'}",
             )
             return
 
@@ -403,22 +408,41 @@ class ProcessEngine:
     # STM helper (material params / zero)
     # ------------------------------------------------------------
     def _stm_wait_connected(self, recipe: ProcessRecipe, step: ProcessStep, *, timeout_s: float = 5.0) -> None:
-        """STMService가 connected=True가 될 때까지 대기."""
+        """STMService가 connected=True가 될 때까지 대기(카운트다운 표시)."""
         if self.stm is None:
             raise EngineFailed(step.name, "STM 서비스가 주입되지 않았습니다(stm=None).")
 
-        t0 = time.time()
-        while (time.time() - t0) < float(timeout_s):
+        start_m = time.monotonic()
+        deadline_m = start_m + float(timeout_s)
+        next_ui_m = start_m
+
+        while True:
             self._check_stop_pause(recipe, step)
             self._tick_emit(recipe, step)
 
+            now_m = time.monotonic()
+            remain_s = deadline_m - now_m
+            if remain_s <= 0:
+                break
+
             snap = self._get_stm_snapshot()
-            if snap is not None and bool(getattr(snap, "connected", False)):
+            ok = bool(snap is not None and bool(getattr(snap, "connected", False)))
+
+            # ✅ 1초마다 카운트다운 표시
+            if now_m >= next_ui_m:
+                self._emit_status(
+                    message=f"[남은 {self._fmt_hms(remain_s, ceil=True)}] STM 연결 대기",
+                    force=True,
+                )
+                next_ui_m = now_m + 1.0
+
+            if ok:
+                self._emit_status(message="[남은 00:00] STM 연결 완료", force=True)
                 return
+
             time.sleep(0.1)
 
         raise EngineFailed(step.name, f"STM 연결 대기 timeout: {timeout_s:.1f}s")
-
 
     def _stm_apply_material_params(
         self,
@@ -1317,7 +1341,7 @@ class ProcessEngine:
                 if total_s > 0:
                     prefix = (str(getattr(step, "message", "") or "").strip()) or (step.name or "WAIT")
                     self._emit_status(
-                        message=f"{prefix} | 남은시간 00:00 (완료)",
+                        message=f"[남은 00:00] {prefix} | 완료",
                         force=True,
                     )
                 return
@@ -1330,8 +1354,8 @@ class ProcessEngine:
                 elapsed_s = now_m - start_m
                 self._emit_status(
                     message=(
-                        f"{prefix} | 남은시간 {self._fmt_hms(remain_s, ceil=True)} "
-                        f"(경과 {self._fmt_hms(elapsed_s)} / 총 {self._fmt_hms(total_s)})"
+                        f"[남은 {self._fmt_hms(remain_s, ceil=True)}] {prefix} | "
+                        f"경과 {self._fmt_hms(elapsed_s)} / 총 {self._fmt_hms(total_s)}"
                     ),
                     force=True,
                 )

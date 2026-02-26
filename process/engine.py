@@ -1114,7 +1114,7 @@ class ProcessEngine:
                 _sleep_with_checks(min(0.1, max(0.0, remain_s)))
 
         # 8) delay 종료 → STM zero
-        self._emit_status(message="MAIN SHUTTER OPEN", force=True)
+        self._emit_status(message="STM ZERO (thickness reset)", force=True)
         zero_mode = str(meta.get("zero_mode", "B") or "B")
         self._stm_zero_thickness(recipe, step, mode=zero_mode)
         
@@ -1122,6 +1122,7 @@ class ProcessEngine:
         th0 = read_th_or_abort()
 
         #  MAIN_SHUTTER open
+        self._emit_status(message="MAIN SHUTTER OPEN", force=True)
         self._plc_write_coil("MAIN_SHUTTER_SW", True, tag="EVAP_MAIN_SHUTTER_OPEN")
 
         self._emit_status(message=f"EVAP: thickness baseline th0={th0:.1f} Å")

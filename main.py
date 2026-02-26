@@ -166,7 +166,7 @@ class RunWindowLogWriter:
 
         rid = self._sanitize_name(run_id, max_len=80)
         rname = self._sanitize_name(recipe_name, max_len=60) if recipe_name else ""
-        fname = f"{rid}.log" if not rname else f"{rid}__{rname}.log"
+        fname = f"{rid}.log" if not rname else f"{rid}_{rname}.log"
 
         # 1) NAS 우선, 실패하면 로컬 fallback
         for base in (self._folder, self._fallback_root / self._folder.name):

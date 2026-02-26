@@ -326,8 +326,8 @@ class LogWriterWorker(QThread):
 
     def _open_run(self, run_id: str, recipe_name: str, meta: Dict[str, Any], ts: Optional[float]) -> None:
         """
-        ✅ 공정(run)당 파일 1개만 생성:
-        - (NAS 우선) base_dir/<run_id>_<recipe>.log
+        ✅ 공정(run)당 텔레메트리 CSV 1개만 생성:
+        - (NAS 우선) base_dir/<run_id>_<recipe>.csv
         - NAS open 실패 시 로컬(_fallback_dir)로 저장
         """
         self._close_run()

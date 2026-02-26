@@ -378,9 +378,9 @@ class STM100(BaseSerialDevice):
         s = self.command("T")
         ss = (s or "").strip()
         if not ss:
-            raise STM100ProtocolError("STM-100: empty rate response")
+            raise STM100ValueUnavailableError("STM-100: empty rate response")
         if ss in _UNAVAILABLE_MARKERS or set(ss) == {"-"}:
-            raise STM100ProtocolError(f"STM-100: rate unavailable: {s!r}")
+            raise STM100ValueUnavailableError(f"STM-100: rate unavailable: {s!r}")
         try:
             return float(ss)
         except ValueError as e:
@@ -526,9 +526,9 @@ class STM100(BaseSerialDevice):
         ss = (s or "").strip()
 
         if not ss:
-            raise STM100ProtocolError("STM-100: empty density response")
+            raise STM100ValueUnavailableError("STM-100: empty density response")
         if ss in _UNAVAILABLE_MARKERS or set(ss) == {"-"}:
-            raise STM100ProtocolError(f"STM-100: density unavailable: {s!r}")
+            raise STM100ValueUnavailableError(f"STM-100: density unavailable: {s!r}")
 
         try:
             return float(ss)
@@ -550,9 +550,9 @@ class STM100(BaseSerialDevice):
         ss = (s or "").strip()
 
         if not ss:
-            raise STM100ProtocolError("STM-100: empty z-factor response")
+            raise STM100ValueUnavailableError("STM-100: empty z-factor response")
         if ss in _UNAVAILABLE_MARKERS or set(ss) == {"-"}:
-            raise STM100ProtocolError(f"STM-100: z-factor unavailable: {s!r}")
+            raise STM100ValueUnavailableError(f"STM-100: z-factor unavailable: {s!r}")
 
         try:
             return float(ss)

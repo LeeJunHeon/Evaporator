@@ -554,7 +554,7 @@ class ProcessEngine:
         material_shortage_dac = int(meta.get("material_shortage_dac", 2000) or 2000)
         material_shortage_rate_max = float(meta.get("material_shortage_rate_max", 0.0) or 0.0)  # <=
         # "계속"을 엄밀히 하려면 지속시간을 쓰면 됨(초). 10이면 10초 대기 후 중단.
-        material_shortage_time_s = float(meta.get("material_shortage_time_s", 10.0))
+        material_shortage_time_s = float(meta.get("material_shortage_time_s", 10.0) or 10.0)
 
         # delay는 분 단위 입력(기존 UI) → 초로 변환
         delay_s = delay_min * 60.0
@@ -602,16 +602,8 @@ class ProcessEngine:
         ignite_wait_start_m: Optional[float] = None
 
         def _handle_ignite_wait(rt: float, *, where: str) -> bool:
-            """
-            요구사항:
-            - DAC==ignite_dac(1500)인데 dep.rate<=0이면,
-            dep.rate>=0.1 나올 때까지 DAC 올리지 말고 대기
-            - timeout: ignite_timeout_s(기본 300s)
-            return True면 "대기 수행 중"이라서 상위 루프에서 continue 해야 함
-            """
             nonlocal ignite_wait_active, ignite_wait_start_m
 
-            # ignite_dac 위치가 아니면 ignite 대기 상태 해제
             if int(dac) != int(ignite_dac):
                 ignite_wait_active = False
                 ignite_wait_start_m = None
@@ -619,32 +611,29 @@ class ProcessEngine:
 
             rtf = float(rt)
 
-            # 대기 시작 조건: rate가 0(또는 설정값 이하)
-            if rtf <= float(ignite_trigger_rate_max):
-                if not ignite_wait_active:
-                    ignite_wait_active = True
-                    ignite_wait_start_m = time.monotonic()
-                    self._emit_status(
-                        message=f"IGNITE WAIT: DAC={dac} rate={rtf:.3f} → rate>={ignite_rate_min:.3f} 대기(최대 {ignite_timeout_s:.0f}s)",
-                        force=True,
-                    )
-
-                # 종료 조건: rate가 0.1 이상
+            # ✅ 이미 대기 상태면: 0.1(ignite_rate_min) 될 때까지 계속 유지
+            if ignite_wait_active:
                 if rtf >= float(ignite_rate_min):
                     ignite_wait_active = False
                     ignite_wait_start_m = None
                     self._emit_status(message=f"IGNITE OK: rate={rtf:.3f}", force=True)
                     return False
 
-                # timeout
                 if ignite_wait_start_m is not None and (time.monotonic() - float(ignite_wait_start_m)) >= float(ignite_timeout_s):
                     raise EngineFailed(step.name, f"IGNITE WAIT TIMEOUT: DAC={dac}, rate={rtf:.3f} < {ignite_rate_min:.3f}")
 
                 return True
 
-            # rate가 0 초과면 ignite 대기 조건 아님
-            ignite_wait_active = False
-            ignite_wait_start_m = None
+            # ✅ 대기 시작 조건(요구사항: rate==0일 때)
+            if rtf <= float(ignite_trigger_rate_max):
+                ignite_wait_active = True
+                ignite_wait_start_m = time.monotonic()
+                self._emit_status(
+                    message=f"IGNITE WAIT: DAC={dac} rate={rtf:.3f} → rate>={ignite_rate_min:.3f} 대기(최대 {ignite_timeout_s:.0f}s)",
+                    force=True,
+                )
+                return True
+
             return False
 
         def _ramp_interval_by_dac(cur_dac: int) -> float:
@@ -773,7 +762,7 @@ class ProcessEngine:
 
         # ramp timeout(무한 루프 방지)
         ramp_timeout_s = float(meta.get("ramp_timeout_s", 600.0) or 600.0)
-        t_ramp0 = time.time()
+        t_ramp0 = time.monotonic()
 
         stuck_start_ts_pre: Optional[float] = None
 
@@ -863,7 +852,7 @@ class ProcessEngine:
 
         # 5) target_rate까지 ramp-up (일단은 계속 +100)
         self._emit_status(message=f"EVAP target_rate ramp-up: target_rate={target_rate} Å/s")
-        t_ramp1 = time.time()
+        t_ramp1 = time.monotonic()
 
         stuck_start_ts_target: Optional[float] = None
 

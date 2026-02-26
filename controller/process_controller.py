@@ -230,9 +230,9 @@ class ProcessController(QObject):
             "target_stable_hits": int(run_cfg.get("target_stable_hits", 5) or 5),
             "target_stable_interval_s": float(run_cfg.get("target_stable_interval_s", 1.0) or 1.0),
 
-            # --- 목표 도달/보정 ---
-            "rate_drop_ratio": 0.30,
-            "rate_drop_count": 3,
+            # --- rate drop(급락 감지) ---
+            "rate_drop_ratio": float(run_cfg.get("rate_drop_ratio", 0.30) or 0.30),
+            "rate_drop_count": int(run_cfg.get("rate_drop_count", 3) or 3),
 
             # --- pre-rate 홀드 ---
             "pre_rate": 0.4,

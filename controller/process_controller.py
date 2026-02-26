@@ -661,6 +661,14 @@ class ProcessController(QObject):
             self.sig_ui_log.emit(f"[STM][WARN] {msg}")
 
     def _on_acs_io_trace(self, obj: object) -> None:
+        # ✅ ACS2000(압력)은 프로그램 부팅부터 CON 스트림을 켜두기 때문에
+        #    공정이 돌지 않아도(=idle) 압력 변화가 계속 발생한다.
+        #    Process 창(logWindow)은 “공정 중” 로그만 보여야 하므로,
+        #    공정 미실행 상태에서는 ACS trace를 UI에 올리지 않는다.
+        #    (연결/오류는 main.py에서 HMI 로그창으로 이미 표시됨)
+        if not self.is_running():
+            return
+
         try:
             d = dict(obj or {})
         except Exception:
@@ -672,7 +680,6 @@ class ProcessController(QObject):
         tx = str(d.get("tx", "") or "")
         rx = str(d.get("rx", "") or "")
 
-        # 기본은 token + detail 위주로 표시
         msg = f"{token} {detail}".strip()
         if not msg:
             msg = f"TX={tx} | RX={rx}".strip()

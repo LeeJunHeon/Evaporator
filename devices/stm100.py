@@ -181,11 +181,22 @@ class STM100(BaseSerialDevice):
         io_trace_cb = kwargs.pop("io_trace_cb", None)
         io_trace_skip_tokens = kwargs.pop("io_trace_skip_tokens", {"S", "T"})
 
+        # ✅ debug: 공정 중 U(주파수)/V(LIFE)도 주기적으로 읽어서 io_trace로 로그에 남길지
+        uv_trace_enable = kwargs.pop("uv_trace_enable", True)
+        uv_trace_interval_s = kwargs.pop("uv_trace_interval_s", 2.0)
+
         super().__init__(*args, **kwargs)
 
         # ✅ pop 다시 하지 말고, 위에서 뽑은 값을 저장
         self._io_trace_cb: Optional[Callable[[dict], None]] = io_trace_cb
         self._io_trace_skip_tokens: Set[str] = set(io_trace_skip_tokens or set())
+
+        # ✅ U/V 디버그 로깅
+        self._uv_trace_enable: bool = bool(uv_trace_enable)
+        self._uv_trace_interval_s: float = max(0.0, float(uv_trace_interval_s))
+        if self._uv_trace_interval_s <= 0:
+            self._uv_trace_enable = False
+        self._next_uv_trace_ts: float = 0.0
 
         self._io_err_allow = max(0, int(io_err_allow))
         self._io_retry_sleep_s = max(0.0, float(io_retry_sleep_s))
@@ -212,6 +223,39 @@ class STM100(BaseSerialDevice):
                 "rx": rx if rx is not None else "",
                 "detail": detail,
             })
+        except Exception:
+            pass
+
+    def _maybe_trace_uv(self) -> None:
+        """
+        ✅ 디버그 목적:
+        - 서비스 레이어가 S/T(두께/레이트)만 주기적으로 읽더라도,
+        여기서 U(센서 주파수) / V(크리스탈 LIFE)도 주기적으로 읽어서
+        ProcessWindow 하단 로그(io_trace 경로)로 흘려보낸다.
+        - 실패/빈값은 공정 폴링을 망치지 않도록 삼킴(best-effort)
+        """
+        if not getattr(self, "_uv_trace_enable", False):
+            return
+        # io_trace_cb가 없으면 UI 로그로 전달될 길이 없으므로 생략
+        if not getattr(self, "_io_trace_cb", None):
+            return
+
+        now = time.time()
+        next_ts = float(getattr(self, "_next_uv_trace_ts", 0.0) or 0.0)
+        if now < next_ts:
+            return
+
+        interval = float(getattr(self, "_uv_trace_interval_s", 0.0) or 0.0)
+        self._next_uv_trace_ts = now + (interval if interval > 0 else 0.0)
+
+        # ✅ U/V는 값이 공백일 수도 있어 파싱보다 "원문 trace"만 남기는 게 안전
+        #    (exchange() 단계에서 TX/RX trace는 이미 emit됨)
+        try:
+            _ = self.command("U", timeout_s=0.5)  # sensor frequency (Hz)
+        except Exception:
+            pass
+        try:
+            _ = self.command("V", timeout_s=0.5)  # crystal life (%)
         except Exception:
             pass
 
@@ -370,22 +414,26 @@ class STM100(BaseSerialDevice):
             raise STM100ProtocolError(f"STM-100: invalid thickness response: {s!r}") from e
     
     def get_rate_angstrom_per_s(self) -> float:
-        """
-        T : deposition rate (Å/s)
-        메뉴얼 형식: leading space 또는 '-' + NNN.N 형태가 흔함.
-        command()는 body를 strip하므로 float 변환만 안정적으로 처리.
-        """
         s = self.command("T")
         ss = (s or "").strip()
         if not ss:
             raise STM100ValueUnavailableError("STM-100: empty rate response")
         if ss in _UNAVAILABLE_MARKERS or set(ss) == {"-"}:
             raise STM100ValueUnavailableError(f"STM-100: rate unavailable: {s!r}")
+
         try:
-            return float(ss)
+            v = float(ss)
         except ValueError as e:
             raise STM100ProtocolError(f"STM-100: invalid rate response: {s!r}") from e
-        
+
+        # ✅ 디버그(U/V) 로그: 공정 중 주파수/LIFE 변화를 ProcessWindow 로그에서 확인
+        try:
+            self._maybe_trace_uv()
+        except Exception:
+            pass
+
+        return v
+            
     def ack_power_failure_flag(self) -> None:
         """
         L : Acknowledge "B" response (power lost flag reset)

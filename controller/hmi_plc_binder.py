@@ -285,6 +285,22 @@ class HmiPlcBinder(QObject):
                 self._popup_warn("인터락", "Main Shutter가 닫혀 있습니다.\nMain Shutter를 먼저 열어주세요.")
                 self._revert_button_to_plc(binding, fallback=not bool(on))
                 return
+            
+            # ✅ 추가: Door '열기'(on=True)일 때만 조건 적용
+            if bool(on):
+                # 1) Vent는 꺼져 있어야 함 (V_V_SW == 0)
+                if self._get_state_locked("V_V_SW", False):
+                    self._set_hmi_log(f"[BLOCK] DOOR_SW <- {on_i} (VENT ON: V_V_SW=1)")
+                    self._popup_warn("인터락", "Vent(VV)가 켜져 있습니다.\nVent를 먼저 꺼주세요.")
+                    self._revert_button_to_plc(binding, fallback=False)
+                    return
+
+                # 2) Main Valve는 꺼져 있어야 함 (M_V_SW == 0)
+                if self._get_state_locked("M_V_SW", False):
+                    self._set_hmi_log(f"[BLOCK] DOOR_SW <- {on_i} (MAIN VALVE ON: M_V_SW=1)")
+                    self._popup_warn("인터락", "Main Valve(MV)가 켜져 있습니다.\nMain Valve를 먼저 꺼주세요.")
+                    self._revert_button_to_plc(binding, fallback=False)
+                    return
 
             # ✅ write는 PLCService로
             self._plc.enqueue_write_coil("DOOR_SW", bool(on), momentary=False, pulse_ms=None, tag="HMI:DOOR_SW")

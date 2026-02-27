@@ -187,6 +187,16 @@ class DailyWindowLogWriter:
             nas_path.parent.mkdir(parents=True, exist_ok=True)
             self._nas_fp = open(nas_path, "ab")
             self._nas_path = nas_path
+
+            # ✅ NAS가 “나중에” 살아났을 때, 중복 백필 방지용 synced 위치 보정
+            try:
+                _, local_path = self._paths(self._cur_date)
+                local_size = local_path.stat().st_size if local_path.exists() else 0
+                nas_size = nas_path.stat().st_size if nas_path.exists() else 0
+                self._synced_bytes = min(int(nas_size), int(local_size))
+            except Exception:
+                pass
+
             return True
         except Exception:
             self._close_nas()
@@ -359,6 +369,16 @@ class RunWindowLogWriter:
         try:
             self._nas_path.parent.mkdir(parents=True, exist_ok=True)
             self._nas_fp = open(self._nas_path, "ab")
+
+            # ✅ NAS가 뒤늦게 복구된 경우 중복/동기 꼬임 방지
+            try:
+                if self._nas_path and self._local_path and self._local_path.exists():
+                    nas_size = self._nas_path.stat().st_size if self._nas_path.exists() else 0
+                    local_size = self._local_path.stat().st_size
+                    self._synced_bytes = min(int(nas_size), int(local_size))
+            except Exception:
+                pass
+
             return True
         except Exception:
             self._close_nas()

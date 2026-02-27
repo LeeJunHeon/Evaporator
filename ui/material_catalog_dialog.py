@@ -430,38 +430,69 @@ class MaterialCatalogDialog(QDialog):
                 # _fail()에서 메시지/포커싱까지 했으므로 조용히 중단
                 return None
 
+            # ✅ 범위/조건 검증: 모두 _fail로 통일 (포커스 이동 포함)
+
             if not material:
-                QMessageBox.warning(self, "Invalid", f"{r+1}행: Material이 비어있습니다.")
+                _fail(r, 0, f"{r+1}행(Material): 값이 비어있습니다.")
                 return None
+
             if density <= 0:
-                QMessageBox.warning(self, "Invalid", f"{r+1}행: Density는 0보다 커야 합니다.")
+                _fail(r, 1, f"{r+1}행(Density): 0보다 커야 합니다.")
                 return None
+
             if zfac <= 0:
-                QMessageBox.warning(self, "Invalid", f"{r+1}행: Z factor는 0보다 커야 합니다.")
+                _fail(r, 2, f"{r+1}행(Z factor): 0보다 커야 합니다.")
                 return None
+
             if ramp_step_dac <= 0:
-                QMessageBox.warning(self, "Invalid", f"{r+1}행: ramp_step_dac는 1 이상이어야 합니다.")
+                _fail(r, 3, f"{r+1}행(ramp_step_dac): 1 이상이어야 합니다.")
                 return None
-            if seg1_max <= 0 or seg2_max <= 0:
-                QMessageBox.warning(self, "Invalid", f"{r+1}행: seg max dac는 1 이상이어야 합니다.")
+
+            # seg max dac는 각각 따로 체크해서 정확한 셀로 이동
+            if seg1_max <= 0:
+                _fail(r, 4, f"{r+1}행(seg1_max_dac): 1 이상이어야 합니다.")
                 return None
+
+            if seg2_max <= 0:
+                _fail(r, 6, f"{r+1}행(seg2_max_dac): 1 이상이어야 합니다.")
+                return None
+
             if seg2_max < seg1_max:
-                QMessageBox.warning(self, "Invalid", f"{r+1}행: seg2_max_dac는 seg1_max_dac 이상이어야 합니다.")
+                _fail(r, 6, f"{r+1}행(seg2_max_dac): seg1_max_dac 이상이어야 합니다.")
                 return None
-            if seg1_int <= 0 or seg2_int <= 0:
-                QMessageBox.warning(self, "Invalid", f"{r+1}행: seg interval(s)는 0보다 커야 합니다.")
+
+            # seg interval도 각각 따로 체크
+            if seg1_int <= 0:
+                _fail(r, 5, f"{r+1}행(seg1_interval_s): 0보다 커야 합니다.")
                 return None
+
+            if seg2_int <= 0:
+                _fail(r, 7, f"{r+1}행(seg2_interval_s): 0보다 커야 합니다.")
+                return None
+
             if ignite_timeout_s <= 0:
-                QMessageBox.warning(self, "Invalid", f"{r+1}행: ignite_timeout_s는 0보다 커야 합니다.")
+                _fail(r, 10, f"{r+1}행(ignite_timeout_s): 0보다 커야 합니다.")
                 return None
+
             if dac_adjust_interval_s <= 0:
-                QMessageBox.warning(self, "Invalid", f"{r+1}행: dac_adjust_interval_s는 0보다 커야 합니다.")
+                _fail(r, 13, f"{r+1}행(dac_adjust_interval_s): 0보다 커야 합니다.")
                 return None
+
             if fine_step_dac <= 0:
-                QMessageBox.warning(self, "Invalid", f"{r+1}행: fine_step_dac는 1 이상이어야 합니다.")
+                _fail(r, 14, f"{r+1}행(fine_step_dac): 1 이상이어야 합니다.")
                 return None
-            if shortage_dac < 0 or shortage_rate_max < 0 or shortage_time_s < 0:
-                QMessageBox.warning(self, "Invalid", f"{r+1}행: shortage 값들은 0 이상이어야 합니다.")
+
+            # shortage는 어떤 값이 문제인지 분리해서 정확한 셀로 이동
+            if shortage_dac < 0:
+                _fail(r, 15, f"{r+1}행(material_shortage_dac): 0 이상이어야 합니다.")
+                return None
+
+            if shortage_rate_max < 0:
+                _fail(r, 16, f"{r+1}행(material_shortage_rate_max): 0 이상이어야 합니다.")
+                return None
+
+            if shortage_time_s < 0:
+                _fail(r, 17, f"{r+1}행(material_shortage_time_s): 0 이상이어야 합니다.")
                 return None
 
             mats.append(

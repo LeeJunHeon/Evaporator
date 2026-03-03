@@ -121,57 +121,99 @@ class DailyWindowLogWriter:
     """
     HMI/화면 로그(일자별 1파일) 저장기.
 
-    동작(요구사항 반영):
+    요구사항:
     - NAS가 정상일 때: NAS에만 append (로컬 파일 생성/저장 X)
     - NAS가 실패할 때만: 로컬에 append (fallback)
-    - NAS 복구 시: 로컬 backlog를 먼저 NAS로 백필(순서 보장) 후 NAS 직기록으로 전환
+    - NAS 복구 시: 로컬 backlog를 NAS로 백필(순서 보장) 후, NAS 직기록으로 전환
     """
-    # __init__ / _paths / _close_fp / _close_nas / _close_local / _try_open_nas 는 그대로 둬도 됨
+    def __init__(
+        self,
+        folder: Path,
+        *,
+        fallback_root: Optional[Path] = None,
+        nas_retry_interval_s: float = 1.0,
+        sync_chunk_bytes: int = 256 * 1024,
+    ):
+        self._folder = Path(folder)  # NAS 대상 폴더
+        self._fallback_root = Path(fallback_root) if fallback_root else (_BASE_DIR / "_Logs_local_Evaporator")
 
-    def _ensure_local_open(self) -> None:
-        """NAS 장애 시에만 로컬 파일을 실제로 생성/open"""
-        if self._local_fp is not None:
-            return
-        if not self._local_path:
-            return
-        try:
-            self._local_path.parent.mkdir(parents=True, exist_ok=True)
-            self._local_fp = open(self._local_path, "ab")
-        except Exception:
-            self._local_fp = None
+        self._cur_date = ""
 
-    def _local_pending_bytes(self) -> int:
-        """로컬 backlog(=NAS에 아직 반영 안 된 바이트 수)"""
-        if not self._local_path or not self._local_path.exists():
-            return 0
-        try:
-            local_size = int(self._local_path.stat().st_size)
-        except Exception:
-            return 0
-        if self._synced_bytes > local_size:
-            self._synced_bytes = local_size
-        return int(local_size - self._synced_bytes)
+        self._nas_fp = None
+        self._nas_path: Optional[Path] = None
 
-    def _maybe_close_local_if_caught_up(self) -> None:
-        """backlog 다 올렸고 NAS가 정상이라면 로컬 핸들은 닫아서 이후 로컬 기록이 발생하지 않게 함"""
-        if not self._nas_fp:
-            return
-        if not self._local_path or not self._local_path.exists():
-            self._close_local()
-            return
+        self._local_fp = None
+        self._local_path: Optional[Path] = None
+
+        self._synced_bytes = 0  # 로컬 파일 기준 NAS 반영 바이트
+
+        self._nas_retry_interval_s = float(nas_retry_interval_s)
+        self._next_nas_try_mono = 0.0
+
+        self._sync_chunk_bytes = int(sync_chunk_bytes)
+
+    def _today(self) -> str:
+        return datetime.now().strftime("%Y-%m-%d")
+
+    def _paths(self, d: str) -> tuple[Path, Path]:
+        nas = self._folder / f"{d}.log"
+        local = (self._fallback_root / self._folder.name) / f"{d}.log"
+        return nas, local
+
+    def _close_fp(self, fp) -> None:
         try:
-            local_size = int(self._local_path.stat().st_size)
+            if fp:
+                fp.flush()
+                fp.close()
         except Exception:
-            return
-        if self._synced_bytes >= local_size:
-            self._close_local()  # 파일은 남겨두되, 더 이상 append 하지 않도록 핸들만 닫음
+            pass
+
+    def _close_nas(self) -> None:
+        self._close_fp(self._nas_fp)
+        self._nas_fp = None
+
+    def _close_local(self) -> None:
+        self._close_fp(self._local_fp)
+        self._local_fp = None
+
+    def _try_open_nas(self, *, force: bool = False) -> bool:
+        if self._nas_fp is not None:
+            return True
+
+        now = time.monotonic()
+        if (not force) and (now < self._next_nas_try_mono):
+            return False
+        self._next_nas_try_mono = now + self._nas_retry_interval_s
+
+        if not self._nas_path:
+            return False
+
+        try:
+            self._nas_path.parent.mkdir(parents=True, exist_ok=True)
+            self._nas_fp = open(self._nas_path, "ab")
+
+            # NAS가 뒤늦게 복구된 경우 중복/동기 꼬임 방지
+            try:
+                if self._local_path and self._local_path.exists() and self._nas_path.exists():
+                    nas_size = int(self._nas_path.stat().st_size)
+                    local_size = int(self._local_path.stat().st_size)
+                    self._synced_bytes = min(nas_size, local_size)
+            except Exception:
+                pass
+
+            return True
+        except Exception:
+            self._close_nas()
+            return False
 
     def _ensure_open(self) -> None:
         d = self._today()
-        # ✅ NAS/LOCAL "경로 세팅"만 되어 있으면 재초기화 하지 않음 (로컬 fp가 None이어도 OK)
+
+        # 이미 오늘 날짜 경로 세팅이 끝났으면 OK (로컬 fp None이어도 OK)
         if self._cur_date == d and self._nas_path is not None and self._local_path is not None:
             return
 
+        # 날짜가 바뀌었거나 최초면 재세팅
         self.close()
         self._cur_date = d
         nas_path, local_path = self._paths(d)
@@ -180,10 +222,10 @@ class DailyWindowLogWriter:
         self._nas_path = nas_path
         self._local_path = local_path
 
-        # ✅ NAS는 가능한 경우만 열기(즉시 1회 시도)
+        # NAS는 가능한 경우만 오픈(즉시 1회 시도)
         self._try_open_nas(force=True)
 
-        # ✅ 만약 과거 장애로 local 파일이 존재하고 NAS가 열렸다면 synced_bytes 보정
+        # 과거 장애로 local 파일이 존재하고 NAS가 열렸다면 synced_bytes 보정
         if self._nas_fp and local_path.exists():
             try:
                 nas_size = int(nas_path.stat().st_size) if nas_path.exists() else 0
@@ -197,6 +239,81 @@ class DailyWindowLogWriter:
         else:
             self._synced_bytes = 0
 
+    def _ensure_local_open(self) -> None:
+        """NAS 장애 시에만 로컬 파일 생성/open"""
+        if self._local_fp is not None:
+            return
+        if not self._local_path:
+            return
+        try:
+            self._local_path.parent.mkdir(parents=True, exist_ok=True)
+            self._local_fp = open(self._local_path, "ab")
+        except Exception:
+            self._local_fp = None
+
+    def _local_pending_bytes(self) -> int:
+        """로컬 backlog (= NAS에 아직 반영 안 된 바이트)"""
+        if not self._local_path or not self._local_path.exists():
+            return 0
+        try:
+            local_size = int(self._local_path.stat().st_size)
+        except Exception:
+            return 0
+        if self._synced_bytes > local_size:
+            self._synced_bytes = local_size
+        return int(local_size - self._synced_bytes)
+
+    def _sync_local_to_nas(self, *, max_bytes: int) -> None:
+        if not self._local_path or not self._local_path.exists():
+            return
+        if not self._try_open_nas(force=False):
+            return
+        if not self._nas_fp:
+            return
+
+        try:
+            local_size = int(self._local_path.stat().st_size)
+        except Exception:
+            return
+
+        if self._synced_bytes > local_size:
+            self._synced_bytes = local_size
+
+        pending = local_size - self._synced_bytes
+        if pending <= 0:
+            return
+
+        to_send = min(int(max_bytes), int(pending))
+        try:
+            with open(self._local_path, "rb") as rf:
+                rf.seek(self._synced_bytes)
+                remaining = to_send
+                while remaining > 0:
+                    chunk = rf.read(min(64 * 1024, remaining))
+                    if not chunk:
+                        break
+                    self._nas_fp.write(chunk)
+                    remaining -= len(chunk)
+
+            self._nas_fp.flush()
+            self._synced_bytes += (to_send - remaining)
+        except Exception:
+            self._close_nas()
+
+    def _maybe_close_local_if_caught_up(self) -> None:
+        """backlog 다 올렸고 NAS가 정상이라면 로컬 핸들은 닫아 이후 로컬 기록 방지"""
+        if not self._nas_fp:
+            return
+        if not self._local_path or not self._local_path.exists():
+            self._close_local()
+            return
+        try:
+            local_size = int(self._local_path.stat().st_size)
+        except Exception:
+            return
+        if self._synced_bytes >= local_size:
+            self._close_local()  # 파일은 남겨두되, 더 이상 append 하지 않도록 핸들만 닫음
+
     def write(self, line: str) -> None:
         try:
             self._ensure_open()
@@ -204,13 +321,12 @@ class DailyWindowLogWriter:
             s = str(line).rstrip("\n")
             data = (s + "\n").encode("utf-8", errors="replace")
 
-            # 1) NAS가 열려있으면: backlog 여부에 따라 처리
+            # 1) NAS가 열려있으면 backlog 여부에 따라 처리
             if self._try_open_nas(force=False) and self._nas_fp:
                 pending = self._local_pending_bytes()
 
                 if pending > 0:
-                    # ✅ backlog가 남아있으면 "순서 보장"을 위해 새 로그도 로컬에 붙이고,
-                    #    타이머/여기서 조금씩 백필
+                    # backlog 남아있으면 순서 보장 위해 로컬에 계속 기록 + 백필
                     self._ensure_local_open()
                     if self._local_fp:
                         self._local_fp.write(data)
@@ -219,7 +335,7 @@ class DailyWindowLogWriter:
                     self._maybe_close_local_if_caught_up()
                     return
 
-                # ✅ backlog가 없으면 NAS에만 기록(로컬 생성/기록 없음)
+                # backlog 없으면 NAS에만 기록(로컬 생성/기록 없음)
                 try:
                     self._nas_fp.write(data)
                     self._nas_fp.flush()
@@ -228,14 +344,14 @@ class DailyWindowLogWriter:
                     self._close_nas()
                     # 아래 fallback으로 진행
 
-            # 2) NAS가 안 열리거나 쓰기 실패 -> 로컬 fallback (이때만 로컬 파일 생성)
+            # 2) NAS 실패 -> 로컬 fallback (이때만 로컬 생성)
             self._ensure_local_open()
             if not self._local_fp:
                 return
             self._local_fp.write(data)
             self._local_fp.flush()
 
-            # NAS 복구 시 백필을 위해 시도(실패하면 내부에서 다음 tick에 재시도)
+            # NAS 복구되면 백필
             self._sync_local_to_nas(max_bytes=self._sync_chunk_bytes)
 
         except Exception:
@@ -243,13 +359,12 @@ class DailyWindowLogWriter:
 
     def sync(self, max_bytes: Optional[int] = None) -> None:
         """
-        ✅ 주기적 NAS 재시도/백필:
+        주기적 NAS 재시도/백필:
         - 로컬 파일이 없으면(=NAS 정상으로만 썼으면) 로컬 생성 절대 안 함
         - 로컬 backlog가 존재할 때만 백필
         """
         try:
             self._ensure_open()
-            # NAS 재시도(스로틀 적용)
             self._try_open_nas(force=False)
 
             if self._local_path and self._local_path.exists():
@@ -260,14 +375,18 @@ class DailyWindowLogWriter:
 
     def close(self) -> None:
         try:
-            # 로컬 backlog가 있으면 종료 시 최대한 백필
             if self._local_path and self._local_path.exists():
                 self._sync_local_to_nas(max_bytes=4 * 1024 * 1024)
         except Exception:
             pass
+
         self._close_nas()
         self._close_local()
+
         self._cur_date = ""
+        self._nas_path = None
+        self._local_path = None
+        self._synced_bytes = 0
 
 
 # =========================
@@ -275,7 +394,85 @@ class DailyWindowLogWriter:
 # =========================
 
 class RunWindowLogWriter:
-    # __init__ / _close_fp / _close_nas / _close_local / _try_open_nas / _sync_local_to_nas 는 그대로 둬도 됨
+    """ProcessWindow 로그(공정 1개 = 파일 1개). NAS 정상 시 로컬 미생성/미기록."""
+
+    def __init__(
+        self,
+        folder: Path,
+        *,
+        fallback_root: Optional[Path] = None,
+        nas_retry_interval_s: float = 1.0,
+        sync_chunk_bytes: int = 256 * 1024,
+    ):
+        self._folder = Path(folder)
+        self._fallback_root = Path(fallback_root) if fallback_root else (_BASE_DIR / "_Logs_local_Evaporator")
+
+        self._nas_retry_interval_s = float(nas_retry_interval_s)
+        self._next_nas_try_mono = 0.0
+        self._sync_chunk_bytes = int(sync_chunk_bytes)
+
+        self._nas_fp = None
+        self._nas_path: Optional[Path] = None
+
+        self._local_fp = None
+        self._local_path: Optional[Path] = None
+
+        self._synced_bytes = 0
+        self._run_id: Optional[str] = None
+        self._recipe_name: str = ""
+
+    @staticmethod
+    def _sanitize_name(s: str, *, max_len: int = 80) -> str:
+        s = str(s or "").strip()
+        s = re.sub(r"[^0-9A-Za-z가-힣._-]+", "_", s)
+        s = s.strip("._-")
+        return (s or "run")[:max_len]
+
+    def _close_fp(self, fp) -> None:
+        try:
+            if fp:
+                fp.flush()
+                fp.close()
+        except Exception:
+            pass
+
+    def _close_nas(self) -> None:
+        self._close_fp(self._nas_fp)
+        self._nas_fp = None
+
+    def _close_local(self) -> None:
+        self._close_fp(self._local_fp)
+        self._local_fp = None
+
+    def _try_open_nas(self, *, force: bool = False) -> bool:
+        if self._nas_fp is not None:
+            return True
+
+        now = time.monotonic()
+        if (not force) and (now < self._next_nas_try_mono):
+            return False
+        self._next_nas_try_mono = now + self._nas_retry_interval_s
+
+        if not self._nas_path:
+            return False
+
+        try:
+            self._nas_path.parent.mkdir(parents=True, exist_ok=True)
+            self._nas_fp = open(self._nas_path, "ab")
+
+            # NAS가 뒤늦게 복구된 경우 중복/동기 꼬임 방지
+            try:
+                if self._nas_path and self._local_path and self._local_path.exists():
+                    nas_size = int(self._nas_path.stat().st_size) if self._nas_path.exists() else 0
+                    local_size = int(self._local_path.stat().st_size)
+                    self._synced_bytes = min(nas_size, local_size)
+            except Exception:
+                pass
+
+            return True
+        except Exception:
+            self._close_nas()
+            return False
 
     def _ensure_local_open(self) -> None:
         if self._local_fp is not None:
@@ -298,6 +495,43 @@ class RunWindowLogWriter:
         if self._synced_bytes > local_size:
             self._synced_bytes = local_size
         return int(local_size - self._synced_bytes)
+
+    def _sync_local_to_nas(self, *, max_bytes: int) -> None:
+        if not self._local_path or not self._local_path.exists():
+            return
+        if not self._try_open_nas(force=False):
+            return
+        if not self._nas_fp:
+            return
+
+        try:
+            local_size = int(self._local_path.stat().st_size)
+        except Exception:
+            return
+
+        if self._synced_bytes > local_size:
+            self._synced_bytes = local_size
+
+        pending = local_size - self._synced_bytes
+        if pending <= 0:
+            return
+
+        to_send = min(int(max_bytes), int(pending))
+        try:
+            with open(self._local_path, "rb") as rf:
+                rf.seek(self._synced_bytes)
+                remaining = to_send
+                while remaining > 0:
+                    chunk = rf.read(min(64 * 1024, remaining))
+                    if not chunk:
+                        break
+                    self._nas_fp.write(chunk)
+                    remaining -= len(chunk)
+
+            self._nas_fp.flush()
+            self._synced_bytes += (to_send - remaining)
+        except Exception:
+            self._close_nas()
 
     def _maybe_close_local_if_caught_up(self) -> None:
         if not self._nas_fp:
@@ -322,15 +556,11 @@ class RunWindowLogWriter:
         self._nas_path = self._folder / fname
         self._local_path = (self._fallback_root / self._folder.name) / fname
 
-        # ✅ NAS 먼저 시도 (성공하면 로컬 생성 안 함)
+        # NAS 먼저 시도 (성공하면 로컬 생성 안 함)
         self._try_open_nas(force=True)
 
-        # ✅ NAS 실패 시에만 로컬 생성
-        if not self._nas_fp:
-            self._ensure_local_open()
-
-        # ✅ 중복/백필 기준값 보정(로컬 파일이 이미 존재하는 경우 대비)
-        if self._nas_fp and self._local_path and self._local_path.exists():
+        # 기존 로컬 파일이 이미 존재(과거 장애)하면 synced_bytes 보정
+        if self._nas_fp and self._local_path.exists():
             try:
                 nas_size = int(self._nas_path.stat().st_size) if self._nas_path and self._nas_path.exists() else 0
             except Exception:
@@ -343,10 +573,14 @@ class RunWindowLogWriter:
         else:
             self._synced_bytes = 0
 
+        # NAS 실패 시에만 로컬 생성
+        if not self._nas_fp:
+            self._ensure_local_open()
+
         self._run_id = rid
         self._recipe_name = rname
 
-        # ✅ 로컬 backlog가 있으면 시작 시 백필 1MB
+        # 로컬 backlog가 있으면 시작 시 백필
         if self._local_path and self._local_path.exists():
             self._sync_local_to_nas(max_bytes=1 * 1024 * 1024)
             self._maybe_close_local_if_caught_up()
@@ -364,7 +598,6 @@ class RunWindowLogWriter:
                 pending = self._local_pending_bytes()
 
                 if pending > 0:
-                    # ✅ backlog 남아있으면 순서 보장 위해 로컬에 계속 기록 + 백필
                     self._ensure_local_open()
                     if self._local_fp:
                         self._local_fp.write(data)
@@ -373,7 +606,7 @@ class RunWindowLogWriter:
                     self._maybe_close_local_if_caught_up()
                     return
 
-                # ✅ backlog 없으면 NAS에만 기록(로컬 생성/기록 없음)
+                # backlog 없으면 NAS에만 기록(로컬 생성/기록 없음)
                 try:
                     self._nas_fp.write(data)
                     self._nas_fp.flush()
@@ -397,10 +630,7 @@ class RunWindowLogWriter:
 
     def sync(self, max_bytes: Optional[int] = None) -> None:
         try:
-            # NAS 재시도(스로틀 적용)
             self._try_open_nas(force=False)
-
-            # 로컬이 존재할 때만 백필 (로컬 생성 금지)
             if self._local_path and self._local_path.exists():
                 self._sync_local_to_nas(max_bytes=int(max_bytes or self._sync_chunk_bytes))
                 self._maybe_close_local_if_caught_up()
@@ -422,6 +652,9 @@ class RunWindowLogWriter:
         self._synced_bytes = 0
         self._run_id = None
         self._recipe_name = ""
+
+    def close(self) -> None:
+        self.close_run()
     
 
 # ============================================================
@@ -622,6 +855,11 @@ class HmiWindow(QWidget):
         return ret == QMessageBox.Yes
 
     def closeEvent(self, event):
+        # ✅ 먼저 타이머부터 stop (close 중 tick 방지)
+        with contextlib.suppress(Exception):
+            if getattr(self, "_hmi_log_sync_timer", None):
+                self._hmi_log_sync_timer.stop()
+
         if getattr(self, "_closing_all", False):
             try:
                 if getattr(self, "_hmi_window_log_writer", None):

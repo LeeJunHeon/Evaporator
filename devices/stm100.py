@@ -476,9 +476,9 @@ class STM100(BaseSerialDevice):
         ss = _strip_echo_token(s, "U")
 
         if not ss:
-            raise STM100ProtocolError("STM-100: empty frequency response")
+            raise STM100ValueUnavailableError("STM-100: empty frequency response")
         if ss in _UNAVAILABLE_MARKERS or set(ss) == {"-"}:
-            raise STM100ProtocolError(f"STM-100: frequency unavailable: {s!r}")
+            raise STM100ValueUnavailableError(f"STM-100: frequency unavailable: {s!r}")
 
         # 보통 정수 Hz
         if not _INT_RE.fullmatch(ss):
@@ -511,9 +511,9 @@ class STM100(BaseSerialDevice):
         ss = _strip_echo_token(s, "V")
 
         if not ss:
-            raise STM100ProtocolError("STM-100: empty crystal life response")
+            raise STM100ValueUnavailableError("STM-100: empty crystal life response")
         if ss in _UNAVAILABLE_MARKERS or set(ss) == {"-"}:
-            raise STM100ProtocolError(f"STM-100: crystal life unavailable: {s!r}")
+            raise STM100ValueUnavailableError(f"STM-100: crystal life unavailable: {s!r}")
 
         try:
             life = float(ss)
@@ -651,9 +651,9 @@ class STM100(BaseSerialDevice):
         s = self.query_text(cmd)
         ss = (s or "").strip()
         if not ss:
-            raise STM100ProtocolError("STM-100: empty film density response")
+            raise STM100ValueUnavailableError("STM-100: empty film density response")
         if ss in _UNAVAILABLE_MARKERS or set(ss) == {"-"}:
-            raise STM100ProtocolError(f"STM-100: film density unavailable: {s!r}")
+            raise STM100ValueUnavailableError(f"STM-100: film density unavailable: {s!r}")
         try:
             return float(ss)
         except ValueError as e:
@@ -688,9 +688,9 @@ class STM100(BaseSerialDevice):
         s = self.query_text(cmd)
         ss = (s or "").strip()
         if not ss:
-            raise STM100ProtocolError("STM-100: empty film z-factor response")
+            raise STM100ValueUnavailableError("STM-100: empty film z-factor response")
         if ss in _UNAVAILABLE_MARKERS or set(ss) == {"-"}:
-            raise STM100ProtocolError(f"STM-100: film z-factor unavailable: {s!r}")
+            raise STM100ValueUnavailableError(f"STM-100: film z-factor unavailable: {s!r}")
         try:
             return float(ss)
         except ValueError as e:

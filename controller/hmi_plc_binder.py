@@ -74,6 +74,9 @@ class HmiPlcBinder(QObject):
         self._last_states: Dict[str, bool] = {}
         self._connected: bool = False
 
+        # ✅ UI 표시용: 최근 I/O 성공 여부(한 번이라도 실패하면 False)
+        self._io_healthy: bool = False
+
         # ✅ 상단 상태라인에는 "연결 상태만" 표시하기 위한 외부 장비 연결 상태 저장소
         self._external_connected: Dict[str, bool] = {}
 
@@ -101,6 +104,8 @@ class HmiPlcBinder(QObject):
         # DAC 수동 입력 UI (있으면 자동으로 연결)
         self._wire_dac_controls()
 
+        self._set_controls_enabled(self.is_ui_connected())
+
     def set_external_connected(self, name: str, ok: bool) -> None:
         """main.py 등 외부에서 ACS 같은 장비 연결상태를 상단 상태라인에 반영."""
         key = str(name).strip().upper()
@@ -113,7 +118,7 @@ class HmiPlcBinder(QObject):
     def _render_status_line(self) -> None:
         """상단 상태라인(processMonitor_HMI)에는 연결 상태만 표시."""
         parts = []
-        parts.append("PLC CONNECTED" if self.is_connected() else "PLC DISCONNECTED")
+        parts.append("PLC CONNECTED" if self.is_ui_connected() else "PLC DISCONNECTED")
 
         with self._state_lock:
             ext = dict(self._external_connected)
@@ -209,6 +214,11 @@ class HmiPlcBinder(QObject):
     def is_connected(self) -> bool:
         with self._state_lock:
             return bool(self._connected)
+        
+    def is_ui_connected(self) -> bool:
+        """UI 표시/버튼 enable 기준 연결 상태 (링크 연결 + 최근 I/O OK)."""
+        with self._state_lock:
+            return bool(self._connected) and bool(self._io_healthy)
 
     def get_states(self) -> Dict[str, bool]:
         with self._state_lock:
@@ -260,7 +270,7 @@ class HmiPlcBinder(QObject):
         on_i = int(bool(on))
 
         # 미연결이면 팝업 + 버튼 원복 (+ 하단 로그)
-        if not self.is_connected():
+        if not self.is_ui_connected():
             self._set_hmi_log(f"[BLOCK] {binding.coil_name} <- {on_i} (PLC not connected)")
             self._popup_warn("PLC 미연결", "PLC가 연결되지 않아 명령을 전송할 수 없습니다.")
             self._revert_button_to_plc(binding, fallback=not bool(on))
@@ -328,7 +338,7 @@ class HmiPlcBinder(QObject):
         self._set_hmi_log(f"[UI] {binding.coil_name} <- {on_i}")
 
     def _on_all_stop_clicked(self) -> None:
-        if not self.is_connected():
+        if not self.is_ui_connected():
             self._set_hmi_log("[BLOCK] ALL STOP (PLC not connected)")
             self._popup_warn("PLC 미연결", "PLC가 연결되지 않아 ALL STOP을 전송할 수 없습니다.")
             return
@@ -428,7 +438,20 @@ class HmiPlcBinder(QObject):
         # ✅ 이전값 보관 후 갱신
         with self._state_lock:
             prev = dict(self._last_states)
+            prev_ui = bool(self._connected) and bool(self._io_healthy)
+
             self._last_states = states
+            # ✅ 상태를 정상 수신했으면 health 회복
+            if self._connected:
+                self._io_healthy = True
+
+            now_ui = bool(self._connected) and bool(self._io_healthy)
+
+        if prev_ui != now_ui:
+            self._render_status_line()
+            self._set_controls_enabled(self.is_ui_connected())
+            if now_ui:
+                self._set_hmi_log("PLC CONNECTED (I/O recovered)")
 
         # ✅ 상태 변화 로그(너무 많아지는 것을 방지하기 위해 "UI에 매핑된 coil"만)
         #    - 필요하면 이 필터를 제거하면 states 전체 변화도 찍을 수 있음.
@@ -460,19 +483,24 @@ class HmiPlcBinder(QObject):
 
     def _on_connected(self, ok: bool) -> None:
         with self._state_lock:
-            prev = self._connected
+            prev_ui = bool(self._connected) and bool(self._io_healthy)
             self._connected = bool(ok)
+            if not self._connected:
+                self._io_healthy = False
+            else:
+                # 연결 직후는 일단 healthy로 시작(실패하면 _mark_io_failed가 다시 내림)
+                self._io_healthy = True
+            now_ui = bool(self._connected) and bool(self._io_healthy)
 
-        # ✅ 상단 상태라인: 연결 상태만(PLC/ACS)
         self._render_status_line()
+        self._set_controls_enabled(self.is_ui_connected())
 
-        # ✅ 변화는 하단 로그에만
-        if prev != self.is_connected():
-            status = "PLC CONNECTED" if self.is_connected() else "PLC DISCONNECTED"
-            self._set_hmi_log(status)
+        if prev_ui != now_ui:
+            self._set_hmi_log("PLC CONNECTED" if now_ui else "PLC DISCONNECTED")
 
     def _on_error(self, msg: str) -> None:
-        self._set_hmi_log(msg)
+        # ✅ 한 번이라도 I/O 에러면 UI는 끊김으로
+        self._mark_io_failed(msg)
 
     # ============================================================
     # UI helpers
@@ -488,6 +516,49 @@ class HmiPlcBinder(QObject):
         box = QMessageBox(QMessageBox.Warning, title, message, QMessageBox.Ok, parent)
         box.setWindowFlag(Qt.WindowStaysOnTopHint, True)
         box.exec()
+        
+    def _mark_io_failed(self, reason: str = "") -> None:
+        with self._state_lock:
+            prev_ui = bool(self._connected) and bool(self._io_healthy)
+            self._io_healthy = False
+            now_ui = bool(self._connected) and bool(self._io_healthy)
+
+        if prev_ui != now_ui:
+            self._render_status_line()
+            self._set_controls_enabled(False)
+            self._set_hmi_log("PLC DISCONNECTED (I/O failed)")
+
+        if reason:
+            self._set_hmi_log(reason)
+
+    def _set_controls_enabled(self, enabled: bool) -> None:
+        # coil 버튼들
+        for b in self.BUTTONS:
+            w = getattr(self.ui, b.widget_name, None)
+            if w is not None and hasattr(w, "setEnabled"):
+                try:
+                    w.setEnabled(bool(enabled))
+                except Exception:
+                    pass
+
+        # ALL STOP
+        all_stop = getattr(self.ui, "allstopBtn", None)
+        if all_stop is not None and hasattr(all_stop, "setEnabled"):
+            try:
+                all_stop.setEnabled(bool(enabled))
+            except Exception:
+                pass
+
+        # DAC 수동 컨트롤
+        for w in (
+            getattr(self, "_dac1_spin", None), getattr(self, "_dac1_set_btn", None), getattr(self, "_dac1_reset_btn", None),
+            getattr(self, "_dac2_spin", None), getattr(self, "_dac2_set_btn", None), getattr(self, "_dac2_reset_btn", None),
+        ):
+            if w is not None and hasattr(w, "setEnabled"):
+                try:
+                    w.setEnabled(bool(enabled))
+                except Exception:
+                    pass
 
     def _revert_button_to_plc(self, binding: ButtonBinding, fallback: Optional[bool] = None) -> None:
         w = getattr(self.ui, binding.widget_name, None)
@@ -633,7 +704,7 @@ class HmiPlcBinder(QObject):
         self._apply_dac_code(ch, v)
 
     def _apply_dac_code(self, ch: int, v: int) -> None:
-        if not self.is_connected():
+        if not self.is_ui_connected():
             self._popup_warn("PLC 미연결", "PLC가 연결되지 않아 DAC 값을 전송할 수 없습니다.")
             return
 

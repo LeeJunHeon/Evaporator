@@ -443,12 +443,47 @@ class STMServiceWorker(QThread):
                     self._ensure_connected_for_cmd()
                     assert self._stm is not None
 
-                    # ✅ devices/stm100.py에 추가한 스냅샷 API 사용
-                    snap = self._stm.get_crystal_health_snapshot()
+                    errors = []
+
+                    # 1) crystal fail 상태
+                    crystal_ok = None
+                    try:
+                        crystal_ok = self._stm.get_crystal_fail_status()  # True=GOOD, False=FAIL
+                    except STM100ProtocolError as e:
+                        errors.append(f"crystal_fail_status: {e!r}")
+                        crystal_ok = None
+
+                    # 2) freq (Hz)
+                    freq_hz = None
+                    try:
+                        freq_hz = self._stm.get_sensor_frequency_hz()
+                    except STM100ProtocolError as e:
+                        # 빈값/--------/형식 이상 등: 값 없음으로 처리 (disconnect X)
+                        errors.append(f"freq_hz: {e!r}")
+                        freq_hz = None
+
+                    # 3) life (%)
+                    life = None
+                    try:
+                        life = self._stm.get_crystal_life_percent()
+                    except STM100ProtocolError as e:
+                        errors.append(f"life_percent: {e!r}")
+                        life = None
+
+                    snap = {
+                        "crystal_ok": crystal_ok,
+                        "crystal_fail": (None if crystal_ok is None else (not crystal_ok)),
+                        "freq_hz": freq_hz,
+                        "freq_mhz": (freq_hz / 1_000_000.0) if freq_hz is not None else None,
+                        "life_percent": life,
+                    }
+                    if errors:
+                        snap["errors"] = errors  # (원하면 main.py에서 로그로 출력)
 
                     fut.set_result(snap)
 
                 except Exception as e:
+                    # 여기로 오는 건 "연결/포트/치명적 통신" 쪽만 남기고 싶음
                     try:
                         fut.set_exception(e)
                     except Exception:
@@ -456,7 +491,6 @@ class STMServiceWorker(QThread):
 
                     self.sig_error.emit(f"[STMService] read_crystal_health failed: {e!r}")
 
-                    # 끊김/오류로 보고 재연결 사이클로
                     self._safe_close()
                     self._set_connected(False)
                     self._next_try = time.time() + self._reconnect_interval_s

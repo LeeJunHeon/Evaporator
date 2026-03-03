@@ -177,6 +177,14 @@ class HmiPlcBinder(QObject):
         except Exception:
             pass
 
+        with self._state_lock:
+            self._connected = False
+            self._io_healthy = False
+            self._last_states = {}
+
+        self._render_status_line()
+        self._set_controls_enabled(False)
+
         self.settings = new_settings
 
         # ✅ (중요) DAC UI range도 settings에 맞춰 갱신
@@ -373,8 +381,16 @@ class HmiPlcBinder(QObject):
             return
 
         tag = str(d.get("tag", "") or "")
+        ok = bool(d.get("ok", True))
+        detail = str(d.get("detail", "") or "")
+
+        # ✅ tag가 HMI가 아니어도, FAIL이면 UI는 끊김처럼 표시
+        if not ok:
+            self._mark_io_failed(f"[PLC CMD FAIL] {tag} | {detail}".strip())
+
+        # 기존 정책 유지: HMI 태그만 하단로그/CSV 기록
         if not tag.startswith("HMI:"):
-            return  # ✅ 공정(engine) 명령과 중복 방지
+            return
 
         cmd = str(d.get("event", "") or "")
         target = str(d.get("target", "") or "")

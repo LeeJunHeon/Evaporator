@@ -1057,35 +1057,33 @@ class ProcessWindow(QWidget):
         return True
 
     def _ensure_sensors_connected_fresh(self) -> bool:
+        if self.hmi_window is None:
+            _append_text(getattr(self.ui, "logWindow", None), "[DEV][ERR] hmi_window is None -> cannot connect STM")
+            return False
+
         ini_path = self.hmi_window._ini_path
 
-        # ✅ 이전 STM만 정리 (ACS는 유지)
+        # ✅ 이전 STM 정리 (여기서도 FTM OFF까지 되도록 2번 수정이 전제)
         self._shutdown_sensors_and_release_memory()
 
-        try:
-            # ✅ 1) FTM 먼저 ON (STM 연결 선행 조건)
-            binder = getattr(self.hmi_window, "_plc_binder", None)
-            if binder is None:
-                _append_text(self.ui.logWindow, "[DEV][ERR] plc_binder is None (cannot turn on FTM_SW) -> abort STM connect")
-                return False
+        binder = getattr(self.hmi_window, "_plc_binder", None)
+        if binder is None:
+            _append_text(self.ui.logWindow, "[DEV][ERR] plc_binder is None (cannot turn on FTM_SW) -> abort STM connect")
+            return False
 
+        try:
             binder.enqueue_write("FTM_SW", True)
             _append_text(self.ui.logWindow, "[DEV] FTM_SW -> ON (before STM connect)")
 
-            # ✅ 2) 잠깐 대기(장비 전원/통신 준비)
             time.sleep(1.5)
 
-            # ✅ 3) STM 연결(폴링 시작)
             stm = STMService(ini_path=ini_path)
             stm.start()
 
             self._stm_service = stm
             self.hmi_window._stm_service = stm
 
-            # ✅ 4) ACS는 main()에서 이미 실행 중인 인스턴스를 그대로 사용
             self._acs_service = getattr(self.hmi_window, "_acs_service", None)
-
-            # ✅ 5) ProcessController 장치 참조 갱신
             self.hmi_window._set_process_controller_devices(stm, self._acs_service)
 
             _append_text(self.ui.logWindow, "[DEV] STM connected (ACS kept alive).")
@@ -1093,9 +1091,14 @@ class ProcessWindow(QWidget):
 
         except Exception as e:
             _append_text(self.ui.logWindow, f"[DEV][ERR] STM start failed: {e!r}")
+
+            # ✅ 실패했으면 FTM 다시 OFF
+            with contextlib.suppress(Exception):
+                binder.enqueue_write("FTM_SW", False)
+                _append_text(self.ui.logWindow, "[DEV] FTM_SW -> OFF (STM start failed)")
+
             self._stm_service = None
             self.hmi_window._stm_service = None
-            # ✅ ACS는 유지 (절대 None으로 덮지 않음)
             return False
 
     def _shutdown_sensors_and_release_memory(self) -> None:
@@ -1129,7 +1132,19 @@ class ProcessWindow(QWidget):
         if self.hmi_window is not None:
             self.hmi_window._stm_service = None
 
-        # 4) GC
+        # ✅ 4) FTM OFF (S`TM을 더 이상 쓰지 않으면 반드시 끈다)
+        try:
+            binder = getattr(self.hmi_window, "_plc_binder", None) if self.hmi_window else None
+            if binder is not None:
+                binder.enqueue_write("FTM_SW", False)
+                _append_text(self.ui.logWindow, "[DEV] FTM_SW -> OFF (after STM stop)")
+        except Exception as e:
+            _append_text(self.ui.logWindow, f"[DEV][WARN] FTM_SW off failed: {e!r}")
+
+        gc.collect()
+        _append_text(self.ui.logWindow, "[DEV] STM released + gc.collect() (ACS kept alive)")
+            
+        # 5) GC
         gc.collect()
         _append_text(self.ui.logWindow, "[DEV] STM released + gc.collect() (ACS kept alive)")
 

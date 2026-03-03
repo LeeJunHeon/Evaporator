@@ -940,36 +940,23 @@ class ProcessWindow(QWidget):
         FREQ_MAX_MHZ = 6.1
 
         def _abort(title: str, msg: str) -> bool:
-            # ✅ (추가) Start 중단 → run 파일 닫기 + 상태 초기화
+            # ✅ 1) 먼저 UI/파일에 남길 로그부터 찍기 (close_run 전에!)
+            _append_text(getattr(self.ui, "logWindow", None), f"[PRECHECK][BLOCK] {title}: {msg}")
+
+            # ✅ 2) 프리체크 때문에 켜둔 장비/상태 정리(FTM OFF 포함)
+            with contextlib.suppress(Exception):
+                self._shutdown_sensors_and_release_memory()  # 여기 안에 FTM OFF + PC detach 포함
+
+            # ✅ 3) 사용자 경고
+            QMessageBox.warning(self, title, msg)
+
+            # ✅ 4) 이제 run 파일 닫기 + 상태 초기화
             with contextlib.suppress(Exception):
                 w = getattr(self, "_process_window_log_writer", None)
                 if w and hasattr(w, "close_run"):
                     w.close_run()
             self._active_run_id = None
             self._active_recipe_name = ""
-
-            # ✅ (핵심 추가) 프리체크 실패 시, 프리체크 때문에 켜둔 센서/서비스를 확실히 정리
-            with contextlib.suppress(Exception):
-                # 1) STM UI 시그널 해제(있으면)
-                self._unbind_stm_ui()
-
-            with contextlib.suppress(Exception):
-                # 2) STM 서비스 stop
-                if getattr(self, "_stm_service", None):
-                    self._stm_service.stop()
-                self._stm_service = None
-                if getattr(self, "hmi_window", None) is not None:
-                    self.hmi_window._stm_service = None
-
-            with contextlib.suppress(Exception):
-                # 3) FTM_SW OFF (프리체크 위해 ON 했던 것 원복)
-                binder = getattr(self.hmi_window, "_plc_binder", None)
-                if binder is not None:
-                    binder.enqueue_write("FTM_SW", False)
-                    _append_text(getattr(self.ui, "logWindow", None), "[DEV] FTM_SW -> OFF (precheck abort)")
-
-            QMessageBox.warning(self, title, msg)
-            _append_text(getattr(self.ui, "logWindow", None), f"[PRECHECK][BLOCK] {title}: {msg}")
             return False
 
         stm = getattr(self, "_stm_service", None)
@@ -993,22 +980,25 @@ class ProcessWindow(QWidget):
             return _abort("STM", f"STM LIFE/FREQ 읽기 실패: {e!r}")
 
         # 2) 값 파싱
-        crystal_fail = bool(snap.get("crystal_fail", False))
+        crystal_fail_raw = snap.get("crystal_fail", None)
         life = snap.get("life_percent", None)
         freq_mhz = snap.get("freq_mhz", None)
 
-        # freq_mhz 없으면 freq_hz로 계산 시도(방어)
-        if freq_mhz is None:
-            fhz = snap.get("freq_hz", None)
-            try:
-                freq_mhz = (float(fhz) / 1_000_000.0) if fhz is not None else None
-            except Exception:
-                freq_mhz = None
-
-        # 3) 조건 판정 + 이유 만들기
         reasons = []
 
-        if crystal_fail:
+        # ✅ 0) stm_service가 준 errors도 이유에 포함
+        errs = snap.get("errors", None)
+        if errs:
+            if isinstance(errs, (list, tuple)):
+                for e in errs:
+                    reasons.append(f"STM 오류: {e}")
+            else:
+                reasons.append(f"STM 오류: {errs}")
+
+        # ✅ 1) crystal_fail = None(확인불가)면 차단
+        if crystal_fail_raw is None:
+            reasons.append("CRYSTAL FAIL 상태 확인 불가")
+        elif bool(crystal_fail_raw):
             reasons.append("CRYSTAL FAIL 상태")
 
         try:
@@ -1140,9 +1130,6 @@ class ProcessWindow(QWidget):
                 _append_text(self.ui.logWindow, "[DEV] FTM_SW -> OFF (after STM stop)")
         except Exception as e:
             _append_text(self.ui.logWindow, f"[DEV][WARN] FTM_SW off failed: {e!r}")
-
-        gc.collect()
-        _append_text(self.ui.logWindow, "[DEV] STM released + gc.collect() (ACS kept alive)")
             
         # 5) GC
         gc.collect()
@@ -1973,20 +1960,77 @@ def main():
             except Exception:
                 pass
 
-        def _acs_connected(ok: bool) -> None:
-            # ✅ 상단 상태라인에는 연결 상태만(PLC/ACS)
+        # ✅ ACS UI 표시용 상태: 링크(link)와 압력 수신 성공(healthy) 분리
+        _acs_ui = {
+            "link": False,
+            "healthy": False,
+            "last_rx_mono": 0.0,   # 마지막 pressure 수신 시간(monotonic)
+        }
+
+        def _set_acs_ui_connected(is_ok: bool, *, clear_pressure: bool = False) -> None:
+            # 상단 상태라인(PLC CONNECTED | ACS CONNECTED/...) 반영
             try:
-                plc_binder.set_external_connected("ACS", bool(ok))
+                plc_binder.set_external_connected("ACS", bool(is_ok))
             except Exception:
                 pass
 
-            # 연결 끊김이면 pressure 표시 제거
-            if not ok:
+            # 압력 라벨 지우기(-----)
+            if clear_pressure:
                 _update_pressure(None)
 
-        acs_service.sig_pressure.connect(_update_pressure)
+        def _acs_connected(ok: bool) -> None:
+            # 링크 상태만 반영
+            _acs_ui["link"] = bool(ok)
+
+            # 링크가 끊기면 즉시 ----- 로
+            if not ok:
+                _acs_ui["healthy"] = False
+                _set_acs_ui_connected(False, clear_pressure=True)
+                return
+
+            # 링크는 살아있어도, 최근 pressure를 못 받았으면 UI는 DISCONNECTED 유지
+            _set_acs_ui_connected(bool(_acs_ui["link"] and _acs_ui["healthy"]))
+
+        def _on_acs_pressure(v: object) -> None:
+            # pressure를 받으면 즉시 healthy=True, CONNECTED로 복구
+            _acs_ui["last_rx_mono"] = time.monotonic()
+            _acs_ui["healthy"] = True
+            _set_acs_ui_connected(True)
+            _update_pressure(v)
+
+        def _on_acs_error(msg: object) -> None:
+            # ✅ “압력 1회라도 못 받음(통신 실패)”이면 즉시 DISCONNECTED + ----- 표시
+            _hmi_log(msg)
+            _acs_ui["healthy"] = False
+            _set_acs_ui_connected(False, clear_pressure=True)
+
+        acs_service.sig_pressure.connect(_on_acs_pressure)
         acs_service.sig_connected.connect(_acs_connected)
-        acs_service.sig_error.connect(_hmi_log)
+        acs_service.sig_error.connect(_on_acs_error)
+
+        # ✅ “누락(1초 동안 pressure 이벤트가 안 옴)”도 실패로 간주해서 ----- 표시
+        _acs_stale_timer = QTimer(hmi)
+        _acs_stale_timer.setInterval(200)  # 0.2초마다 체크(가벼움)
+        def _acs_stale_tick() -> None:
+            # 링크가 살아있는데도 최근 값이 안 들어오면(=1회라도 누락) 바로 ----- 로 내림
+            if not _acs_ui["link"]:
+                return
+            if not _acs_ui["healthy"]:
+                return
+            last = float(_acs_ui["last_rx_mono"] or 0.0)
+            if last <= 0:
+                # 아직 한 번도 받은 적 없다면 표시 ----- 유지
+                _acs_ui["healthy"] = False
+                _set_acs_ui_connected(False, clear_pressure=True)
+                return
+            if (time.monotonic() - last) > 1.05:  # ✅ 1초(스트림 주기) + 약간의 여유
+                _acs_ui["healthy"] = False
+                _set_acs_ui_connected(False, clear_pressure=True)
+        _acs_stale_timer.timeout.connect(_acs_stale_tick)
+        _acs_stale_timer.start()
+
+        # 시작 시 기본은 ----- 표시
+        _update_pressure(None)
 
         acs_service.start()
     except Exception as e:

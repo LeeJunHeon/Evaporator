@@ -1186,9 +1186,20 @@ class ProcessWindow(QWidget):
 
         # 4) 실패면 공정 시작 차단
         if reasons:
-            # 표시용으로 실제 읽은 값도 같이 보여주기
-            life_str = "None" if life is None else f"{float(life):.1f}%"
-            freq_str = "None" if freq_mhz is None else f"{float(freq_mhz):.3f} MHz"
+            def _fmt_pct(v) -> str:
+                try:
+                    return f"{float(v):.1f}%"
+                except Exception:
+                    return "None" if v is None else f"{v!r}"
+
+            def _fmt_mhz(v) -> str:
+                try:
+                    return f"{float(v):.3f} MHz"
+                except Exception:
+                    return "None" if v is None else f"{v!r}"
+
+            life_str = _fmt_pct(life)
+            freq_str = _fmt_mhz(freq_mhz)
 
             msg = (
                 "STM 크리스탈 상태 불량으로 공정을 시작하지 않습니다.\n\n"

@@ -1564,14 +1564,17 @@ class ProcessWindow(QWidget):
                 self._reset_process_ui()
 
     def closeEvent(self, event):
+        # ✅ 먼저 타이머부터 stop (close 중 tick 방지)
+        with contextlib.suppress(Exception):
+            if getattr(self, "_pw_log_sync_timer", None):
+                self._pw_log_sync_timer.stop()
+
         # ✅ Process 창 닫기(X) = Stop 버튼과 동일하게 동작
-        #    (셔터 close → DAC 0 → Power off → pc.stop → STM/ACS stop+해제+GC)
         if not getattr(self, "_close_stop_guard", False):
             self._close_stop_guard = True
             try:
                 self._on_stop_clicked()
             except Exception:
-                # closeEvent에서 예외로 창이 안 닫히면 안 됨(무조건 닫히게)
                 pass
 
         _append_text(getattr(self.ui, "logWindow", None), "[UI] Process window closed -> SAFE STOP (same as Stop button)")

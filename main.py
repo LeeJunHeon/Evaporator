@@ -484,7 +484,7 @@ class ProcessWindow(QWidget):
         FREQ_MAX_MHZ = 6.1
 
         def _abort(title: str, msg: str) -> bool:
-            # ✅ 1) 먼저 UI/파일에 남길 로그부터 찍기 (close_run 전에!)
+            # ✅ 1) 먼저 UI에 로그 출력
             _append_text(getattr(self.ui, "logWindow", None), f"[PRECHECK][BLOCK] {title}: {msg}")
 
             # ✅ 2) 프리체크 때문에 켜둔 장비/상태 정리(FTM OFF 포함)
@@ -494,11 +494,7 @@ class ProcessWindow(QWidget):
             # ✅ 3) 사용자 경고
             QMessageBox.warning(self, title, msg)
 
-            # ✅ 4) 이제 run 파일 닫기 + 상태 초기화
-            with contextlib.suppress(Exception):
-                if self._log_service is not None:
-                    self._log_service.close_run()
-
+            # ✅ 4) run 생명주기(open/close)는 main.py가 아니라 ProcessController/Engine이 담당
             self._active_run_id = None
             self._active_recipe_name = ""
             return False
@@ -701,22 +697,15 @@ class ProcessWindow(QWidget):
         if run_cfg is None:
             return
 
-        # ✅ (변경) run_id: 날짜+시간만(초 단위) / recipe_name: 입력받은 Process Name
+        # ✅ run_id만 생성해서 ProcessController로 전달
+        #    실제 open_run()/close_run()는 ProcessController/Engine 쪽에서 담당
         self._active_run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
 
         pname = str(run_cfg.get("process_name", "") or "").strip()
         mat = str(run_cfg.get("material_name", "") or "").strip()
 
-        # process_name이 비어있을 가능성까지 방어(원칙상 _collect_ui_run_cfg에서 이미 막힘)
+        # 현재 main.py에서는 recipe_name을 파일 open 용도로 직접 쓰지 않음
         self._active_recipe_name = pname if pname else (f"EVAP_{mat}" if mat else "EVAP")
-
-        # ✅ run 로그/CSV 파일 열기(이제 main.py가 아니라 LogService가 담당)
-        with contextlib.suppress(Exception):
-            if self._log_service is not None:
-                self._log_service.open_run(
-                    self._active_run_id,
-                    self._active_recipe_name,
-                )
 
         # ✅ 2) 그 다음 FTM ON → STM 연결
         if not self._ensure_sensors_connected_fresh():
@@ -727,10 +716,6 @@ class ProcessWindow(QWidget):
                 self._shutdown_sensors_and_release_memory()
             with contextlib.suppress(Exception):
                 self._reset_process_ui()
-
-            with contextlib.suppress(Exception):
-                if self._log_service is not None:
-                    self._log_service.close_run()
 
             self._active_run_id = None
             self._active_recipe_name = ""
@@ -755,15 +740,10 @@ class ProcessWindow(QWidget):
             self._shutdown_sensors_and_release_memory()
             self._reset_process_ui()
 
-            # ✅ (추가) 구현 안됨 → run 파일 닫기 + 상태 초기화
-            with contextlib.suppress(Exception):
-                if self._log_service is not None:
-                    self._log_service.close_run()
-
             self._active_run_id = None
             self._active_recipe_name = ""
             return
-
+        
         try:
             # ✅ (변경) run_id를 ProcessController로 전달 (process log/csv와 묶이게)
             pc.start_from_ui(run_cfg, run_id=self._active_run_id)
@@ -777,11 +757,6 @@ class ProcessWindow(QWidget):
                 self._shutdown_sensors_and_release_memory()
             with contextlib.suppress(Exception):
                 self._reset_process_ui()
-
-            # ✅ (추가) Start 예외 → run 파일 닫기 + 상태 초기화
-            with contextlib.suppress(Exception):
-                if self._log_service is not None:
-                    self._log_service.close_run()
 
             self._active_run_id = None
             self._active_recipe_name = ""
@@ -814,11 +789,7 @@ class ProcessWindow(QWidget):
             self._reset_process_ui()
 
         finally:
-            # ✅ (추가) 공정 파일 닫기 + run 상태 초기화
-            with contextlib.suppress(Exception):
-                if self._log_service is not None:
-                    self._log_service.close_run()
-
+            # ✅ run close는 ProcessController/Engine이 담당
             self._active_run_id = None
             self._active_recipe_name = ""
 
@@ -935,12 +906,7 @@ class ProcessWindow(QWidget):
                 _append_text(getattr(self.ui, "logWindow", None), "[FINISHED]")
 
         finally:
-            # ✅ (추가) 공정 파일 닫기 + run 상태 초기화
-            with contextlib.suppress(Exception):
-                # ✅ 공정 종료 시 run 파일은 항상 닫는다 (writer 잔여 조건 제거)
-                if self._log_service is not None:
-                    self._log_service.close_run()
-
+            # ✅ run close는 ProcessController/Engine이 담당
             self._active_run_id = None
             self._active_recipe_name = ""
 

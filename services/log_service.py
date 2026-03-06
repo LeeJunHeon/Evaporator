@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""
+r"""
 services/log_service.py
 
 ✅ 목표(사용자 요구 3종 로그만 깔끔히 생성)
@@ -867,6 +867,9 @@ class LogService(QObject):
         self._worker.post(CmdUiLine(channel=str(channel), text=str(text)))
 
     # ---------- run control ----------
+    # NOTE:
+    # - 실제 run open/close 호출 주체는 ProcessController/Engine이어야 함
+    # - main.py는 UI만 담당하고, 정상 공정 흐름에서 직접 open_run()/close_run()를 호출하지 않음
     def open_run(self, run_id: str, recipe_name: str = "", meta: Optional[Dict[str, Any]] = None) -> None:
         self._worker.post(CmdOpenRun(run_id=run_id, recipe_name=recipe_name, meta=meta))
 

@@ -206,6 +206,11 @@ class ProcessEngine:
             # 로그가 죽어도 공정 자체는 진행할 수 있게(단, 운영에서는 로그가 매우 중요하니 에러 출력)
             self._log_error(f"open_run failed: {e!r}", tag="ENGINE", also_ui=True)
 
+        self._log_info(
+            f"RUN START | run_id={self._run_id} | recipe={self._recipe_name}",
+            tag="PROCESS",
+            also_ui=False,
+        )
         self._emit_status(message="공정 시작")
 
         err_obj: Optional[ProcessError] = None
@@ -229,6 +234,11 @@ class ProcessEngine:
 
             ok = True
             self._phase = ProcessPhase.FINISHED
+            self._log_info(
+                f"RUN FINISHED OK | run_id={self._run_id} | recipe={self._recipe_name}",
+                tag="PROCESS",
+                also_ui=False,
+            )
             self._emit_status(message="공정 완료")
 
         except EngineStopRequested as e:
@@ -241,6 +251,11 @@ class ProcessEngine:
             self._safe_shutdown_sequence(tag=f"STOP_{e.mode.value}")
 
             self._phase = ProcessPhase.FINISHED
+            self._log_warn(
+                f"RUN STOPPED | run_id={self._run_id} | recipe={self._recipe_name} | mode={e.mode.value}",
+                tag="PROCESS",
+                also_ui=False,
+            )
             self._emit_status(message="정지 종료")
             ok = False
 
@@ -254,6 +269,11 @@ class ProcessEngine:
             self._emit_error(err_obj)
             self._emit_status(message=f"에러: {e!r}")
             self._log_error(f"ENGINE ERROR: {e!r}", tag="ENGINE", also_ui=True)
+            self._log_error(
+                f"RUN ERROR | run_id={self._run_id} | recipe={self._recipe_name} | where={err_obj.where} | error={err_obj.message}",
+                tag="PROCESS",
+                also_ui=False,
+            )
 
             # ✅ 에러 시에도 동일한 안전정지 시퀀스
             self._safe_shutdown_sequence(tag="ERROR_ABORT")
@@ -270,14 +290,14 @@ class ProcessEngine:
             if self._phase not in (ProcessPhase.FINISHED, ProcessPhase.ERROR):
                 self._phase = ProcessPhase.FINISHED if ok else ProcessPhase.ERROR
 
-            return EngineResult(
-                ok=ok,
-                run_id=self._run_id,
-                recipe_name=self._recipe_name,
-                started_ts=self._started_ts,
-                finished_ts=finished_ts,
-                error=err_obj,
-            )
+        return EngineResult(
+            ok=ok,
+            run_id=self._run_id,
+            recipe_name=self._recipe_name,
+            started_ts=self._started_ts,
+            finished_ts=finished_ts,
+            error=err_obj,
+        )
 
     # --------------------------------------------------------
     # Step execution

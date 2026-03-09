@@ -716,20 +716,12 @@ class ProcessWindow(QWidget):
     def _apply_material(self, channel: int, data: dict[str, Any]) -> None:
         mat = str(data.get("material", "")).strip()
 
-        # ✅ None/"" 방어 + 문자열 숫자도 허용
-        den = float(data.get("density_g_cm3") or 0.0)
-        z = float(data.get("z_factor") or 0.0)
-
         if channel == 1:
             self._material_1 = dict(data)
             self.ui.materialEdit.setText(mat or "Select")
-            self.ui.materialDensityEdit1.setText(f"{den:.4f}")
-            self.ui.materialZfactorEdit1.setText(f"{z:.4f}")
         else:
             self._material_2 = dict(data)
             self.ui.materialEdit2.setText(mat or "Select")
-            self.ui.materialDensityEdit2.setText(f"{den:.4f}")
-            self.ui.materialZfactorEdit2.setText(f"{z:.4f}")
 
     # ================== 그래프 설정 ==================
     def _init_rt_plot(self) -> None:
@@ -859,54 +851,117 @@ class ProcessWindow(QWidget):
             return p1 + p2
         except Exception:
             return None
+        
+    def _convert_power_read_to_amp(self, raw: Optional[int]) -> Optional[float]:
+        """
+        PLC D00010 / D00011 값을 표시용 A 값으로 변환.
+
+        중요:
+        - PLC가 이미 A 단위로 넣고 있으면 그대로 float(raw) 사용
+        - PLC가 AD raw count를 넣고 있으면 아래 식을 실제 스케일에 맞게 수정
+        """
+        if raw is None:
+            return None
+        try:
+            raw_f = float(raw)
+        except Exception:
+            return None
+
+        # 현재는 'PLC가 이미 표시 가능한 값으로 넣는다' 가정
+        # 만약 AD raw count라면 여기서 변환식을 바꿔야 함
+        return raw_f
+
+    def _read_plc_power_actual_pair(self) -> tuple[Optional[float], Optional[float]]:
+        """
+        PLC snapshot에서 actual power readback 2채널을 읽는다.
+        """
+        if self.hmi_window is None:
+            return None, None
+
+        binder = getattr(self.hmi_window, "_plc_binder", None)
+        if binder is None:
+            return None, None
+
+        try:
+            plc = binder.get_plc_service()
+            snap = plc.get_last_snapshot() if plc is not None else None
+            if snap is None:
+                return None, None
+
+            regs = getattr(snap, "regs", None) or {}
+            raw1 = regs.get("POWER_READ_1", None)
+            raw2 = regs.get("POWER_READ_2", None)
+
+            p1 = self._convert_power_read_to_amp(raw1)
+            p2 = self._convert_power_read_to_amp(raw2)
+            return p1, p2
+
+        except Exception:
+            return None, None
+
+    def _update_actual_power_ui(self, p1: Optional[float], p2: Optional[float]) -> None:
+        """
+        선택된 power만 actual power 칸에 표시.
+        """
+        use1 = bool(getattr(getattr(self.ui, "sourcePower1", None), "isChecked", lambda: False)())
+        use2 = bool(getattr(getattr(self.ui, "sourcePower2", None), "isChecked", lambda: False)())
+
+        t1 = ""
+        t2 = ""
+
+        if use1:
+            t1 = f"{p1:.2f}" if p1 is not None else "---"
+        if use2:
+            t2 = f"{p2:.2f}" if p2 is not None else "---"
+
+        try:
+            self.ui.actualPower1Edit.setText(t1)
+        except Exception:
+            pass
+
+        try:
+            self.ui.actualPower2Edit.setText(t2)
+        except Exception:
+            pass
 
     def _reset_process_ui(self) -> None:
         """공정 종료 후: 입력값/물질 선택/그래프/표시값 초기화."""
-        # ✅ 실제로 쓰는 입력칸만 정리 + Process Name까지 포함
         for wname in ("processNameEdit", "deprateEdit", "deprateEdit2", "thicknessEdit", "delayEdit"):
             w = getattr(self.ui, wname, None)
             if w is not None and hasattr(w, "setText"):
                 with contextlib.suppress(Exception):
                     w.setText("")
 
-        # Power 선택 해제
         for wname in ("sourcePower1", "sourcePower2"):
             w = getattr(self.ui, wname, None)
             if w is not None and hasattr(w, "setChecked"):
                 with contextlib.suppress(Exception):
                     w.setChecked(False)
 
-        # Material 선택 초기화(내부 상태 + 표시)
         self._material_1 = None
         self._material_2 = None
+
         with contextlib.suppress(Exception):
             self.ui.materialEdit.setText("Select")
-            self.ui.materialDensityEdit1.setText("")
-            self.ui.materialZfactorEdit1.setText("")
         with contextlib.suppress(Exception):
             self.ui.materialEdit2.setText("Select")
-            self.ui.materialDensityEdit2.setText("")
-            self.ui.materialZfactorEdit2.setText("")
 
-        # 현재값 표시 초기화
-        for wname in ("currentRateEdit", "currentThicknessEdit"):
+        # ✅ 현재값 표시 초기화
+        for wname in ("currentRateEdit", "currentThicknessEdit", "actualPower1Edit", "actualPower2Edit"):
             w = getattr(self.ui, wname, None)
             if w is not None and hasattr(w, "setText"):
                 with contextlib.suppress(Exception):
                     w.setText("")
 
-        # 공정 모니터 텍스트 초기화
         w = getattr(self.ui, "processMonitor_Process", None)
         if w is not None and hasattr(w, "setText"):
             with contextlib.suppress(Exception):
                 w.setText("")
 
-        # 그래프 초기화
         if self._plot is not None:
             with contextlib.suppress(Exception):
                 self._plot.clear()
 
-        # 내부 last 값 초기화
         self._last_rate = None
         self._last_thickness = None
         self._last_power = None

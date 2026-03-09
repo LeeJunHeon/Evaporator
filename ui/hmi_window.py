@@ -3,7 +3,10 @@ from __future__ import annotations
 
 import contextlib
 from pathlib import Path
-from typing import Optional, Any
+from typing import Optional, Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ui.process_window import ProcessWindow
 
 from PySide6.QtWidgets import QWidget, QMessageBox, QDialog
 from PySide6.QtCore import Qt

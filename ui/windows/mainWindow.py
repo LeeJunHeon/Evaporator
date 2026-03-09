@@ -43,7 +43,7 @@ class Ui_Form(object):
         # =========================
         self.hmiFooter = QWidget(Form)
         self.hmiFooter.setObjectName("hmiFooter")
-        self.hmiFooter.setGeometry(QRect(20, 690, 680, 160))
+        self.hmiFooter.setGeometry(QRect(20, 705, 680, 140))
         self.hmiFooter.setAutoFillBackground(False)
 
         # =========================
@@ -146,7 +146,7 @@ class Ui_Form(object):
         # =========================
         self.tmpGroup = QGroupBox(self.hmiFooter)
         self.tmpGroup.setObjectName("tmpGroup")
-        self.tmpGroup.setGeometry(QRect(0, 0, 330, 150))
+        self.tmpGroup.setGeometry(QRect(0, 0, 330, 130))
         self.tmpGroup.setAutoFillBackground(True)
 
         self.tmpGroupLayout = QGridLayout(self.tmpGroup)
@@ -243,16 +243,16 @@ class Ui_Form(object):
         # =========================
         self.dacGroup = QGroupBox(self.hmiFooter)
         self.dacGroup.setObjectName("dacGroup")
-        self.dacGroup.setGeometry(QRect(340, 0, 330, 150))
+        self.dacGroup.setGeometry(QRect(340, 0, 330, 130))
         self.dacGroup.setAutoFillBackground(True)
 
         self.dacGroupLayout = QGridLayout(self.dacGroup)
 
         # ✅ 왼쪽 여백(10 → 3~4) 줄이기
-        self.dacGroupLayout.setContentsMargins(8, 18, 8, 10)
+        self.dacGroupLayout.setContentsMargins(8, 18, 8, 8)
         self.dacGroupLayout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.dacGroupLayout.setHorizontalSpacing(8)
-        self.dacGroupLayout.setVerticalSpacing(6)
+        self.dacGroupLayout.setVerticalSpacing(4)
 
         # Row 0: P1
         self.dac1Label = QLabel(self.dacGroup)
@@ -265,7 +265,7 @@ class Ui_Form(object):
         self.dac1Spin.setRange(0, 4000)
         self.dac1Spin.setSingleStep(1)
         self.dac1Spin.setAccelerated(True)
-        self.dac1Spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.PlusMinus)
+        self.dac1Spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.UpDownArrows)
         self.dac1Spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.dac1Spin.setFixedWidth(140)
         self.dacGroupLayout.addWidget(self.dac1Spin, 0, 1)
@@ -291,7 +291,7 @@ class Ui_Form(object):
         self.dac2Spin.setRange(0, 4000)
         self.dac2Spin.setSingleStep(1)
         self.dac2Spin.setAccelerated(True)
-        self.dac2Spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.PlusMinus)
+        self.dac2Spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.UpDownArrows)
         self.dac2Spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.dac2Spin.setFixedWidth(140)
         self.dacGroupLayout.addWidget(self.dac2Spin, 1, 1)
@@ -312,7 +312,7 @@ class Ui_Form(object):
 
         self.dacActualRowLayout = QGridLayout(self.dacActualRow)
         self.dacActualRowLayout.setContentsMargins(0, 0, 0, 0)
-        self.dacActualRowLayout.setHorizontalSpacing(8)
+        self.dacActualRowLayout.setHorizontalSpacing(6)
         self.dacActualRowLayout.setVerticalSpacing(0)
 
         self.dacActual1Label = QLabel(self.dacActualRow)
@@ -324,7 +324,7 @@ class Ui_Form(object):
         self.dacActual1Edit.setObjectName("dacActual1Edit")
         self.dacActual1Edit.setReadOnly(True)
         self.dacActual1Edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.dacActual1Edit.setFixedWidth(72)
+        self.dacActual1Edit.setFixedWidth(90)
         self.dacActualRowLayout.addWidget(self.dacActual1Edit, 0, 1)
 
         self.dacActual2Label = QLabel(self.dacActualRow)
@@ -336,7 +336,7 @@ class Ui_Form(object):
         self.dacActual2Edit.setObjectName("dacActual2Edit")
         self.dacActual2Edit.setReadOnly(True)
         self.dacActual2Edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.dacActual2Edit.setFixedWidth(72)
+        self.dacActual2Edit.setFixedWidth(90)
         self.dacActualRowLayout.addWidget(self.dacActual2Edit, 0, 3)
 
         self.dacGroupLayout.addWidget(self.dacActualRow, 2, 0, 1, 4)
@@ -761,8 +761,8 @@ class Ui_Form(object):
         self.dac1ResetBtn.setText(QCoreApplication.translate("Form", "Reset", None))
         self.dac2ResetBtn.setText(QCoreApplication.translate("Form", "Reset", None))
 
-        self.dacActual1Label.setText(QCoreApplication.translate("Form", "ADC 1", None))
-        self.dacActual2Label.setText(QCoreApplication.translate("Form", "ADC 2", None))
+        self.dacActual1Label.setText(QCoreApplication.translate("Form", "Power 1(A)", None))
+        self.dacActual2Label.setText(QCoreApplication.translate("Form", "Power 2(A)", None))
         self.dacActual1Edit.setText(QCoreApplication.translate("Form", "---", None))
         self.dacActual2Edit.setText(QCoreApplication.translate("Form", "---", None))
 
@@ -954,19 +954,11 @@ class Ui_Form(object):
                 padding-left: 6px;
                 font-size: 10pt;
             }
-            QSpinBox::up-button, QSpinBox::down-button {
-                width: 18px;
-                background: #f3f3f3;
-                border-left: 1px solid #c8c8c8;
-            }
-            QSpinBox::up-button {
-                subcontrol-origin: border;
-                subcontrol-position: top right;
-            }
-            QSpinBox::down-button {
-                subcontrol-origin: border;
-                subcontrol-position: bottom right;
-                border-top: 1px solid #c8c8c8;
+            QLineEdit, QSpinBox {
+                background: white;
+                border: 1px solid #d0d0d0;
+                padding-left: 6px;
+                font-size: 10pt;
             }
             QPushButton {
                 background: #efefef;

@@ -677,7 +677,15 @@ class AsyncPLC:
             return int(PLC_REG_MAP[key_raw])
 
         nk = up.replace(" ", "").replace("_", "").replace("-", "").replace("/", "")
-        ...
+
+        # ✅ synonym → canonical key 변환
+        if nk in self._SYNONYMS:
+            canon = self._SYNONYMS[nk]
+            if canon in PLC_COIL_MAP:
+                return int(PLC_COIL_MAP[canon])
+            if canon in PLC_REG_MAP:
+                return int(PLC_REG_MAP[canon])
+
         if up.startswith("M"):
             return self._parse_m_device_to_coil(up)
         if up.startswith("D"):

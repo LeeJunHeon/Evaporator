@@ -560,12 +560,21 @@ class PlcServiceWorker(QThread):
 
     async def _read_regs(self, plc: AsyncPLC) -> Dict[str, int]:
         """
-        EV에서 필요한 레지스터: DAC 2개
+        EV에서 필요한 레지스터:
+        - DAC set 값 2개
+        - ADC readback 값 2개
         - 실패를 조용히 숨기지 않고, 루프 예외로 올려 끊김 감지/재연결 흐름에 태운다.
         """
         out: Dict[str, int] = {}
+
+        # ✅ 현재 set 값
         out["DAC_POWER_1"] = int(await plc.read_reg_name("DAC_POWER_1"))
         out["DAC_POWER_2"] = int(await plc.read_reg_name("DAC_POWER_2"))
+
+        # ✅ 실제 readback 값
+        out["POWER_READ_1"] = int(await plc.read_reg_name("POWER_READ_1"))
+        out["POWER_READ_2"] = int(await plc.read_reg_name("POWER_READ_2"))
+
         return out
     
     async def _finalize_pending_replies(self, reason: str) -> None:

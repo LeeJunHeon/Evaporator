@@ -56,6 +56,16 @@ class CmdUiLine(_CmdBase):
     ts: Optional[float] = None
 
 @dataclass(frozen=True)
+class CmdRunLine(_CmdBase):
+    """
+    UI를 거치지 않고 ProcessWindowLog(run .log)에 직접 기록.
+    - run이 열려 있으면 run .log에 저장
+    - run이 없으면 HMI 일별 로그에 [PROCESS][NO-RUN] 형태로 저장
+    """
+    text: str
+    ts: Optional[float] = None
+
+@dataclass(frozen=True)
 class CmdOpenRun(_CmdBase):
     run_id: str
     recipe_name: str = ""
@@ -243,6 +253,10 @@ class LogWriterWorker(QThread):
         if isinstance(cmd, CmdUiLine):
             self._write_ui_line(cmd.channel, cmd.text, cmd.ts)
             return
+        
+        if isinstance(cmd, CmdRunLine):
+            self._write_run_line(cmd.text, cmd.ts)
+            return
 
         if isinstance(cmd, CmdLog):
             self._write_log(cmd.level, cmd.msg, cmd.tag, cmd.also_ui, cmd.ts)
@@ -318,6 +332,173 @@ class LogWriterWorker(QThread):
             pass
         self._day_log_fp = None
         self._day_log_path = None
+
+    def _migrate_one_run_stem(self, file_stem: str, *, reopen_after: bool) -> bool:
+        """
+        fallback run 1개(file_stem)의 .log / .csv / .meta.json을 NAS로 복구.
+        reopen_after=True 이면 현재 열린 run으로 간주하고 NAS 파일로 재오픈까지 수행.
+        """
+        fb_run = self._pw_dir(self._fallback_dir) / f"{file_stem}.log"
+        nas_run = self._pw_dir(self._base_dir) / f"{file_stem}.log"
+
+        fb_csv = self._proc_dir(self._fallback_dir) / f"{file_stem}.csv"
+        nas_csv = self._proc_dir(self._base_dir) / f"{file_stem}.csv"
+
+        fb_meta = self._proc_dir(self._fallback_dir) / f"{file_stem}.meta.json"
+        nas_meta = self._proc_dir(self._base_dir) / f"{file_stem}.meta.json"
+
+        if reopen_after:
+            try:
+                if self._run_log_fp:
+                    self._run_log_fp.flush()
+                    self._run_log_fp.close()
+            except Exception:
+                pass
+            self._run_log_fp = None
+            self._run_log_path = None
+
+            try:
+                if self._tele_fp:
+                    self._tele_fp.flush()
+                    self._tele_fp.close()
+            except Exception:
+                pass
+            self._tele_fp = None
+            self._tele_writer = None
+            self._tele_path = None
+
+        try:
+            if fb_run.exists():
+                self._merge_text_file(fb_run, nas_run)
+                fb_run.unlink(missing_ok=True)
+
+            if fb_csv.exists():
+                self._merge_csv_file(fb_csv, nas_csv)
+                fb_csv.unlink(missing_ok=True)
+
+            if fb_meta.exists():
+                self._merge_meta_json(fb_meta, nas_meta)
+                fb_meta.unlink(missing_ok=True)
+
+            if reopen_after:
+                _ensure_dir(nas_run.parent)
+                _ensure_dir(nas_csv.parent)
+
+                self._run_dir = self._base_dir
+                self._run_log_path = nas_run
+                self._run_log_fp = open(nas_run, "a", encoding="utf-8", newline="")
+
+                self._tele_path = nas_csv
+                self._tele_fp = open(nas_csv, "a", encoding="utf-8-sig", newline="")
+                self._tele_writer = None
+
+            return True
+
+        except Exception as e:
+            try:
+                self.sig_error.emit(f"[LogService] migrate run failed({file_stem}): {e!r}")
+            except Exception:
+                pass
+
+            if reopen_after:
+                self._run_dir = self._fallback_dir
+                try:
+                    self._reopen_run_files_in_resolved_base()
+                except Exception:
+                    pass
+
+            return False
+
+    def _collect_closed_fallback_run_stems(self) -> set[str]:
+        """
+        fallback 디렉터리에 남아 있는 '닫힌 run' 파일 stem 수집.
+        - ProcessWindowLog/*.log
+        - ProcessLog/*.csv
+        - ProcessLog/*.meta.json
+        현재 열려 있는 fallback run stem은 제외
+        """
+        stems: set[str] = set()
+
+        pw_dir = self._pw_dir(self._fallback_dir)
+        if pw_dir.exists():
+            stems.update(p.stem for p in pw_dir.glob("*.log"))
+
+        proc_dir = self._proc_dir(self._fallback_dir)
+        if proc_dir.exists():
+            stems.update(p.stem for p in proc_dir.glob("*.csv"))
+            for p in proc_dir.glob("*.meta.json"):
+                stems.add(p.name[:-len(".meta.json")])
+
+        # 현재 열린 fallback run은 별도 migrate 경로에서 처리
+        if self._run_open and self._run_dir == self._fallback_dir and self._run_folder_name:
+            stems.discard(self._run_folder_name)
+
+        return stems
+
+    def _merge_text_file(self, src: Path, dst: Path) -> None:
+        if not src.exists():
+            return
+
+        _ensure_dir(dst.parent)
+        with open(src, "r", encoding="utf-8", errors="replace") as rf, \
+             open(dst, "a", encoding="utf-8", newline="") as wf:
+            wf.write(rf.read())
+
+    def _merge_csv_file(self, src: Path, dst: Path) -> None:
+        if not src.exists():
+            return
+
+        _ensure_dir(dst.parent)
+
+        expected_header = ",".join(self._tele_fieldnames)
+        nas_has_data = dst.exists() and dst.stat().st_size > 0
+
+        with open(src, "r", encoding="utf-8-sig", errors="replace") as rf, \
+             open(dst, "a", encoding="utf-8-sig", newline="") as wf:
+            first = rf.readline()
+            if not (nas_has_data and first.strip() == expected_header):
+                wf.write(first)
+            wf.write(rf.read())
+
+    def _merge_meta_json(self, src: Path, dst: Path) -> None:
+        """
+        fallback meta.json을 NAS meta.json으로 복구.
+        - NAS 파일이 없으면 그대로 복사
+        - 둘 다 있으면 dict merge (기존 NAS 값 우선)
+        """
+        if not src.exists():
+            return
+
+        _ensure_dir(dst.parent)
+
+        if not dst.exists() or dst.stat().st_size == 0:
+            with open(src, "r", encoding="utf-8", errors="replace") as rf, \
+                 open(dst, "w", encoding="utf-8") as wf:
+                wf.write(rf.read())
+            return
+
+        try:
+            with open(dst, "r", encoding="utf-8", errors="replace") as rf:
+                nas_obj = json.load(rf)
+        except Exception:
+            nas_obj = {}
+
+        try:
+            with open(src, "r", encoding="utf-8", errors="replace") as rf:
+                fb_obj = json.load(rf)
+        except Exception:
+            fb_obj = {}
+
+        if not isinstance(nas_obj, dict):
+            nas_obj = {}
+        if not isinstance(fb_obj, dict):
+            fb_obj = {}
+
+        merged = dict(fb_obj)
+        merged.update(nas_obj)  # NAS 값 우선
+
+        with open(dst, "w", encoding="utf-8") as wf:
+            json.dump(merged, wf, ensure_ascii=False, indent=2)
 
     def _open_run(self, run_id: str, recipe_name: str, meta: Dict[str, Any], ts: Optional[float]) -> None:
         """
@@ -504,6 +685,22 @@ class LogWriterWorker(QThread):
             return
 
         # PROCESS
+        if ch == "PROCESS":
+            self._write_run_line(s, ts)
+            return
+
+        # run이 아직 없으면(또는 run 로그 실패) 일별 로그로 유실 방지
+        self._write_ui_line("HMI", f"[PROCESS][NO-RUN] {s}", ts)
+
+    def _write_run_line(self, text: str, ts: Optional[float]) -> None:
+        """
+        UI를 거치지 않고 run .log(ProcessWindowLog)에 직접 기록.
+        실패 시 가능한 저장소(NAS/LOCAL)로 재오픈 1회 시도.
+        """
+        s = str(text).rstrip("\n")
+        if not s:
+            return
+
         if self._run_open and self._run_folder_name:
             try:
                 if self._run_log_fp is None:
@@ -511,12 +708,11 @@ class LogWriterWorker(QThread):
                     _ensure_dir(self._pw_dir(root))
                     self._run_log_path = self._pw_dir(root) / f"{self._run_folder_name}.log"
                     self._run_log_fp = open(self._run_log_path, "a", encoding="utf-8", newline="")
-                if self._run_log_fp:
-                    self._run_log_fp.write(s + "\n")
-                    self._run_log_fp.flush()
+
+                self._run_log_fp.write(s + "\n")
+                self._run_log_fp.flush()
                 return
             except Exception:
-                # NAS ↔ LOCAL 전환 포함 재오픈 1회 시도
                 try:
                     self._invalidate_base_cache()
                     self._reopen_run_files_in_resolved_base()
@@ -527,7 +723,7 @@ class LogWriterWorker(QThread):
                 except Exception:
                     pass
 
-        # run이 아직 없으면(또는 run 로그 실패) 일별 로그로 유실 방지
+        # run이 없으면 유실 방지용으로 HMI 일별 로그로 보냄
         self._write_ui_line("HMI", f"[PROCESS][NO-RUN] {s}", ts)
 
     def _reopen_run_files_in_resolved_base(self) -> None:
@@ -630,16 +826,8 @@ class LogWriterWorker(QThread):
         if isinstance(row2.get("detail"), str):
             row2["detail"] = row2["detail"].replace("\r", " ").replace("\n", " ")
 
-        if self._tele_writer is None:
-            self._tele_writer = csv.DictWriter(self._tele_fp, fieldnames=self._tele_fieldnames)
-            try:
-                if self._tele_fp.tell() == 0:
-                    self._tele_writer.writeheader()
-            except Exception:
-                try:
-                    self._tele_writer.writeheader()
-                except Exception:
-                    pass
+        if not self._ensure_tele_writer_ready():
+            return
 
         def _norm_cell(k: str, v: Any) -> Any:
             if v is None:
@@ -653,13 +841,45 @@ class LogWriterWorker(QThread):
         try:
             self._tele_writer.writerow(filtered)
             self._tele_fp.flush()
+            return
         except Exception as e:
             try:
-                self.sig_error.emit(f"[LogService] telemetry write failed: {e!r}")
+                self.sig_error.emit(f"[LogService] telemetry write failed(1st): {e!r}")
             except Exception:
                 pass
+
+        # ✅ 재오픈 후 동일 row 1회 재시도
+        try:
             self._invalidate_base_cache()
             self._reopen_run_files_in_resolved_base()
+
+            if not self._ensure_tele_writer_ready():
+                return
+
+            self._tele_writer.writerow(filtered)
+            self._tele_fp.flush()
+        except Exception as e2:
+            try:
+                self.sig_error.emit(f"[LogService] telemetry write failed(2nd): {e2!r}")
+            except Exception:
+                pass
+
+    def _ensure_tele_writer_ready(self) -> bool:
+        if self._tele_fp is None:
+            return False
+
+        if self._tele_writer is None:
+            self._tele_writer = csv.DictWriter(self._tele_fp, fieldnames=self._tele_fieldnames)
+            try:
+                if self._tele_fp.tell() == 0:
+                    self._tele_writer.writeheader()
+            except Exception:
+                try:
+                    self._tele_writer.writeheader()
+                except Exception:
+                    pass
+
+        return True
 
     def _maybe_migrate_back_to_nas(self) -> None:
         """
@@ -702,71 +922,13 @@ class LogWriterWorker(QThread):
             except Exception:
                 pass
 
-        # 2) run migrate (run open이고, run_dir가 fallback일 때)
+        # 2) 현재 열려 있는 fallback run 복구
         if self._run_open and self._run_folder_name and self._run_dir == self._fallback_dir:
-            fb_run = self._pw_dir(self._fallback_dir) / f"{self._run_folder_name}.log"
-            nas_run = self._pw_dir(self._base_dir) / f"{self._run_folder_name}.log"
+            self._migrate_one_run_stem(self._run_folder_name, reopen_after=True)
 
-            fb_csv = self._proc_dir(self._fallback_dir) / f"{self._run_folder_name}.csv"
-            nas_csv = self._proc_dir(self._base_dir) / f"{self._run_folder_name}.csv"
-
-            # 열려있는 핸들 닫기
-            try:
-                if self._run_log_fp:
-                    self._run_log_fp.flush()
-                    self._run_log_fp.close()
-            except Exception:
-                pass
-            self._run_log_fp = None
-            self._run_log_path = None
-
-            try:
-                if self._tele_fp:
-                    self._tele_fp.flush()
-                    self._tele_fp.close()
-            except Exception:
-                pass
-            self._tele_fp = None
-            self._tele_writer = None
-            self._tele_path = None
-
-            try:
-                _ensure_dir(nas_run.parent)
-                _ensure_dir(nas_csv.parent)
-
-                if fb_run.exists():
-                    with open(fb_run, "r", encoding="utf-8", errors="replace") as rf, \
-                         open(nas_run, "a", encoding="utf-8", newline="") as wf:
-                        wf.write(rf.read())
-                    fb_run.unlink(missing_ok=True)
-
-                if fb_csv.exists():
-                    # CSV 헤더 중복 방지: NAS 파일이 이미 있으면 fallback 첫 줄(header) 스킵
-                    expected_header = ",".join(self._tele_fieldnames)
-
-                    nas_has_data = nas_csv.exists() and nas_csv.stat().st_size > 0
-                    with open(fb_csv, "r", encoding="utf-8-sig", errors="replace") as rf, \
-                         open(nas_csv, "a", encoding="utf-8-sig", newline="") as wf:
-                        first = rf.readline()
-                        if nas_has_data and first.strip() == expected_header:
-                            pass
-                        else:
-                            wf.write(first)
-                        wf.write(rf.read())
-                    fb_csv.unlink(missing_ok=True)
-
-                # NAS로 재오픈
-                self._run_dir = self._base_dir
-                self._run_log_path = nas_run
-                self._run_log_fp = open(nas_run, "a", encoding="utf-8", newline="")
-
-                self._tele_path = nas_csv
-                self._tele_fp = open(nas_csv, "a", encoding="utf-8-sig", newline="")
-                self._tele_writer = None
-
-            except Exception:
-                # migrate 실패 시 다음 주기에 재시도
-                self._run_dir = self._fallback_dir
+        # 3) 이미 종료된 fallback run 복구
+        for stem in sorted(self._collect_closed_fallback_run_stems()):
+            self._migrate_one_run_stem(stem, reopen_after=False)
 
 
 # ============================================================
@@ -865,6 +1027,13 @@ class LogService(QObject):
 
     def ui_line(self, text: str, *, channel: str) -> None:
         self._worker.post(CmdUiLine(channel=str(channel), text=str(text)))
+
+    def run_line(self, text: str) -> None:
+        """
+        UI를 거치지 않고 run .log에 직접 기록.
+        engine.py / controller 쪽에서 RUN START, RUN FINISHED 같은 문장을 남길 때 사용.
+        """
+        self._worker.post(CmdRunLine(text=str(text)))
 
     # ---------- run control ----------
     # NOTE:

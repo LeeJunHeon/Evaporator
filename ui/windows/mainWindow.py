@@ -23,12 +23,27 @@ class Ui_Form(object):
     def setupUi(self, Form):
         if not Form.objectName():
             Form.setObjectName("Form")
-        Form.resize(1121, 700)
+
+        self._form = Form
+        self._hmi_window_size = (1121, 860)
+        self._normal_window_size = (1121, 700)
+
+        Form.resize(*self._hmi_window_size)
         Form.setAutoFillBackground(True)
 
         self.stackedWidget = QStackedWidget(Form)
         self.stackedWidget.setObjectName("stackedWidget")
         self.stackedWidget.setGeometry(QRect(10, 0, 1101, 700))
+
+        # =========================
+        # HMI 전용 footer
+        # - stackedWidget 바깥(Form 직속)
+        # - HMI 페이지에서만 표시
+        # =========================
+        self.hmiFooter = QWidget(Form)
+        self.hmiFooter.setObjectName("hmiFooter")
+        self.hmiFooter.setGeometry(QRect(20, 705, 680, 140))
+        self.hmiFooter.setAutoFillBackground(False)
 
         # =========================
         # PAGE 0 (HMI)
@@ -128,9 +143,9 @@ class Ui_Form(object):
         # - 상세 설정은 Config 팝업에서 처리
         # - 여기서는 현재 상태만 표시
         # =========================
-        self.tmpGroup = QGroupBox(self.page)
+        self.tmpGroup = QGroupBox(self.hmiFooter)
         self.tmpGroup.setObjectName("tmpGroup")
-        self.tmpGroup.setGeometry(QRect(430, 100, 330, 115))
+        self.tmpGroup.setGeometry(QRect(0, 0, 330, 130))
         self.tmpGroup.setAutoFillBackground(True)
 
         self.tmpGroupLayout = QGridLayout(self.tmpGroup)
@@ -225,21 +240,18 @@ class Ui_Form(object):
         # - Apply/Reset 제공
         # - 파이프(frame_20 x=570)와 겹치지 않게 좌측으로 배치
         # =========================
-        self.dacGroup = QGroupBox(self.page)
+        self.dacGroup = QGroupBox(self.hmiFooter)
         self.dacGroup.setObjectName("dacGroup")
-        self.dacGroup.setGeometry(QRect(430, 380, 330, 115))
+        self.dacGroup.setGeometry(QRect(340, 0, 330, 130))
         self.dacGroup.setAutoFillBackground(True)
 
         self.dacGroupLayout = QGridLayout(self.dacGroup)
 
         # ✅ 왼쪽 여백(10 → 3~4) 줄이기
-        self.dacGroupLayout.setContentsMargins(4, 18, 10, 10)
-
-        # ✅ 레이아웃 자체를 왼쪽/위에 붙게(가로로 늘어나며 생기는 왼쪽 공백 줄어듦)
-        self.dacGroupLayout.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
-
-        self.dacGroupLayout.setHorizontalSpacing(6)
-        self.dacGroupLayout.setVerticalSpacing(6)
+        self.dacGroupLayout.setContentsMargins(8, 18, 8, 8)
+        self.dacGroupLayout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.dacGroupLayout.setHorizontalSpacing(8)
+        self.dacGroupLayout.setVerticalSpacing(8)
 
         # Row 0: P1
         self.dac1Label = QLabel(self.dacGroup)
@@ -304,6 +316,7 @@ class Ui_Form(object):
         self.hmiLogWindow = QPlainTextEdit(self.page)
         self.hmiLogWindow.setObjectName("hmiLogWindow")
         self.hmiLogWindow.setGeometry(QRect(570, 500, 511, 171))
+
         font = QFont()
         font.setPointSize(11)
         self.hmiLogWindow.setFont(font)
@@ -554,7 +567,7 @@ class Ui_Form(object):
         # ✅ Recipe (Edit 끝 +4)
         self.recipeBtn = QPushButton(self.page_2)
         self.recipeBtn.setObjectName("recipeBtn")
-        self.recipeBtn.setGeometry(QRect(0, 506, 191, 41))
+        self.recipeBtn.setGeometry(QRect(0, 556, 191, 41))
 
         self.graphWidget = QWidget(self.page_2)
         self.graphWidget.setObjectName("graphWidget")
@@ -585,11 +598,11 @@ class Ui_Form(object):
         # ✅ Start/Stop (Recipe 끝 +4)
         self.stopProcess = QPushButton(self.page_2)
         self.stopProcess.setObjectName("stopProcess")
-        self.stopProcess.setGeometry(QRect(100, 551, 91, 71))
+        self.stopProcess.setGeometry(QRect(100, 601, 91, 71))
 
         self.startProcess = QPushButton(self.page_2)
         self.startProcess.setObjectName("startProcess")
-        self.startProcess.setGeometry(QRect(0, 551, 91, 71))
+        self.startProcess.setGeometry(QRect(0, 601, 91, 71))
 
         self.logWindow = QPlainTextEdit(self.page_2)
         self.logWindow.setObjectName("logWindow")
@@ -658,6 +671,10 @@ class Ui_Form(object):
         self.retranslateUi(Form)
         self.stackedWidget.setCurrentIndex(0)
         QMetaObject.connectSlotsByName(Form)
+
+        # 페이지 전환 시 HMI footer 표시/숨김 + 창 높이 변경
+        self.stackedWidget.currentChanged.connect(self._on_stacked_index_changed)
+        self._on_stacked_index_changed(self.stackedWidget.currentIndex())
 
         # ✅ 스타일만 적용
         self._apply_styles()
@@ -730,7 +747,6 @@ class Ui_Form(object):
 
         # ✅ Process Name
         self.processNameLabel.setText(QCoreApplication.translate("Form", "Process Name", None))
-        self.processNameEdit.setPlaceholderText(QCoreApplication.translate("Form", "예) Al_100nm_CH1", None))
 
         self.sourcePower1.setText(QCoreApplication.translate("Form", "Power 1", None))
         self.sourcePower2.setText(QCoreApplication.translate("Form", "Power 2", None))
@@ -867,7 +883,8 @@ class Ui_Form(object):
             lab.setStyleSheet("color: black; background: transparent; font-weight: bold;")
 
         # ---- TMP status group ----
-        self.tmpGroup.setStyleSheet("""
+        # ---- footer info groups: Turbo / Power ----
+        footer_group_qss = """
             QGroupBox {
                 font-weight: bold;
                 font-size: 10pt;
@@ -886,13 +903,25 @@ class Ui_Form(object):
                 color: black;
                 font-size: 10pt;
             }
-            QLineEdit {
+            QLineEdit, QSpinBox {
                 background: white;
                 border: 1px solid #d0d0d0;
                 padding-left: 6px;
                 font-size: 10pt;
             }
-        """)
+            QPushButton {
+                background: #efefef;
+                border: 1px solid #c8c8c8;
+                border-radius: 4px;
+                padding: 2px 8px;
+                font-size: 10pt;
+            }
+            QPushButton:pressed {
+                background: #e0e0e0;
+            }
+        """
+        self.tmpGroup.setStyleSheet(footer_group_qss)
+        self.dacGroup.setStyleSheet(footer_group_qss)
 
         # ---- log windows (optional: 살짝 깔끔하게) ----
         self.hmiLogWindow.setStyleSheet("background: white; border: 1px solid #d0d0d0;")
@@ -947,6 +976,18 @@ class Ui_Form(object):
         bg = "#38d62f" if on else "#d82c2c"
         # 61x61 기준 radius 30
         w.setStyleSheet(f"background: {bg}; border-radius: 30px; border: 2px solid #333333;")
+
+    def _on_stacked_index_changed(self, index: int):
+        is_hmi = (index == 0)
+
+        # HMI footer는 HMI 페이지에서만 보이게
+        self.hmiFooter.setVisible(is_hmi)
+
+        # 창 높이도 페이지에 따라 변경
+        if is_hmi:
+            self._form.resize(*self._hmi_window_size)
+        else:
+            self._form.resize(*self._normal_window_size)
 
     # 외부에서 상태 바꾸고 싶으면 이거 사용
     def set_indicator_state(self, name: str, on: bool):

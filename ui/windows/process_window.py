@@ -772,6 +772,8 @@ class ProcessWindow(QWidget):
         else:
             power = self._clamp_nonneg(self._last_power)
 
+        actual_p1, actual_p2 = self._read_plc_power_actual_pair()
+
         show_th = self._is_main_deposition()
         th = self._clamp_nonneg(self._last_thickness) if show_th else None
 
@@ -784,6 +786,8 @@ class ProcessWindow(QWidget):
             self.ui.currentThicknessEdit.setText(f"{th:.2f}" if th is not None else "")
         except Exception:
             pass
+
+        self._update_actual_power_ui(actual_p1, actual_p2)
 
         if self._plot is not None:
             try:

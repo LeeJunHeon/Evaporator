@@ -84,6 +84,10 @@ PLC_COIL_MAP: Dict[str, int] = {
 PLC_REG_MAP: Dict[str, int] = {
     "DAC_POWER_1": 0,  # D00000
     "DAC_POWER_2": 1,  # D00001
+
+    # ✅ PLC PDF 기준 실제 power readback
+    "POWER_READ_1": 10,  # D00010 = Mat1_power_read
+    "POWER_READ_2": 11,  # D00011 = Mat2_power_read
 }
 
 
@@ -623,6 +627,15 @@ class AsyncPLC:
         syn[norm("DAC2")] = "DAC_POWER_2"
         syn[norm("DACPOWER1")] = "DAC_POWER_1"
         syn[norm("DACPOWER2")] = "DAC_POWER_2"
+
+        # ✅ 실제 power readback 별칭
+        syn[norm("POWERREAD1")] = "POWER_READ_1"
+        syn[norm("POWERREAD2")] = "POWER_READ_2"
+        syn[norm("PWRREAD1")] = "POWER_READ_1"
+        syn[norm("PWRREAD2")] = "POWER_READ_2"
+        syn[norm("READPOWER1")] = "POWER_READ_1"
+        syn[norm("READPOWER2")] = "POWER_READ_2"
+
         return syn
 
     @staticmethod
@@ -985,6 +998,19 @@ class AsyncPLC:
             raise ValueError("DAC channel must be 1 or 2")
         self._dbg("SET_DAC_POWER ch=%s code=%s", ch, code)
         await self.write_reg_name(key, self._clamp_dac_code(int(code)))
+
+    async def read_power_actual_raw(self, ch: int) -> int:
+        key = "POWER_READ_1" if int(ch) == 1 else "POWER_READ_2" if int(ch) == 2 else None
+        if key is None:
+            raise ValueError("Power read channel must be 1 or 2")
+        self._dbg("READ_POWER_ACTUAL_RAW ch=%s key=%s", ch, key)
+        return int(await self.read_reg_name(key))
+
+    async def read_power_actual_pair_raw(self) -> tuple[int, int]:
+        p1 = int(await self.read_reg_name("POWER_READ_1"))
+        p2 = int(await self.read_reg_name("POWER_READ_2"))
+        self._dbg("READ_POWER_ACTUAL_PAIR_RAW -> ch1=%s ch2=%s", p1, p2)
+        return p1, p2
 
     async def set_dac_current(self, ch: int, ma: float) -> int:
         mn = float(self.cfg.dac_current_min_ma)

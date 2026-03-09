@@ -18,7 +18,7 @@ from controller.hmi_plc_binder import HmiPlcBinder
 
 # ✅ 파일 위치가 root든 ui 폴더든 둘 다 버티도록
 _BASE_DIR = Path(__file__).resolve().parent
-if not (_BASE_DIR / "config").exists():
+while not (_BASE_DIR / "config").exists() and _BASE_DIR != _BASE_DIR.parent:
     _BASE_DIR = _BASE_DIR.parent
 
 

@@ -249,10 +249,10 @@ class Ui_Form(object):
         self.dacGroupLayout = QGridLayout(self.dacGroup)
 
         # ✅ 왼쪽 여백(10 → 3~4) 줄이기
-        self.dacGroupLayout.setContentsMargins(6, 18, 6, 8)
+        self.dacGroupLayout.setContentsMargins(6, 18, 8, 8)
         self.dacGroupLayout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self.dacGroupLayout.setHorizontalSpacing(4)
-        self.dacGroupLayout.setVerticalSpacing(4)
+        self.dacGroupLayout.setHorizontalSpacing(6)
+        self.dacGroupLayout.setVerticalSpacing(6)
 
         # Row 0: P1
         self.dac1Label = QLabel(self.dacGroup)
@@ -268,17 +268,17 @@ class Ui_Form(object):
         self.dac1Spin.setAccelerated(True)
         self.dac1Spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.UpDownArrows)
         self.dac1Spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.dac1Spin.setFixedWidth(145)
+        self.dac1Spin.setFixedWidth(160)
         self.dacGroupLayout.addWidget(self.dac1Spin, 0, 1)
 
         self.dac1SetBtn = QPushButton(self.dacGroup)
         self.dac1SetBtn.setObjectName("dac1SetBtn")
-        self.dac1SetBtn.setFixedWidth(46)
+        self.dac1SetBtn.setFixedWidth(50)
         self.dacGroupLayout.addWidget(self.dac1SetBtn, 0, 2)
 
         self.dac1ResetBtn = QPushButton(self.dacGroup)
         self.dac1ResetBtn.setObjectName("dac1ResetBtn")
-        self.dac1ResetBtn.setFixedWidth(46)
+        self.dac1ResetBtn.setFixedWidth(50)
         self.dacGroupLayout.addWidget(self.dac1ResetBtn, 0, 3)
 
         # Row 1: P2
@@ -295,17 +295,17 @@ class Ui_Form(object):
         self.dac2Spin.setAccelerated(True)
         self.dac2Spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.UpDownArrows)
         self.dac2Spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.dac2Spin.setFixedWidth(145)
+        self.dac2Spin.setFixedWidth(160)
         self.dacGroupLayout.addWidget(self.dac2Spin, 1, 1)
 
         self.dac2SetBtn = QPushButton(self.dacGroup)
         self.dac2SetBtn.setObjectName("dac2SetBtn")
-        self.dac2SetBtn.setFixedWidth(46)
+        self.dac2SetBtn.setFixedWidth(50)
         self.dacGroupLayout.addWidget(self.dac2SetBtn, 1, 2)
 
         self.dac2ResetBtn = QPushButton(self.dacGroup)
         self.dac2ResetBtn.setObjectName("dac2ResetBtn")
-        self.dac2ResetBtn.setFixedWidth(46)
+        self.dac2ResetBtn.setFixedWidth(50)
         self.dacGroupLayout.addWidget(self.dac2ResetBtn, 1, 3)
 
         # Row 2: ADC readback (HMI display only)
@@ -314,7 +314,7 @@ class Ui_Form(object):
 
         self.dacActualRowLayout = QGridLayout(self.dacActualRow)
         self.dacActualRowLayout.setContentsMargins(0, 0, 0, 0)
-        self.dacActualRowLayout.setHorizontalSpacing(3)
+        self.dacActualRowLayout.setHorizontalSpacing(6)
         self.dacActualRowLayout.setVerticalSpacing(0)
 
         self.dacActual1Label = QLabel(self.dacActualRow)
@@ -327,7 +327,7 @@ class Ui_Form(object):
         self.dacActual1Edit.setObjectName("dacActual1Edit")
         self.dacActual1Edit.setReadOnly(True)
         self.dacActual1Edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.dacActual1Edit.setFixedWidth(92)
+        self.dacActual1Edit.setFixedWidth(104)
         self.dacActualRowLayout.addWidget(self.dacActual1Edit, 0, 1)
 
         self.dacActual2Label = QLabel(self.dacActualRow)
@@ -340,7 +340,7 @@ class Ui_Form(object):
         self.dacActual2Edit.setObjectName("dacActual2Edit")
         self.dacActual2Edit.setReadOnly(True)
         self.dacActual2Edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.dacActual2Edit.setFixedWidth(92)
+        self.dacActual2Edit.setFixedWidth(104)
         self.dacActualRowLayout.addWidget(self.dacActual2Edit, 0, 3)
 
         self.dacGroupLayout.addWidget(self.dacActualRow, 2, 0, 1, 4)

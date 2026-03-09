@@ -26,6 +26,7 @@ import uuid
 import math
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional, Tuple
+from process.safety import build_engine_safe_shutdown_steps
 
 from process.models import (
     ProcessRecipe,
@@ -1262,54 +1263,69 @@ class ProcessEngine:
 
     def _safe_shutdown_sequence(self, *, tag: str) -> None:
         """
-        안전 시퀀스(통일):
+        기존 engine.py의 하드코딩 안전정지 순서를 그대로 유지하되,
+        실제 step 정의는 process/safety.py 에서 가져와 실행한다.
+
+        순서(기존과 동일):
         1) MAIN_SHUTTER close
-        2) DAC 0
-        3) SOURCE SHUTTER close (1/2)
-        4) POWER off
-        5) FTM off
-        (실패해도 예외 삼킴: best-effort)
+        2) DAC_POWER_1 = 0
+        3) DAC_POWER_2 = 0
+        4) SHUTTER_1_SW close
+        5) SHUTTER_2_SW close
+        6) POWER_1_SW off
+        7) POWER_2_SW off
+        8) FTM_SW off
+
+        실패해도 예외는 삼키고 계속 진행(best-effort)한다.
         """
-        # 1) main shutter close
         try:
-            self._plc_write_coil("MAIN_SHUTTER_SW", False, tag=f"{tag}_MAIN_SHUTTER_CLOSE")
-        except Exception:
-            pass
+            steps = build_engine_safe_shutdown_steps()
+        except Exception as e:
+            self._log_error(
+                f"[SAFETY:{tag}] build_engine_safe_shutdown_steps failed: {e!r}",
+                tag="ENGINE",
+                also_ui=True,
+            )
+            return
 
-        # 2) dac 0
-        try:
-            self._plc_write_reg("DAC_POWER_1", 0, tag=f"{tag}_DAC1_0")
-            self._last_dac_power_1 = 0
-        except Exception:
-            pass
-        try:
-            self._plc_write_reg("DAC_POWER_2", 0, tag=f"{tag}_DAC2_0")
-            self._last_dac_power_2 = 0
-        except Exception:
-            pass
-
-        # 3) source shutters close (에러/정지시에도 원복 보장)
-        for coil in ("SHUTTER_1_SW", "SHUTTER_2_SW"):
+        for st in steps:
             try:
-                self._plc_write_coil(coil, False, tag=f"{tag}_{coil}_CLOSE")
-            except Exception:
-                pass
+                if st.type == StepType.PLC_WRITE_COIL:
+                    self._plc_write_coil(
+                        st.coil,
+                        bool(st.on),
+                        tag=f"{tag}_{st.name}",
+                    )
 
-        # 4) power off
-        try:
-            self._plc_write_coil("POWER_1_SW", False, tag=f"{tag}_PWR1_OFF")
-        except Exception:
-            pass
-        try:
-            self._plc_write_coil("POWER_2_SW", False, tag=f"{tag}_PWR2_OFF")
-        except Exception:
-            pass
+                elif st.type == StepType.PLC_WRITE_REG:
+                    reg = str(st.reg or "")
+                    value = int(st.value or 0)
+                    self._plc_write_reg(
+                        reg,
+                        value,
+                        tag=f"{tag}_{st.name}",
+                    )
+                    # _plc_write_reg 안에서 DAC last 값도 이미 동기화됨
 
-        # 5) ftm off
-        try:
-            self._plc_write_coil("FTM_SW", False, tag=f"{tag}_FTM_OFF")
-        except Exception:
-            pass
+                elif st.type == StepType.LOG:
+                    # 현재 legacy sequence에는 LOG step을 안 쓰지만,
+                    # 혹시 plan에 추가되더라도 안전하게 기록 가능하도록 둠
+                    self._run_line(st.message or st.name)
+
+                else:
+                    self._log_warn(
+                        f"[SAFETY:{tag}] unsupported safety step type: {st.type}",
+                        tag="ENGINE",
+                        also_ui=True,
+                    )
+
+            except Exception as e:
+                # 기존 엔진과 동일하게 best-effort
+                self._log_warn(
+                    f"[SAFETY:{tag}] step failed but continue: {st.name} / {e!r}",
+                    tag="ENGINE",
+                    also_ui=True,
+                )
 
     # --------------------------------------------------------
     # PLC wrappers

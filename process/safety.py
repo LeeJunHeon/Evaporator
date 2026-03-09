@@ -2,19 +2,27 @@
 """
 process/safety.py
 
-안전정지(Safety) 시퀀스를 "ProcessStep 리스트"로 생성하는 모듈.
+현재 engine.py의 legacy 안전정지 시퀀스를 ProcessStep 리스트로 분리한 모듈.
 
-설계 의도
-- 장비마다 안전정지(Stop/Abort/EStop) 시퀀스가 다르므로,
-  엔진에서 하드코딩하지 않고, 별도 모듈에서 "스텝(plan)"을 생성하도록 분리한다.
-- 엔진은 생성된 steps를 그대로 실행(PLC_WRITE_COIL / WAIT_SECONDS / LOG)하면 된다.
+목표
+- engine.py 안의 하드코딩 안전정지 순서를 safety.py로 이동
+- 기존 engine 동작과 "완전히 동일한 순서/동작" 유지
+- 나중에 safety plan을 바꾸고 싶을 때 engine.py가 아니라 이 파일만 수정
 
-기본 제공
-- 기본 SafetyPlan (매우 보수적, 최소한만 OFF)
-  * STOP : GAS OFF -> 짧게 대기 -> POWER OFF
-  * ABORT: GAS OFF + POWER OFF (딜레이 최소)
-  * ESTOP: 엔진이 관여하지 않고 LOG만 남김(하드웨어/PLC 인터락 우선)
-- 사용자 커스텀 plan을 JSON으로 로드/저장 가능
+현재 legacy 엔진 시퀀스(기존과 동일):
+1) MAIN_SHUTTER_SW  -> OFF
+2) DAC_POWER_1      -> 0
+3) DAC_POWER_2      -> 0
+4) SHUTTER_1_SW     -> OFF
+5) SHUTTER_2_SW     -> OFF
+6) POWER_1_SW       -> OFF
+7) POWER_2_SW       -> OFF
+8) FTM_SW           -> OFF
+
+주의
+- 본 파일의 default plan은 의도적으로 STOP/ABORT를 동일하게 둔다.
+- 이유: 현재 engine.py는 STOP / ERROR / EVAP_DONE 모두 같은 하드코딩 시퀀스를 사용하고 있기 때문.
+- 즉, "기존과 완전히 동일"이 이번 목표다.
 """
 
 from __future__ import annotations
@@ -22,41 +30,28 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional
 
 from process.models import (
     ProcessStep,
     ProcessRecipe,
     StepType,
     StopMode,
-    KNOWN_COILS,
 )
 
 
 # ============================================================
-# Data models
+# Data model
 # ============================================================
 
 @dataclass
 class SafetyPlan:
-    """
-    StopMode별로 실행할 ProcessStep 리스트를 보관하는 계획.
-
-    - stop_steps  : 정상 정지(안전 시퀀스)
-    - abort_steps : 중단/에러 시 빠른 안전화
-    - estop_steps : 비상정지(보통 하드웨어/PLC에서 처리 → 엔진은 최소 개입)
-    """
     stop_steps: List[ProcessStep] = field(default_factory=list)
     abort_steps: List[ProcessStep] = field(default_factory=list)
     estop_steps: List[ProcessStep] = field(default_factory=list)
-
     meta: Dict[str, Any] = field(default_factory=dict)
 
     def validate(self, strict: bool = True) -> None:
-        """
-        plan 내부 step 검증.
-        - strict=True면 coil 이름이 KNOWN_COILS에 있는지 체크
-        """
         for group_name, steps in (
             ("STOP", self.stop_steps),
             ("ABORT", self.abort_steps),
@@ -64,8 +59,9 @@ class SafetyPlan:
         ):
             for i, st in enumerate(steps):
                 if not isinstance(st, ProcessStep):
-                    raise ValueError(f"[SafetyPlan] {group_name} steps[{i}] is not ProcessStep: {type(st)}")
-                # safety step는 coil 오타가 치명적이므로 기본적으로 strict 권장
+                    raise ValueError(
+                        f"[SafetyPlan] {group_name} steps[{i}] is not ProcessStep: {type(st)}"
+                    )
                 st.validate(idx=i, strict=strict)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -98,64 +94,123 @@ class SafetyPlan:
 
 
 # ============================================================
-# Default plan (매우 보수적)
+# Legacy engine sequence
 # ============================================================
+
+def _legacy_engine_shutdown_steps(*, prefix: str) -> List[ProcessStep]:
+    """
+    기존 engine.py 하드코딩 안전정지 순서를 그대로 ProcessStep으로 생성.
+    순서가 가장 중요하므로 절대 바꾸지 않는다.
+    """
+    return [
+        ProcessStep(
+            name=f"{prefix}_MAIN_SHUTTER_CLOSE",
+            type=StepType.PLC_WRITE_COIL,
+            coil="MAIN_SHUTTER_SW",
+            on=False,
+            meta={"reason": "legacy_engine_safety"},
+        ),
+        ProcessStep(
+            name=f"{prefix}_DAC1_0",
+            type=StepType.PLC_WRITE_REG,
+            reg="DAC_POWER_1",
+            value=0,
+            meta={"reason": "legacy_engine_safety"},
+        ),
+        ProcessStep(
+            name=f"{prefix}_DAC2_0",
+            type=StepType.PLC_WRITE_REG,
+            reg="DAC_POWER_2",
+            value=0,
+            meta={"reason": "legacy_engine_safety"},
+        ),
+        ProcessStep(
+            name=f"{prefix}_SHUTTER_1_CLOSE",
+            type=StepType.PLC_WRITE_COIL,
+            coil="SHUTTER_1_SW",
+            on=False,
+            meta={"reason": "legacy_engine_safety"},
+        ),
+        ProcessStep(
+            name=f"{prefix}_SHUTTER_2_CLOSE",
+            type=StepType.PLC_WRITE_COIL,
+            coil="SHUTTER_2_SW",
+            on=False,
+            meta={"reason": "legacy_engine_safety"},
+        ),
+        ProcessStep(
+            name=f"{prefix}_PWR1_OFF",
+            type=StepType.PLC_WRITE_COIL,
+            coil="POWER_1_SW",
+            on=False,
+            meta={"reason": "legacy_engine_safety"},
+        ),
+        ProcessStep(
+            name=f"{prefix}_PWR2_OFF",
+            type=StepType.PLC_WRITE_COIL,
+            coil="POWER_2_SW",
+            on=False,
+            meta={"reason": "legacy_engine_safety"},
+        ),
+        ProcessStep(
+            name=f"{prefix}_FTM_OFF",
+            type=StepType.PLC_WRITE_COIL,
+            coil="FTM_SW",
+            on=False,
+            meta={"reason": "legacy_engine_safety"},
+        ),
+    ]
+
 
 def default_safety_plan() -> SafetyPlan:
     """
-    기본 안전정지 plan.
-    - 확실히 안전하다고 단정하기 어려운(밸브/펌프/door/vent 등) 동작은 기본에서 제외.
-    - 최소한의 위험 요소(가스/파워)를 끄는 방향으로만 구성.
+    현재 engine.py의 legacy 동작을 그대로 보존하는 기본 safety plan.
+
+    - STOP  : legacy engine과 동일
+    - ABORT : legacy engine과 동일
+    - ESTOP : 엔진 강제동작 최소(로그만)
     """
-    # ✅ 엔진의 안전 시퀀스와 통일: shutter close → DAC 0 → power off (+ FTM off)
-    shutter_close = ["MAIN_SHUTTER_SW", "SHUTTER_1_SW", "SHUTTER_2_SW"]
-    power_off = ["POWER_1_SW", "POWER_2_SW"]
-    ftm_off = ["FTM_SW"]
+    stop_steps = _legacy_engine_shutdown_steps(prefix="STOP")
+    abort_steps = _legacy_engine_shutdown_steps(prefix="ABORT")
 
-    stop_steps: List[ProcessStep] = []
-    abort_steps: List[ProcessStep] = []
-    estop_steps: List[ProcessStep] = []
-
-    # STOP: SHUTTER close -> (0.2s) -> DAC 0 -> POWER OFF -> FTM OFF
-    stop_steps += _make_log("SAFETY_STOP_BEGIN", "SAFETY", "STOP: SHUTTER close -> DAC0 -> POWER OFF")
-    stop_steps += _make_off_steps(shutter_close, prefix="STOP_SHUTTER_CLOSE")
-    stop_steps += [_make_wait("STOP_WAIT_0P2", 0.2)]
-    stop_steps += _make_write_reg_steps(["DAC_POWER_1", "DAC_POWER_2"], value=0, prefix="STOP_DAC0")
-    stop_steps += _make_off_steps(power_off, prefix="STOP_POWER_OFF")
-    stop_steps += _make_off_steps(ftm_off, prefix="STOP_FTM_OFF")
-    stop_steps += _make_log("SAFETY_STOP_END", "SAFETY", "STOP safety sequence finished")
-
-    # ABORT: SHUTTER close + DAC 0 + POWER OFF (빠르게)
-    abort_steps += _make_log("SAFETY_ABORT_BEGIN", "SAFETY", "ABORT: SHUTTER close + DAC0 + POWER OFF (fast)")
-    abort_steps += _make_off_steps(shutter_close, prefix="ABORT_SHUTTER_CLOSE")
-    abort_steps += _make_write_reg_steps(["DAC_POWER_1", "DAC_POWER_2"], value=0, prefix="ABORT_DAC0")
-    abort_steps += _make_off_steps(power_off, prefix="ABORT_POWER_OFF")
-    abort_steps += _make_off_steps(ftm_off, prefix="ABORT_FTM_OFF")
-    abort_steps += _make_log("SAFETY_ABORT_END", "SAFETY", "ABORT safety sequence finished")
-
-    # ESTOP: 엔진 개입 최소 (하드웨어/PLC 인터락 우선)
-    estop_steps += _make_log("SAFETY_ESTOP", "SAFETY", "ESTOP requested: engine does not force actions (hardware/PLC interlock first)")
+    estop_steps = [
+        ProcessStep(
+            name="ESTOP_LOG_ONLY",
+            type=StepType.LOG,
+            message="[SAFETY] ESTOP requested: engine does not force actions (hardware/PLC interlock first)",
+            meta={"reason": "legacy_engine_safety"},
+        )
+    ]
 
     plan = SafetyPlan(
         stop_steps=stop_steps,
         abort_steps=abort_steps,
         estop_steps=estop_steps,
-        meta={"version": 1, "note": "default conservative plan: only gas/power off"},
+        meta={
+            "version": 1,
+            "mode": "legacy_engine_exact",
+            "note": "STOP/ABORT follow current engine.py hardcoded shutdown sequence exactly",
+        },
     )
     return plan
 
 
 # ============================================================
-# Build helpers
+# Public builders
 # ============================================================
+
+def build_engine_safe_shutdown_steps() -> List[ProcessStep]:
+    """
+    현재 engine.py가 쓰던 legacy 안전정지 순서를 그대로 반환.
+    - STOP / ERROR / EVAP_DONE 모두 동일 시퀀스를 쓰던 기존 구조 보존용
+    """
+    return _legacy_engine_shutdown_steps(prefix="LEGACY")
+
 
 def build_safety_steps(mode: StopMode, plan: Optional[SafetyPlan] = None) -> List[ProcessStep]:
     """
     StopMode에 따라 실행할 안전정지 step 리스트 반환.
-
-    - mode == STOP  -> plan.stop_steps
-    - mode == ABORT -> plan.abort_steps
-    - mode == ESTOP -> plan.estop_steps
+    현재 default plan은 STOP/ABORT가 legacy engine과 동일하다.
     """
     plan = plan or default_safety_plan()
 
@@ -163,7 +218,6 @@ def build_safety_steps(mode: StopMode, plan: Optional[SafetyPlan] = None) -> Lis
         return list(plan.stop_steps)
     if mode == StopMode.ABORT:
         return list(plan.abort_steps)
-    # ESTOP 포함 기타는 estop_steps로
     return list(plan.estop_steps)
 
 
@@ -173,10 +227,6 @@ def build_safety_recipe(
     plan: Optional[SafetyPlan] = None,
     recipe_name_prefix: str = "safety",
 ) -> ProcessRecipe:
-    """
-    안전정지 시퀀스를 ProcessRecipe로 만들어서 반환.
-    엔진에서 "recipe 실행" 기능으로 돌리고 싶을 때 유용.
-    """
     steps = build_safety_steps(mode, plan=plan)
     name = f"{recipe_name_prefix}_{mode.value.lower()}"
     r = ProcessRecipe(
@@ -188,34 +238,8 @@ def build_safety_recipe(
         note=f"safety recipe for {mode.value}",
         meta={"mode": mode.value},
     )
-    # 안전레시피는 오타가 치명적 → strict 검증 권장
     r.validate(strict=True)
     return r
-
-
-def sanitize_plan(plan: SafetyPlan) -> SafetyPlan:
-    """
-    plan에 들어있는 coil 이름 중 KNOWN_COILS에 없는 항목을 제거하여 반환.
-    - 운영에서 "일단 돌게" 만들 때 쓰는 함수
-    - 그러나 안전정지는 오타를 조용히 무시하는게 더 위험할 수 있으니,
-      기본은 validate(strict=True)로 잡아내는 것을 권장.
-    """
-    def _filter_steps(steps: List[ProcessStep]) -> List[ProcessStep]:
-        out: List[ProcessStep] = []
-        for st in steps:
-            if st.type in (StepType.PLC_WRITE_COIL, StepType.PLC_PULSE_COIL, StepType.WAIT_COIL_IS):
-                c = (st.coil or "").strip()
-                if c and c not in KNOWN_COILS:
-                    continue
-            out.append(st)
-        return out
-
-    return SafetyPlan(
-        stop_steps=_filter_steps(plan.stop_steps),
-        abort_steps=_filter_steps(plan.abort_steps),
-        estop_steps=_filter_steps(plan.estop_steps),
-        meta=dict(plan.meta or {}),
-    )
 
 
 # ============================================================
@@ -235,66 +259,6 @@ def load_safety_plan_json(path: str | Path, *, strict: bool = True) -> SafetyPla
 
 def save_safety_plan_json(path: str | Path, plan: SafetyPlan, *, strict: bool = True) -> None:
     p = Path(path)
-    # 저장 전 검증(오타 방지)
     plan.validate(strict=strict)
-
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(plan.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-# ============================================================
-# Internal step builders
-# ============================================================
-
-def _make_log(name: str, tag: str, message: str) -> List[ProcessStep]:
-    return [
-        ProcessStep(
-            name=name,
-            type=StepType.LOG,
-            message=f"[{tag}] {message}",
-            meta={},
-        )
-    ]
-
-
-def _make_wait(name: str, seconds: float) -> ProcessStep:
-    return ProcessStep(
-        name=name,
-        type=StepType.WAIT_SECONDS,
-        seconds=float(seconds),
-        meta={},
-    )
-
-
-def _make_off_steps(coils: Sequence[str], *, prefix: str) -> List[ProcessStep]:
-    """
-    coil OFF 스텝 생성.
-    - 존재하지 않는 coil 이름이면 validate(strict=True)에서 잡히도록 그대로 둔다.
-    """
-    out: List[ProcessStep] = []
-    for i, c in enumerate(coils):
-        out.append(
-            ProcessStep(
-                name=f"{prefix}_{i+1:02d}",
-                type=StepType.PLC_WRITE_COIL,
-                coil=str(c),
-                on=False,
-                meta={"reason": "safety_off"},
-            )
-        )
-    return out
-
-
-def _make_write_reg_steps(regs: Sequence[str], *, value: int, prefix: str) -> List[ProcessStep]:
-    out: List[ProcessStep] = []
-    for i, r in enumerate(regs):
-        out.append(
-            ProcessStep(
-                name=f"{prefix}_{i+1:02d}",
-                type=StepType.PLC_WRITE_REG,
-                reg=str(r),
-                value=int(value),
-                meta={"reason": "safety_reg"},
-            )
-        )
-    return out

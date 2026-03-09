@@ -6,13 +6,12 @@ from pathlib import Path
 from typing import Optional, Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ui.process_window import ProcessWindow
+    from ui.windows.process_window import ProcessWindow
 
 from PySide6.QtWidgets import QWidget, QMessageBox, QDialog
 from PySide6.QtCore import Qt
 
-from ui.mainWindow import Ui_Form
-from ui.process_window import ProcessWindow
+from ui.windows.mainWindow import Ui_Form
 from ui.config_dialog import ConfigDialog
 from config.plc_config import load_plc_settings
 from controller.hmi_plc_binder import HmiPlcBinder
@@ -57,7 +56,7 @@ class HmiWindow(QWidget):
 
     def goto_process_window(self):
         # ✅ 순환 import 방지: 필요할 때만 import
-        from ui.process_window import ProcessWindow
+        from ui.windows.process_window import ProcessWindow
 
         # ✅ 닫혀있거나 아직 없으면 새로 생성
         if self.process_window is None:

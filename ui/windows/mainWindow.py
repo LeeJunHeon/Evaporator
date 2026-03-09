@@ -123,6 +123,103 @@ class Ui_Form(object):
         self.mainshutterBtn.setGeometry(QRect(430, 250, 101, 71))
 
         # =========================
+        # Turbo status (HMI display only)
+        # - Start/Stop은 기존 TMP 버튼(pushButton_13) 사용
+        # - 상세 설정은 Config 팝업에서 처리
+        # - 여기서는 현재 상태만 표시
+        # =========================
+        self.tmpGroup = QGroupBox(self.page)
+        self.tmpGroup.setObjectName("tmpGroup")
+        self.tmpGroup.setGeometry(QRect(430, 100, 330, 115))
+        self.tmpGroup.setAutoFillBackground(True)
+
+        self.tmpGroupLayout = QGridLayout(self.tmpGroup)
+        self.tmpGroupLayout.setContentsMargins(6, 18, 8, 8)
+        self.tmpGroupLayout.setHorizontalSpacing(6)
+        self.tmpGroupLayout.setVerticalSpacing(6)
+
+        # Row 0
+        self.tmpConnLabel = QLabel(self.tmpGroup)
+        self.tmpConnLabel.setObjectName("tmpConnLabel")
+        self.tmpConnLabel.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.tmpGroupLayout.addWidget(self.tmpConnLabel, 0, 0)
+
+        self.tmpConnEdit = QLineEdit(self.tmpGroup)
+        self.tmpConnEdit.setObjectName("tmpConnEdit")
+        self.tmpConnEdit.setReadOnly(True)
+        self.tmpConnEdit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.tmpConnEdit.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
+        self.tmpConnEdit.setFixedWidth(95)
+        self.tmpGroupLayout.addWidget(self.tmpConnEdit, 0, 1)
+
+        self.tmpStateLabel = QLabel(self.tmpGroup)
+        self.tmpStateLabel.setObjectName("tmpStateLabel")
+        self.tmpStateLabel.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.tmpGroupLayout.addWidget(self.tmpStateLabel, 0, 2)
+
+        self.tmpStateEdit = QLineEdit(self.tmpGroup)
+        self.tmpStateEdit.setObjectName("tmpStateEdit")
+        self.tmpStateEdit.setReadOnly(True)
+        self.tmpStateEdit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.tmpStateEdit.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
+        self.tmpStateEdit.setFixedWidth(95)
+        self.tmpGroupLayout.addWidget(self.tmpStateEdit, 0, 3)
+
+        # Row 1
+        self.tmpFreqLabel = QLabel(self.tmpGroup)
+        self.tmpFreqLabel.setObjectName("tmpFreqLabel")
+        self.tmpFreqLabel.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.tmpGroupLayout.addWidget(self.tmpFreqLabel, 1, 0)
+
+        self.tmpFreqEdit = QLineEdit(self.tmpGroup)
+        self.tmpFreqEdit.setObjectName("tmpFreqEdit")
+        self.tmpFreqEdit.setReadOnly(True)
+        self.tmpFreqEdit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.tmpFreqEdit.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
+        self.tmpFreqEdit.setFixedWidth(95)
+        self.tmpGroupLayout.addWidget(self.tmpFreqEdit, 1, 1)
+
+        self.tmpCurrentLabel = QLabel(self.tmpGroup)
+        self.tmpCurrentLabel.setObjectName("tmpCurrentLabel")
+        self.tmpCurrentLabel.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.tmpGroupLayout.addWidget(self.tmpCurrentLabel, 1, 2)
+
+        self.tmpCurrentEdit = QLineEdit(self.tmpGroup)
+        self.tmpCurrentEdit.setObjectName("tmpCurrentEdit")
+        self.tmpCurrentEdit.setReadOnly(True)
+        self.tmpCurrentEdit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.tmpCurrentEdit.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
+        self.tmpCurrentEdit.setFixedWidth(95)
+        self.tmpGroupLayout.addWidget(self.tmpCurrentEdit, 1, 3)
+
+        # Row 2
+        self.tmpTempLabel = QLabel(self.tmpGroup)
+        self.tmpTempLabel.setObjectName("tmpTempLabel")
+        self.tmpTempLabel.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.tmpGroupLayout.addWidget(self.tmpTempLabel, 2, 0)
+
+        self.tmpTempEdit = QLineEdit(self.tmpGroup)
+        self.tmpTempEdit.setObjectName("tmpTempEdit")
+        self.tmpTempEdit.setReadOnly(True)
+        self.tmpTempEdit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.tmpTempEdit.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
+        self.tmpTempEdit.setFixedWidth(95)
+        self.tmpGroupLayout.addWidget(self.tmpTempEdit, 2, 1)
+
+        self.tmpAlarmLabel = QLabel(self.tmpGroup)
+        self.tmpAlarmLabel.setObjectName("tmpAlarmLabel")
+        self.tmpAlarmLabel.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.tmpGroupLayout.addWidget(self.tmpAlarmLabel, 2, 2)
+
+        self.tmpAlarmEdit = QLineEdit(self.tmpGroup)
+        self.tmpAlarmEdit.setObjectName("tmpAlarmEdit")
+        self.tmpAlarmEdit.setReadOnly(True)
+        self.tmpAlarmEdit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.tmpAlarmEdit.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
+        self.tmpAlarmEdit.setFixedWidth(95)
+        self.tmpGroupLayout.addWidget(self.tmpAlarmEdit, 2, 3)
+
+        # =========================
         # DAC manual set (Power1/Power2)
         # - QSpinBox: ↑↓로 1씩 조절 + 직접 타이핑 가능
         # - Apply/Reset 제공
@@ -130,7 +227,7 @@ class Ui_Form(object):
         # =========================
         self.dacGroup = QGroupBox(self.page)
         self.dacGroup.setObjectName("dacGroup")
-        self.dacGroup.setGeometry(QRect(430, 100, 330, 115))
+        self.dacGroup.setGeometry(QRect(430, 380, 330, 115))
         self.dacGroup.setAutoFillBackground(True)
 
         self.dacGroupLayout = QGridLayout(self.dacGroup)
@@ -408,78 +505,56 @@ class Ui_Form(object):
         self.materialEdit2.setGeometry(QRect(100, 170, 91, 32))
         self.materialEdit2.setAutoDefault(False)
 
-        # ✅ material 하단에 Density / Z-factor 표시 (라벨은 위, Edit은 2칸)
-        # - 기존 materialRhoLabel1/2, materialZLabel1/2는 "왼쪽 라벨" 용도였는데
-        #   이제 "위 라벨"로 재배치한다.
-        # - 오른쪽 라벨(materialRhoLabel2/materialZLabel2)은 안 쓰므로 숨긴다.
-
-        # Density label (위에 1개로 통합)
-        self.materialRhoLabel1 = QLabel(self.page_2)
-        self.materialRhoLabel1.setObjectName("materialRhoLabel1")
-        self.materialRhoLabel1.setGeometry(QRect(0, 206, 191, 20))
-        self.materialRhoLabel1.setAlignment(Qt.AlignmentFlag.AlignLeading | Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-
-        # 기존 오른쪽 ρ 라벨은 사용 안함 → 숨김(겹침 방지)
-        self.materialRhoLabel2 = QLabel(self.page_2)
-        self.materialRhoLabel2.setObjectName("materialRhoLabel2")
-        self.materialRhoLabel2.setGeometry(QRect(0, 0, 0, 0))
-
-        # Density edits (PowerRamp처럼 2칸, 높이 26)
-        self.materialDensityEdit1 = QLineEdit(self.page_2)
-        self.materialDensityEdit1.setObjectName("materialDensityEdit1")
-        self.materialDensityEdit1.setGeometry(QRect(0, 226, 91, 26))
-        self.materialDensityEdit1.setReadOnly(True)
-
-        self.materialDensityEdit2 = QLineEdit(self.page_2)
-        self.materialDensityEdit2.setObjectName("materialDensityEdit2")
-        self.materialDensityEdit2.setGeometry(QRect(100, 226, 91, 26))
-        self.materialDensityEdit2.setReadOnly(True)
-
-        # Z-factor label (위에 1개로 통합)
-        self.materialZLabel1 = QLabel(self.page_2)
-        self.materialZLabel1.setObjectName("materialZLabel1")
-        self.materialZLabel1.setGeometry(QRect(0, 256, 191, 20))
-        self.materialZLabel1.setAlignment(Qt.AlignmentFlag.AlignLeading | Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-
-        # 기존 오른쪽 Z 라벨은 사용 안함 → 숨김
-        self.materialZLabel2 = QLabel(self.page_2)
-        self.materialZLabel2.setObjectName("materialZLabel2")
-        self.materialZLabel2.setGeometry(QRect(0, 0, 0, 0))
-
-        # Z-factor edits (2칸, 높이 26)
-        self.materialZfactorEdit1 = QLineEdit(self.page_2)
-        self.materialZfactorEdit1.setObjectName("materialZfactorEdit1")
-        self.materialZfactorEdit1.setGeometry(QRect(0, 276, 91, 26))
-        self.materialZfactorEdit1.setReadOnly(True)
-
-        self.materialZfactorEdit2 = QLineEdit(self.page_2)
-        self.materialZfactorEdit2.setObjectName("materialZfactorEdit2")
-        self.materialZfactorEdit2.setGeometry(QRect(100, 276, 91, 26))
-        self.materialZfactorEdit2.setReadOnly(True)
-
         # ✅ Cur Rate: 라벨 1개(전체폭) + Edit 1개
         self.currentRateLabel = QLabel(self.page_2)
         self.currentRateLabel.setObjectName("currentRateLabel")
-        self.currentRateLabel.setGeometry(QRect(0, 456, 191, 20))
+        self.currentRateLabel.setGeometry(QRect(0, 356, 191, 20))
 
         self.currentRateEdit = QLineEdit(self.page_2)
-        self.currentRateEdit.setGeometry(QRect(0, 476, 191, 26))
+        self.currentRateEdit.setObjectName("currentRateEdit")
+        self.currentRateEdit.setGeometry(QRect(0, 376, 191, 26))
         self.currentRateEdit.setReadOnly(True)
 
         # ✅ Cur Thick (Edit 끝 +4 = 다음 라벨)
         self.currentThicknessLabel = QLabel(self.page_2)
         self.currentThicknessLabel.setObjectName("currentThicknessLabel")
-        self.currentThicknessLabel.setGeometry(QRect(0, 506, 191, 20))
+        self.currentThicknessLabel.setGeometry(QRect(0, 406, 191, 20))
 
         self.currentThicknessEdit = QLineEdit(self.page_2)
         self.currentThicknessEdit.setObjectName("currentThicknessEdit")
-        self.currentThicknessEdit.setGeometry(QRect(0, 526, 191, 26))
+        self.currentThicknessEdit.setGeometry(QRect(0, 426, 191, 26))
         self.currentThicknessEdit.setReadOnly(True)
+
+        self.actualPower1Label = QLabel(self.page_2)
+        self.actualPower1Label.setObjectName("actualPower1Label")
+        self.actualPower1Label.setGeometry(QRect(0, 456, 91, 20))
+        self.actualPower1Label.setAlignment(
+            Qt.AlignmentFlag.AlignLeading | Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
+
+        self.actualPower2Label = QLabel(self.page_2)
+        self.actualPower2Label.setObjectName("actualPower2Label")
+        self.actualPower2Label.setGeometry(QRect(100, 456, 91, 20))
+        self.actualPower2Label.setAlignment(
+            Qt.AlignmentFlag.AlignLeading | Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
+
+        self.actualPower1Edit = QLineEdit(self.page_2)
+        self.actualPower1Edit.setObjectName("actualPower1Edit")
+        self.actualPower1Edit.setGeometry(QRect(0, 476, 91, 26))
+        self.actualPower1Edit.setReadOnly(True)
+        self.actualPower1Edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.actualPower2Edit = QLineEdit(self.page_2)
+        self.actualPower2Edit.setObjectName("actualPower2Edit")
+        self.actualPower2Edit.setGeometry(QRect(100, 476, 91, 26))
+        self.actualPower2Edit.setReadOnly(True)
+        self.actualPower2Edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         # ✅ Recipe (Edit 끝 +4)
         self.recipeBtn = QPushButton(self.page_2)
         self.recipeBtn.setObjectName("recipeBtn")
-        self.recipeBtn.setGeometry(QRect(0, 556, 191, 41))
+        self.recipeBtn.setGeometry(QRect(0, 506, 191, 41))
 
         self.graphWidget = QWidget(self.page_2)
         self.graphWidget.setObjectName("graphWidget")
@@ -488,18 +563,19 @@ class Ui_Form(object):
 
         self.deprateEdit = QLineEdit(self.page_2)
         self.deprateEdit.setObjectName("deprateEdit")
-        self.deprateEdit.setGeometry(QRect(0, 326, 91, 26))
+        self.deprateEdit.setGeometry(QRect(0, 226, 91, 26))
+
         self.deprateEdit2 = QLineEdit(self.page_2)
         self.deprateEdit2.setObjectName("deprateEdit2")
-        self.deprateEdit2.setGeometry(QRect(100, 326, 91, 26))
+        self.deprateEdit2.setGeometry(QRect(100, 226, 91, 26))
 
         self.thicknessEdit = QLineEdit(self.page_2)
         self.thicknessEdit.setObjectName("thicknessEdit")
-        self.thicknessEdit.setGeometry(QRect(0, 376, 191, 26))
+        self.thicknessEdit.setGeometry(QRect(0, 276, 191, 26))
 
         self.delayEdit = QLineEdit(self.page_2)
         self.delayEdit.setObjectName("delayEdit")
-        self.delayEdit.setGeometry(QRect(0, 426, 191, 26))
+        self.delayEdit.setGeometry(QRect(0, 326, 191, 26))
 
         self.materialLabel = QLabel(self.page_2)
         self.materialLabel.setObjectName("materialLabel")
@@ -509,11 +585,11 @@ class Ui_Form(object):
         # ✅ Start/Stop (Recipe 끝 +4)
         self.stopProcess = QPushButton(self.page_2)
         self.stopProcess.setObjectName("stopProcess")
-        self.stopProcess.setGeometry(QRect(100, 601, 91, 71))
+        self.stopProcess.setGeometry(QRect(100, 551, 91, 71))
 
         self.startProcess = QPushButton(self.page_2)
         self.startProcess.setObjectName("startProcess")
-        self.startProcess.setGeometry(QRect(0, 601, 91, 71))
+        self.startProcess.setGeometry(QRect(0, 551, 91, 71))
 
         self.logWindow = QPlainTextEdit(self.page_2)
         self.logWindow.setObjectName("logWindow")
@@ -526,22 +602,29 @@ class Ui_Form(object):
 
         self.thicknessLabel = QLabel(self.page_2)
         self.thicknessLabel.setObjectName("thicknessLabel")
-        self.thicknessLabel.setGeometry(QRect(0, 356, 181, 20))
-        self.thicknessLabel.setAlignment(Qt.AlignmentFlag.AlignLeading | Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.thicknessLabel.setGeometry(QRect(0, 256, 181, 20))
+        self.thicknessLabel.setAlignment(
+            Qt.AlignmentFlag.AlignLeading | Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
 
         self.delayLabel = QLabel(self.page_2)
         self.delayLabel.setObjectName("delayLabel")
-        self.delayLabel.setGeometry(QRect(0, 406, 191, 20))
-        self.delayLabel.setAlignment(Qt.AlignmentFlag.AlignLeading | Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.delayLabel.setGeometry(QRect(0, 306, 191, 20))
+        self.delayLabel.setAlignment(
+            Qt.AlignmentFlag.AlignLeading | Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
 
         self.deprateLabel = QLabel(self.page_2)
         self.deprateLabel.setObjectName("deprateLabel")
-        self.deprateLabel.setGeometry(QRect(0, 306, 181, 20))
-        self.deprateLabel.setAlignment(Qt.AlignmentFlag.AlignLeading | Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.deprateLabel.setGeometry(QRect(0, 206, 181, 20))
+        self.deprateLabel.setAlignment(
+            Qt.AlignmentFlag.AlignLeading | Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
 
         self.evaporatorLabel = QLabel(self.page_2)
         self.evaporatorLabel.setObjectName("evaporatorLabel")
         self.evaporatorLabel.setGeometry(QRect(0, 10, 191, 31))
+
         font2 = QFont()
         font2.setPointSize(19)
         self.evaporatorLabel.setFont(font2)
@@ -596,6 +679,22 @@ class Ui_Form(object):
         self.ms1shutterBtn.setText(QCoreApplication.translate("Form", "M.S 1\nShutter", None))
         self.mainshutterBtn.setText(QCoreApplication.translate("Form", "Main\nShutter", None))
 
+        # TMP 상태 표시
+        self.tmpGroup.setTitle(QCoreApplication.translate("Form", "Turbo Status", None))
+        self.tmpConnLabel.setText(QCoreApplication.translate("Form", "Conn", None))
+        self.tmpStateLabel.setText(QCoreApplication.translate("Form", "State", None))
+        self.tmpFreqLabel.setText(QCoreApplication.translate("Form", "Freq", None))
+        self.tmpCurrentLabel.setText(QCoreApplication.translate("Form", "Current", None))
+        self.tmpTempLabel.setText(QCoreApplication.translate("Form", "Temp", None))
+        self.tmpAlarmLabel.setText(QCoreApplication.translate("Form", "Alarm", None))
+
+        self.tmpConnEdit.setText(QCoreApplication.translate("Form", "Disconnected", None))
+        self.tmpStateEdit.setText(QCoreApplication.translate("Form", "-", None))
+        self.tmpFreqEdit.setText(QCoreApplication.translate("Form", "- Hz", None))
+        self.tmpCurrentEdit.setText(QCoreApplication.translate("Form", "- A", None))
+        self.tmpTempEdit.setText(QCoreApplication.translate("Form", "- °C", None))
+        self.tmpAlarmEdit.setText(QCoreApplication.translate("Form", "-", None))
+
         # DAC 수동 입력
         self.dacGroup.setTitle(QCoreApplication.translate("Form", "Power Manual", None))
         self.dac1Label.setText(QCoreApplication.translate("Form", "Power 1", None))
@@ -640,11 +739,10 @@ class Ui_Form(object):
         self.materialEdit.setText(QCoreApplication.translate("Form", "Select", None))
         self.materialEdit2.setText(QCoreApplication.translate("Form", "Select", None))
 
-        # ✅ Density / Z-Factor 라벨 (위 라벨)
-        self.materialRhoLabel1.setText(QCoreApplication.translate("Form", "Density (g/cm³)", None))
-        self.materialRhoLabel2.setText(QCoreApplication.translate("Form", "", None))  # 숨김 처리용
-        self.materialZLabel1.setText(QCoreApplication.translate("Form", "Z-Factor (-)", None))
-        self.materialZLabel2.setText(QCoreApplication.translate("Form", "", None))    # 숨김 처리용
+        self.actualPower1Label.setText(QCoreApplication.translate("Form", "Power 1 (A)", None))
+        self.actualPower2Label.setText(QCoreApplication.translate("Form", "Power 2 (A)", None))
+        self.actualPower1Edit.setText(QCoreApplication.translate("Form", "---", None))
+        self.actualPower2Edit.setText(QCoreApplication.translate("Form", "---", None))
 
         # Cur Rate는 표시값이므로 1칸만 사용
         self.currentRateLabel.setText(QCoreApplication.translate("Form", "Cur Rate (Å/s)", None))
@@ -768,6 +866,34 @@ class Ui_Form(object):
         for lab in (self.label, self.label_2, self.label_3, self.label_4):
             lab.setStyleSheet("color: black; background: transparent; font-weight: bold;")
 
+        # ---- TMP status group ----
+        self.tmpGroup.setStyleSheet("""
+            QGroupBox {
+                font-weight: bold;
+                font-size: 10pt;
+                border: 1px solid #c8c8c8;
+                border-radius: 6px;
+                margin-top: 6px;
+                background: #f7f7f7;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 8px;
+                padding: 0 3px 0 3px;
+            }
+            QLabel {
+                background: transparent;
+                color: black;
+                font-size: 10pt;
+            }
+            QLineEdit {
+                background: white;
+                border: 1px solid #d0d0d0;
+                padding-left: 6px;
+                font-size: 10pt;
+            }
+        """)
+
         # ---- log windows (optional: 살짝 깔끔하게) ----
         self.hmiLogWindow.setStyleSheet("background: white; border: 1px solid #d0d0d0;")
         self.logWindow.setStyleSheet("background: white; border: 1px solid #d0d0d0;")
@@ -798,9 +924,10 @@ class Ui_Form(object):
             self.processMonitor_HMI.setFont(f2)
 
         readonly_display = [
-            self.materialDensityEdit1, self.materialDensityEdit2,
-            self.materialZfactorEdit1, self.materialZfactorEdit2,
             self.currentRateEdit, self.currentThicknessEdit,
+            self.tmpConnEdit, self.tmpStateEdit,
+            self.tmpFreqEdit, self.tmpCurrentEdit,
+            self.tmpTempEdit, self.tmpAlarmEdit,
         ]
 
         for le in readonly_display:

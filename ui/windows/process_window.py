@@ -13,13 +13,13 @@ from concurrent.futures import TimeoutError as FuturesTimeoutError
 from PySide6.QtWidgets import QWidget, QMessageBox, QVBoxLayout
 from PySide6.QtCore import QTimer
 
-from ui.mainWindow import Ui_Form
+from ui.windows.mainWindow import Ui_Form
 from ui.rt_plot_widget import DepositionPlotWidget
 from ui.material_catalog_dialog import MaterialCatalogDialog
 from services.stm_service import STMService
 
 if TYPE_CHECKING:
-    from ui.hmi_window import HmiWindow
+    from ui.windows.hmi_window import HmiWindow
 
 # ✅ 파일 위치가 root든 ui 폴더든 둘 다 버티도록
 _BASE_DIR = Path(__file__).resolve().parent

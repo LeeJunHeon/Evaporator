@@ -14,7 +14,7 @@ from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import QTimer
 
 # ✅ 그래프 위젯(별도 파일)
-from ui.hmi_window import HmiWindow
+from ui.windows.hmi_window import HmiWindow
 
 from config.plc_config import load_plc_settings
 from controller.hmi_plc_binder import HmiPlcBinder

@@ -190,7 +190,7 @@ class TurbovacService(QObject):
         return bool(
             snap.get("connected", False)
             and snap.get("normal_operation", False)
-            and not snap.get("last_error_code", 0)
+            and not self.has_tmp_error()
         )
 
     def is_tmp_turning(self) -> bool:
@@ -210,7 +210,8 @@ class TurbovacService(QObject):
 
     def has_tmp_error(self) -> bool:
         snap = self._last_snapshot or {}
-        return bool(snap.get("last_error_code", 0))
+        sw = int(snap.get("status_word", 0) or 0)
+        return bool(sw & (1 << 3))
 
     def has_tmp_warning(self) -> bool:
         snap = self._last_snapshot or {}
@@ -234,7 +235,7 @@ class TurbovacService(QObject):
         if not self.is_tmp_connected():
             return False, "TMP 연결 안됨"
 
-        if has_error := self.has_tmp_error():
+        if self.has_tmp_error():
             return False, f"TMP 에러 상태: {self.get_alarm_text()}"
 
         snap = self._last_snapshot or {}
@@ -246,7 +247,13 @@ class TurbovacService(QObject):
             return False, "TMP 정상 운전 아님"
 
         return True, ""
-
+    
+    def check_tmp_ready_for_mv(self) -> tuple[bool, str]:
+        """
+        TMP 상태만 보고 MV 허용 가능 여부 판단
+        현재 기준은 power와 동일하게 둔다.
+        """
+        return self.check_tmp_ready_for_power()
 
     def check_tmp_safe_for_vent(self) -> tuple[bool, str]:
         """
@@ -388,6 +395,9 @@ class TurbovacService(QObject):
         self._close_device()
 
         try:
+            dev = self._build_device()
+            dev.connect()
+
             self._dev = dev
             self._emit_connected(True)
 

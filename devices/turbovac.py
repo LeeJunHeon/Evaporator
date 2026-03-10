@@ -294,6 +294,13 @@ def _error_text(code: int) -> str:
     return _ERROR_CODE_MAP.get(code, f"Error{code}")
 
 
+def _safe_call(default, fn, *args, **kwargs):
+    try:
+        return fn(*args, **kwargs)
+    except Exception:
+        return default
+    
+
 class Turbovac(BaseSerialDevice):
     """
     Leybold TURBOVAC i/iX USB(COM port emulation) 드라이버
@@ -621,7 +628,7 @@ class Turbovac(BaseSerialDevice):
             "process_channel_enabled": _has_bit(zsw, SW_PROCESS_CHANNEL_ENABLED),
         }
 
-    def read_snapshot(self) -> TurbovacSnapshot:
+    def read_snapshot(self, *, include_extended: bool = True) -> TurbovacSnapshot:
         """
         UI/로그용 종합 상태 읽기
 
@@ -642,18 +649,63 @@ class Turbovac(BaseSerialDevice):
         # P174 = rotor frequency at error
         # P176 = operating hours at error (0.01 h)
         # P227 = warning bits
-        motor_temp_c = self.read_parameter_i16(7)
-        last_error_code = self.read_parameter_u16(171, index=0)
-        last_error_freq_hz = self.read_parameter_u16(174, index=0)
-        last_error_hours_raw = self.read_parameter_i32(176, index=0)
-        warning_bits = self.read_parameter_u16(227)
+        prev = self._last_snapshot
 
-        last_error_hours = float(last_error_hours_raw) / 100.0
+        if include_extended:
+            motor_temp_c = _safe_call(None, self.read_parameter_i16, 7)
+
+            last_error_code = _safe_call(None, self.read_parameter_u16, 171, index=0)
+            if last_error_code is None:
+                last_error_code = _safe_call(0, self.read_parameter_u16, 171)
+
+            last_error_freq_hz = _safe_call(None, self.read_parameter_u16, 174, index=0)
+            if last_error_freq_hz is None:
+                last_error_freq_hz = _safe_call(None, self.read_parameter_u16, 174)
+
+            last_error_hours_raw = _safe_call(None, self.read_parameter_i32, 176, index=0)
+            if last_error_hours_raw is None:
+                last_error_hours_raw = _safe_call(None, self.read_parameter_i32, 176)
+
+            warning_bits = _safe_call(None, self.read_parameter_u16, 227)
+            if warning_bits is None:
+                warning_bits = _safe_call(0, self.read_parameter_u16, 227, index=0)
+
+        else:
+            motor_temp_c = prev.motor_temp_c if prev else None
+            last_error_code = prev.last_error_code if prev else 0
+            last_error_freq_hz = prev.last_error_freq_hz if prev else None
+            last_error_hours_raw = (
+                int(prev.last_error_hours * 100) if (prev and prev.last_error_hours is not None) else None
+            )
+            warning_bits = prev.warning_bits if prev else 0
+
+        if motor_temp_c is None and prev is not None:
+            motor_temp_c = prev.motor_temp_c
+
+        if last_error_code is None:
+            last_error_code = prev.last_error_code if prev else 0
+
+        if last_error_freq_hz is None and prev is not None:
+            last_error_freq_hz = prev.last_error_freq_hz
+
+        if warning_bits is None:
+            warning_bits = prev.warning_bits if prev else 0
+
+        last_error_hours = (
+            float(last_error_hours_raw) / 100.0
+            if last_error_hours_raw is not None
+            else (prev.last_error_hours if prev else None)
+        )
+
+        last_error_code = int(last_error_code or 0)
+        warning_bits = int(warning_bits or 0)
 
         if last_error_code:
             alarm_text = f"E{last_error_code}:{_error_text(last_error_code)}"
         elif warning_bits:
             alarm_text = _warning_text(warning_bits)
+        elif fast["collective_warning"] or fast["temp_warning"] or fast["overload_warning"]:
+            alarm_text = "Warning"
         else:
             alarm_text = "-"
 
@@ -664,15 +716,15 @@ class Turbovac(BaseSerialDevice):
             state_text=str(fast["state_text"]),
             freq_hz=int(fast["freq_hz"]),
             current_a=float(fast["current_a"]),
-            motor_temp_c=int(motor_temp_c),
+            motor_temp_c=int(motor_temp_c) if motor_temp_c is not None else None,
             converter_temp_c=int(fast["converter_temp_c"]),
             bearing_temp_c=int(fast["bearing_temp_c"]),
             dc_bus_v=int(fast["dc_bus_v"]),
 
             warning_bits=int(warning_bits),
             last_error_code=int(last_error_code),
-            last_error_freq_hz=int(last_error_freq_hz),
-            last_error_hours=float(last_error_hours),
+            last_error_freq_hz=int(last_error_freq_hz) if last_error_freq_hz is not None else None,
+            last_error_hours=float(last_error_hours) if last_error_hours is not None else None,
             alarm_text=alarm_text,
 
             status_word=int(fast["status_word"]),
@@ -691,8 +743,9 @@ class Turbovac(BaseSerialDevice):
             meta={
                 "param_channel_enabled": bool(fast["param_channel_enabled"]),
                 "process_channel_enabled": bool(fast["process_channel_enabled"]),
-                "warning_text": _warning_text(warning_bits),
-                "error_text": _error_text(last_error_code),
+                "warning_text": _warning_text(int(warning_bits or 0)),
+                "error_text": _error_text(int(last_error_code or 0)),
+                "extended_included": bool(include_extended),
             },
         )
         self._last_snapshot = snap

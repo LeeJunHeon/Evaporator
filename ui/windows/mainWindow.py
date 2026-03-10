@@ -16,7 +16,7 @@ from PySide6.QtGui import QFont, QPalette
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QFrame, QLabel, QLineEdit, QPlainTextEdit,
     QPushButton, QStackedWidget, QWidget, QGroupBox, QSpinBox, QGridLayout,
-    QAbstractSpinBox,
+    QAbstractSpinBox, QHBoxLayout, QVBoxLayout,
 )
 
 
@@ -146,7 +146,7 @@ class Ui_Form(object):
         # =========================
         self.tmpGroup = QGroupBox(self.hmiFooter)
         self.tmpGroup.setObjectName("tmpGroup")
-        self.tmpGroup.setGeometry(QRect(0, 0, 300, 130))
+        self.tmpGroup.setGeometry(QRect(0, 0, 310, 130))
         self.tmpGroup.setAutoFillBackground(True)
 
         self.tmpGroupLayout = QGridLayout(self.tmpGroup)
@@ -165,7 +165,7 @@ class Ui_Form(object):
         self.tmpConnEdit.setReadOnly(True)
         self.tmpConnEdit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.tmpConnEdit.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
-        self.tmpConnEdit.setFixedWidth(95)
+        self.tmpConnEdit.setFixedWidth(100)
         self.tmpGroupLayout.addWidget(self.tmpConnEdit, 0, 1)
 
         self.tmpStateLabel = QLabel(self.tmpGroup)
@@ -178,7 +178,7 @@ class Ui_Form(object):
         self.tmpStateEdit.setReadOnly(True)
         self.tmpStateEdit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.tmpStateEdit.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
-        self.tmpStateEdit.setFixedWidth(95)
+        self.tmpStateEdit.setFixedWidth(100)
         self.tmpGroupLayout.addWidget(self.tmpStateEdit, 0, 3)
 
         # Row 1
@@ -192,7 +192,7 @@ class Ui_Form(object):
         self.tmpFreqEdit.setReadOnly(True)
         self.tmpFreqEdit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.tmpFreqEdit.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
-        self.tmpFreqEdit.setFixedWidth(95)
+        self.tmpFreqEdit.setFixedWidth(100)
         self.tmpGroupLayout.addWidget(self.tmpFreqEdit, 1, 1)
 
         self.tmpCurrentLabel = QLabel(self.tmpGroup)
@@ -205,7 +205,7 @@ class Ui_Form(object):
         self.tmpCurrentEdit.setReadOnly(True)
         self.tmpCurrentEdit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.tmpCurrentEdit.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
-        self.tmpCurrentEdit.setFixedWidth(95)
+        self.tmpCurrentEdit.setFixedWidth(100)
         self.tmpGroupLayout.addWidget(self.tmpCurrentEdit, 1, 3)
 
         # Row 2
@@ -219,7 +219,7 @@ class Ui_Form(object):
         self.tmpTempEdit.setReadOnly(True)
         self.tmpTempEdit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.tmpTempEdit.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
-        self.tmpTempEdit.setFixedWidth(95)
+        self.tmpTempEdit.setFixedWidth(100)
         self.tmpGroupLayout.addWidget(self.tmpTempEdit, 2, 1)
 
         self.tmpAlarmLabel = QLabel(self.tmpGroup)
@@ -232,118 +232,207 @@ class Ui_Form(object):
         self.tmpAlarmEdit.setReadOnly(True)
         self.tmpAlarmEdit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.tmpAlarmEdit.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
-        self.tmpAlarmEdit.setFixedWidth(95)
+        self.tmpAlarmEdit.setFixedWidth(100)
         self.tmpGroupLayout.addWidget(self.tmpAlarmEdit, 2, 3)
 
         # =========================
         # DAC manual set (Power1/Power2)
-        # - QSpinBox: ↑↓로 1씩 조절 + 직접 타이핑 가능
-        # - Apply/Reset 제공
-        # - 파이프(frame_20 x=570)와 겹치지 않게 좌측으로 배치
+        # - Turbo Status와 같은 "박스형" 느낌으로 맞추기 위해
+        #   row 단위 QWidget + QHBoxLayout 으로 재구성
+        # - QSpinBox의 표시 화살표는 숨기고 입력 박스처럼 사용
+        #   (마우스 휠 / 키보드 ↑↓ 는 그대로 동작)
         # =========================
         self.dacGroup = QGroupBox(self.hmiFooter)
         self.dacGroup.setObjectName("dacGroup")
-        self.dacGroup.setGeometry(QRect(310, 0, 370, 130))
+        self.dacGroup.setGeometry(QRect(320, 0, 340, 130))
         self.dacGroup.setAutoFillBackground(True)
 
-        self.dacGroupLayout = QGridLayout(self.dacGroup)
+        self.dacGroupLayout = QVBoxLayout(self.dacGroup)
+        self.dacGroupLayout.setContentsMargins(8, 18, 8, 8)
+        self.dacGroupLayout.setSpacing(6)
 
-        # ✅ 왼쪽 여백(10 → 3~4) 줄이기
-        self.dacGroupLayout.setContentsMargins(6, 18, 8, 8)
-        self.dacGroupLayout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self.dacGroupLayout.setHorizontalSpacing(6)
-        self.dacGroupLayout.setVerticalSpacing(6)
+        control_h = self.tmpConnEdit.sizeHint().height()
+        label_w = 56
+        field_w = 95
+        btn_w = 58
+        half_w = 159   # (340 - 좌우 margin 16 - 중간 spacing 6) / 2
 
-        # Row 0: P1
-        self.dac1Label = QLabel(self.dacGroup)
+        # -------------------------
+        # Row 0 : Power 1 set
+        # -------------------------
+        self.dacRow1 = QWidget(self.dacGroup)
+        self.dacRow1.setObjectName("dacRow1")
+        self.dacRow1Layout = QHBoxLayout(self.dacRow1)
+        self.dacRow1Layout.setContentsMargins(0, 0, 0, 0)
+        self.dacRow1Layout.setSpacing(6)
+
+        self.dacRow1Left = QWidget(self.dacRow1)
+        self.dacRow1Left.setObjectName("dacRow1Left")
+        self.dacRow1Left.setFixedWidth(half_w)
+        self.dacRow1LeftLayout = QHBoxLayout(self.dacRow1Left)
+        self.dacRow1LeftLayout.setContentsMargins(0, 0, 0, 0)
+        self.dacRow1LeftLayout.setSpacing(6)
+
+        self.dac1Label = QLabel(self.dacRow1Left)
         self.dac1Label.setObjectName("dac1Label")
         self.dac1Label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.dac1Label.setFixedWidth(56)
-        self.dacGroupLayout.addWidget(self.dac1Label, 0, 0)
+        self.dac1Label.setFixedWidth(label_w)
+        self.dacRow1LeftLayout.addWidget(self.dac1Label)
 
-        self.dac1Spin = QSpinBox(self.dacGroup)
+        self.dac1Spin = QSpinBox(self.dacRow1Left)
         self.dac1Spin.setObjectName("dac1Spin")
         self.dac1Spin.setRange(0, 4000)
         self.dac1Spin.setSingleStep(1)
         self.dac1Spin.setAccelerated(True)
-        self.dac1Spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.UpDownArrows)
+        self.dac1Spin.setKeyboardTracking(False)
+        self.dac1Spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         self.dac1Spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.dac1Spin.setFixedWidth(160)
-        self.dacGroupLayout.addWidget(self.dac1Spin, 0, 1)
+        self.dac1Spin.setFixedSize(field_w, control_h)
+        self.dacRow1LeftLayout.addWidget(self.dac1Spin)
 
-        self.dac1SetBtn = QPushButton(self.dacGroup)
+        self.dacRow1LeftLayout.addStretch(1)
+
+        self.dacRow1Right = QWidget(self.dacRow1)
+        self.dacRow1Right.setObjectName("dacRow1Right")
+        self.dacRow1Right.setFixedWidth(half_w)
+        self.dacRow1RightLayout = QHBoxLayout(self.dacRow1Right)
+        self.dacRow1RightLayout.setContentsMargins(0, 0, 0, 0)
+        self.dacRow1RightLayout.setSpacing(6)
+
+        self.dac1SetBtn = QPushButton(self.dacRow1Right)
         self.dac1SetBtn.setObjectName("dac1SetBtn")
-        self.dac1SetBtn.setFixedWidth(50)
-        self.dacGroupLayout.addWidget(self.dac1SetBtn, 0, 2)
+        self.dac1SetBtn.setFixedSize(btn_w, control_h)
+        self.dacRow1RightLayout.addWidget(self.dac1SetBtn)
 
-        self.dac1ResetBtn = QPushButton(self.dacGroup)
+        self.dac1ResetBtn = QPushButton(self.dacRow1Right)
         self.dac1ResetBtn.setObjectName("dac1ResetBtn")
-        self.dac1ResetBtn.setFixedWidth(50)
-        self.dacGroupLayout.addWidget(self.dac1ResetBtn, 0, 3)
+        self.dac1ResetBtn.setFixedSize(btn_w, control_h)
+        self.dacRow1RightLayout.addWidget(self.dac1ResetBtn)
 
-        # Row 1: P2
-        self.dac2Label = QLabel(self.dacGroup)
+        self.dacRow1RightLayout.addStretch(1)
+
+        self.dacRow1Layout.addWidget(self.dacRow1Left)
+        self.dacRow1Layout.addWidget(self.dacRow1Right)
+        self.dacGroupLayout.addWidget(self.dacRow1)
+
+        # -------------------------
+        # Row 1 : Power 2 set
+        # -------------------------
+        self.dacRow2 = QWidget(self.dacGroup)
+        self.dacRow2.setObjectName("dacRow2")
+        self.dacRow2Layout = QHBoxLayout(self.dacRow2)
+        self.dacRow2Layout.setContentsMargins(0, 0, 0, 0)
+        self.dacRow2Layout.setSpacing(6)
+
+        self.dacRow2Left = QWidget(self.dacRow2)
+        self.dacRow2Left.setObjectName("dacRow2Left")
+        self.dacRow2Left.setFixedWidth(half_w)
+        self.dacRow2LeftLayout = QHBoxLayout(self.dacRow2Left)
+        self.dacRow2LeftLayout.setContentsMargins(0, 0, 0, 0)
+        self.dacRow2LeftLayout.setSpacing(6)
+
+        self.dac2Label = QLabel(self.dacRow2Left)
         self.dac2Label.setObjectName("dac2Label")
         self.dac2Label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.dac2Label.setFixedWidth(56)
-        self.dacGroupLayout.addWidget(self.dac2Label, 1, 0)
+        self.dac2Label.setFixedWidth(label_w)
+        self.dacRow2LeftLayout.addWidget(self.dac2Label)
 
-        self.dac2Spin = QSpinBox(self.dacGroup)
+        self.dac2Spin = QSpinBox(self.dacRow2Left)
         self.dac2Spin.setObjectName("dac2Spin")
         self.dac2Spin.setRange(0, 4000)
         self.dac2Spin.setSingleStep(1)
         self.dac2Spin.setAccelerated(True)
-        self.dac2Spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.UpDownArrows)
+        self.dac2Spin.setKeyboardTracking(False)
+        self.dac2Spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         self.dac2Spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.dac2Spin.setFixedWidth(160)
-        self.dacGroupLayout.addWidget(self.dac2Spin, 1, 1)
+        self.dac2Spin.setFixedSize(field_w, control_h)
+        self.dacRow2LeftLayout.addWidget(self.dac2Spin)
 
-        self.dac2SetBtn = QPushButton(self.dacGroup)
+        self.dacRow2LeftLayout.addStretch(1)
+
+        self.dacRow2Right = QWidget(self.dacRow2)
+        self.dacRow2Right.setObjectName("dacRow2Right")
+        self.dacRow2Right.setFixedWidth(half_w)
+        self.dacRow2RightLayout = QHBoxLayout(self.dacRow2Right)
+        self.dacRow2RightLayout.setContentsMargins(0, 0, 0, 0)
+        self.dacRow2RightLayout.setSpacing(6)
+
+        self.dac2SetBtn = QPushButton(self.dacRow2Right)
         self.dac2SetBtn.setObjectName("dac2SetBtn")
-        self.dac2SetBtn.setFixedWidth(50)
-        self.dacGroupLayout.addWidget(self.dac2SetBtn, 1, 2)
+        self.dac2SetBtn.setFixedSize(btn_w, control_h)
+        self.dacRow2RightLayout.addWidget(self.dac2SetBtn)
 
-        self.dac2ResetBtn = QPushButton(self.dacGroup)
+        self.dac2ResetBtn = QPushButton(self.dacRow2Right)
         self.dac2ResetBtn.setObjectName("dac2ResetBtn")
-        self.dac2ResetBtn.setFixedWidth(50)
-        self.dacGroupLayout.addWidget(self.dac2ResetBtn, 1, 3)
+        self.dac2ResetBtn.setFixedSize(btn_w, control_h)
+        self.dacRow2RightLayout.addWidget(self.dac2ResetBtn)
 
-        # Row 2: ADC readback (HMI display only)
-        self.dacActualRow = QWidget(self.dacGroup)
-        self.dacActualRow.setObjectName("dacActualRow")
+        self.dacRow2RightLayout.addStretch(1)
 
-        self.dacActualRowLayout = QGridLayout(self.dacActualRow)
-        self.dacActualRowLayout.setContentsMargins(0, 0, 0, 0)
-        self.dacActualRowLayout.setHorizontalSpacing(6)
-        self.dacActualRowLayout.setVerticalSpacing(0)
+        self.dacRow2Layout.addWidget(self.dacRow2Left)
+        self.dacRow2Layout.addWidget(self.dacRow2Right)
+        self.dacGroupLayout.addWidget(self.dacRow2)
 
-        self.dacActual1Label = QLabel(self.dacActualRow)
+        # -------------------------
+        # Row 2 : ADC readback
+        # -------------------------
+        self.dacRow3 = QWidget(self.dacGroup)
+        self.dacRow3.setObjectName("dacRow3")
+        self.dacRow3Layout = QHBoxLayout(self.dacRow3)
+        self.dacRow3Layout.setContentsMargins(0, 0, 0, 0)
+        self.dacRow3Layout.setSpacing(6)
+
+        self.dacRow3Left = QWidget(self.dacRow3)
+        self.dacRow3Left.setObjectName("dacRow3Left")
+        self.dacRow3Left.setFixedWidth(half_w)
+        self.dacRow3LeftLayout = QHBoxLayout(self.dacRow3Left)
+        self.dacRow3LeftLayout.setContentsMargins(0, 0, 0, 0)
+        self.dacRow3LeftLayout.setSpacing(6)
+
+        self.dacActual1Label = QLabel(self.dacRow3Left)
         self.dacActual1Label.setObjectName("dacActual1Label")
         self.dacActual1Label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.dacActual1Label.setFixedWidth(56)
-        self.dacActualRowLayout.addWidget(self.dacActual1Label, 0, 0)
+        self.dacActual1Label.setFixedWidth(label_w)
+        self.dacRow3LeftLayout.addWidget(self.dacActual1Label)
 
-        self.dacActual1Edit = QLineEdit(self.dacActualRow)
+        self.dacActual1Edit = QLineEdit(self.dacRow3Left)
         self.dacActual1Edit.setObjectName("dacActual1Edit")
         self.dacActual1Edit.setReadOnly(True)
+        self.dacActual1Edit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.dacActual1Edit.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
         self.dacActual1Edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.dacActual1Edit.setFixedWidth(104)
-        self.dacActualRowLayout.addWidget(self.dacActual1Edit, 0, 1)
+        self.dacActual1Edit.setFixedSize(field_w, control_h)
+        self.dacRow3LeftLayout.addWidget(self.dacActual1Edit)
 
-        self.dacActual2Label = QLabel(self.dacActualRow)
+        self.dacRow3LeftLayout.addStretch(1)
+
+        self.dacRow3Right = QWidget(self.dacRow3)
+        self.dacRow3Right.setObjectName("dacRow3Right")
+        self.dacRow3Right.setFixedWidth(half_w)
+        self.dacRow3RightLayout = QHBoxLayout(self.dacRow3Right)
+        self.dacRow3RightLayout.setContentsMargins(0, 0, 0, 0)
+        self.dacRow3RightLayout.setSpacing(6)
+
+        self.dacActual2Label = QLabel(self.dacRow3Right)
         self.dacActual2Label.setObjectName("dacActual2Label")
         self.dacActual2Label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.dacActual2Label.setFixedWidth(56)
-        self.dacActualRowLayout.addWidget(self.dacActual2Label, 0, 2)
+        self.dacActual2Label.setFixedWidth(label_w)
+        self.dacRow3RightLayout.addWidget(self.dacActual2Label)
 
-        self.dacActual2Edit = QLineEdit(self.dacActualRow)
+        self.dacActual2Edit = QLineEdit(self.dacRow3Right)
         self.dacActual2Edit.setObjectName("dacActual2Edit")
         self.dacActual2Edit.setReadOnly(True)
+        self.dacActual2Edit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.dacActual2Edit.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
         self.dacActual2Edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.dacActual2Edit.setFixedWidth(104)
-        self.dacActualRowLayout.addWidget(self.dacActual2Edit, 0, 3)
+        self.dacActual2Edit.setFixedSize(field_w, control_h)
+        self.dacRow3RightLayout.addWidget(self.dacActual2Edit)
 
-        self.dacGroupLayout.addWidget(self.dacActualRow, 2, 0, 1, 4)
+        self.dacRow3RightLayout.addStretch(1)
+
+        self.dacRow3Layout.addWidget(self.dacRow3Left)
+        self.dacRow3Layout.addWidget(self.dacRow3Right)
+        self.dacGroupLayout.addWidget(self.dacRow3)
 
         # ---- PIPES (frames) ----
         self.frame_17 = QFrame(self.page)
@@ -952,35 +1041,45 @@ class Ui_Form(object):
                 color: black;
                 font-size: 10pt;
             }
-            QLineEdit {
+            QLineEdit, QSpinBox {
                 background: white;
                 border: 1px solid #d0d0d0;
-                padding-left: 6px;
+                padding: 0 4px 0 4px;
                 font-size: 10pt;
+                color: black;
             }
+        """
+
+        footer_action_btn_qss = """
             QPushButton {
                 background: #efefef;
                 border: 1px solid #c8c8c8;
                 border-radius: 4px;
-                padding: 2px 8px;
+                padding: 0px;
                 font-size: 10pt;
-            }
-            QPushButton:pressed {
-                background: #e0e0e0;
-            }
-            QPushButton {
-                background: #efefef;
-                border: 1px solid #c8c8c8;
-                border-radius: 4px;
-                padding: 2px 8px;
-                font-size: 10pt;
+                color: black;
             }
             QPushButton:pressed {
                 background: #e0e0e0;
             }
         """
+
         self.tmpGroup.setStyleSheet(footer_group_qss)
         self.dacGroup.setStyleSheet(footer_group_qss)
+
+        for b in (self.dac1SetBtn, self.dac1ResetBtn, self.dac2SetBtn, self.dac2ResetBtn):
+            b.setStyleSheet(footer_action_btn_qss)
+
+        footer_font = self.tmpConnEdit.font()
+        for w in (
+            self.dac1Label, self.dac2Label,
+            self.dacActual1Label, self.dacActual2Label,
+            self.dac1Spin, self.dac2Spin,
+            self.dacActual1Edit, self.dacActual2Edit,
+            self.dac1SetBtn, self.dac1ResetBtn,
+            self.dac2SetBtn, self.dac2ResetBtn,
+        ):
+            w.setFont(footer_font)
 
         # ---- log windows (optional: 살짝 깔끔하게) ----
         self.hmiLogWindow.setStyleSheet("background: white; border: 1px solid #d0d0d0;")

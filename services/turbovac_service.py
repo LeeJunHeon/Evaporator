@@ -62,6 +62,16 @@ class TurbovacService(QObject):
         self._last_error_text: str = ""
         self._last_connect_try_ts: float = 0.0
 
+        # poll/read 실패 관리
+        self._poll_fail_count: int = 0
+        self._poll_fail_threshold: int = 3   # 예: 3회 연속 실패 시에만 close
+        self._last_good_snapshot_ts: float = 0.0
+
+        # reconnect backoff 관리
+        self._connect_fail_count: int = 0
+        self._reconnect_backoff_s: float = self._reconnect_interval_s
+        self._reconnect_backoff_max_s: float = 30.0
+
         self._load_config()
 
     # ---------------------------------------------------------
@@ -288,6 +298,7 @@ class TurbovacService(QObject):
 
                 now = time.monotonic()
                 if now >= next_poll_ts:
+                    # poll 실패는 내부에서 누적 관리하고 threshold 초과 시에만 close
                     self._poll_once()
                     next_poll_ts = now + self._poll_s
 
@@ -328,19 +339,16 @@ class TurbovacService(QObject):
             f"[TMPService] start_pump sent"
             + (f" (setpoint_hz={int(setpoint_hz)})" if setpoint_hz is not None else "")
         )
-        self._poll_once()
 
     def _cmd_stop(self) -> None:
         dev = self._require_device(allow_connect=True)
         dev.stop_pump()
         self.sig_log.emit("[TMPService] stop_pump sent")
-        self._poll_once()
 
     def _cmd_reset_error(self) -> None:
         dev = self._require_device(allow_connect=True)
         dev.reset_error()
         self.sig_log.emit("[TMPService] reset_error sent")
-        self._poll_once()
 
     def _cmd_reload_config(self) -> None:
         self.sig_log.emit("[TMPService] reloading config")
@@ -372,17 +380,22 @@ class TurbovacService(QObject):
             return
 
         now = time.monotonic()
-        if not force and (now - self._last_connect_try_ts) < self._reconnect_interval_s:
+        wait_s = self._reconnect_interval_s if force else self._reconnect_backoff_s
+        if not force and (now - self._last_connect_try_ts) < wait_s:
             return
         self._last_connect_try_ts = now
 
         self._close_device()
 
         try:
-            dev = self._build_device()
-            dev.connect()
             self._dev = dev
             self._emit_connected(True)
+
+            # 성공 시 실패 상태 초기화
+            self._connect_fail_count = 0
+            self._poll_fail_count = 0
+            self._reconnect_backoff_s = self._reconnect_interval_s
+
             self.sig_log.emit(
                 f"[TMPService] connected: port={self._cfg['port']} "
                 f"baud={self._cfg['baudrate']} {self._cfg['bytesize']}{self._cfg['parity']}{self._cfg['stopbits']}"
@@ -394,7 +407,17 @@ class TurbovacService(QObject):
         except Exception as e:
             self._dev = None
             self._emit_connected(False)
-            msg = f"[TMPService] connect failed: {e!r}"
+
+            self._connect_fail_count += 1
+            self._reconnect_backoff_s = min(
+                self._reconnect_backoff_max_s,
+                max(self._reconnect_interval_s, self._reconnect_backoff_s * 2),
+            )
+
+            msg = (
+                f"[TMPService] connect failed "
+                f"(retry in {self._reconnect_backoff_s:.1f}s): {e!r}"
+            )
             if msg != self._last_error_text:
                 self._last_error_text = msg
                 self.sig_error.emit(msg)
@@ -419,23 +442,60 @@ class TurbovacService(QObject):
             d = self._snapshot_to_dict(snap)
             self._last_snapshot = d
             self.sig_snapshot.emit(d)
+
             self._last_error_text = ""
             self._emit_connected(True)
 
+            # 성공했으면 실패 카운터 초기화
+            self._poll_fail_count = 0
+            self._last_good_snapshot_ts = time.time()
+
         except Exception as e:
-            self._handle_runtime_error(f"[TMPService] poll failed: {e!r}")
+            self._poll_fail_count += 1
+
+            msg = (
+                f"[TMPService] poll failed "
+                f"({self._poll_fail_count}/{self._poll_fail_threshold}): {e!r}"
+            )
+            if msg != self._last_error_text:
+                self._last_error_text = msg
+                self.sig_error.emit(msg)
+                self.sig_log.emit(msg)
+
+            # threshold 전까지는 연결 유지, UI도 마지막 정상값 유지
+            if self._poll_fail_count < self._poll_fail_threshold:
+                return
+
+            # 연속 실패 threshold 초과 시에만 close + reconnect 모드 전환
+            self._handle_runtime_error(
+                f"[TMPService] poll failed repeatedly "
+                f"({self._poll_fail_count} times): {e!r}"
+            )
 
     # ---------------------------------------------------------
     # error handling
     # ---------------------------------------------------------
     def _handle_runtime_error(self, msg: str) -> None:
+        # 여기로 들어오는 경우는 "연속 실패 threshold 초과" 또는 진짜 fatal만
         self._close_device()
+
+        # reconnect backoff 증가
+        self._connect_fail_count += 1
+        self._reconnect_backoff_s = min(
+            self._reconnect_backoff_max_s,
+            max(self._reconnect_interval_s, self._reconnect_backoff_s * 2),
+        )
+
         if msg != self._last_error_text:
             self._last_error_text = msg
             self.sig_error.emit(msg)
             self.sig_log.emit(msg)
 
-        # UI가 값 멈춘 것처럼 보이지 않도록 disconnected snapshot 전송
+        # 마지막 alarm 문맥 유지
+        prev_alarm = "-"
+        if self._last_snapshot:
+            prev_alarm = str(self._last_snapshot.get("alarm_text", "-") or "-")
+
         disconnected = {
             "ts": time.time(),
             "connected": False,
@@ -450,7 +510,7 @@ class TurbovacService(QObject):
             "last_error_code": 0,
             "last_error_freq_hz": None,
             "last_error_hours": None,
-            "alarm_text": "-",
+            "alarm_text": f"{prev_alarm} / LinkLost" if prev_alarm != "-" else "LinkLost",
             "status_word": 0,
             "control_word": 0,
             "ready": False,
@@ -470,7 +530,7 @@ class TurbovacService(QObject):
                 "freq": "- Hz",
                 "current": "- A",
                 "temp": "- °C",
-                "alarm": "-",
+                "alarm": f"{prev_alarm} / LinkLost" if prev_alarm != "-" else "LinkLost",
             },
         }
         self._last_snapshot = disconnected

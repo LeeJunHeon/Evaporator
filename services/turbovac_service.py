@@ -143,6 +143,10 @@ class TurbovacService(QObject):
     # public commands
     # ---------------------------------------------------------
     def start_pump(self, *, setpoint_hz: Optional[int] = None) -> None:
+        """
+        TMP raw start command.
+        최종 인터락(RP/FV/Vent 등)은 상위 모듈에서 확인 후 호출해야 한다.
+        """
         self._cmd_q.put(("start", {"setpoint_hz": setpoint_hz}))
 
     def stop_pump(self) -> None:
@@ -159,6 +163,113 @@ class TurbovacService(QObject):
 
     def get_last_snapshot(self) -> Optional[Dict[str, Any]]:
         return dict(self._last_snapshot) if self._last_snapshot else None
+    
+    # ---------------------------------------------------------
+    # interlock helper
+    # ---------------------------------------------------------
+
+    def has_snapshot(self) -> bool:
+        return self._last_snapshot is not None
+
+    def is_tmp_connected(self) -> bool:
+        snap = self._last_snapshot or {}
+        return bool(snap.get("connected", False))
+
+    def is_tmp_normal(self) -> bool:
+        snap = self._last_snapshot or {}
+        return bool(
+            snap.get("connected", False)
+            and snap.get("normal_operation", False)
+            and not snap.get("last_error_code", 0)
+        )
+
+    def is_tmp_turning(self) -> bool:
+        snap = self._last_snapshot or {}
+        return bool(snap.get("connected", False) and snap.get("pump_turning", False))
+
+    def is_tmp_stopped(self) -> bool:
+        snap = self._last_snapshot or {}
+        if not snap.get("connected", False):
+            return False
+        return (
+            not snap.get("pump_turning", False)
+            and not snap.get("accelerating", False)
+            and not snap.get("decelerating", False)
+            and int(snap.get("freq_hz", 0) or 0) <= 0
+        )
+
+    def has_tmp_error(self) -> bool:
+        snap = self._last_snapshot or {}
+        return bool(snap.get("last_error_code", 0))
+
+    def has_tmp_warning(self) -> bool:
+        snap = self._last_snapshot or {}
+        return bool(
+            snap.get("temp_warning", False)
+            or snap.get("overload_warning", False)
+            or snap.get("collective_warning", False)
+            or int(snap.get("warning_bits", 0) or 0) != 0
+        )
+
+    def get_alarm_text(self) -> str:
+        snap = self._last_snapshot or {}
+        text = str(snap.get("alarm_text", "") or "").strip()
+        return text or "-"
+    
+    def check_tmp_ready_for_power(self) -> tuple[bool, str]:
+        """
+        TMP 상태만 보고 power 투입 가능 여부 판단
+        PLC 상태(RP/FV/MV 등)는 상위 모듈에서 추가 판단
+        """
+        if not self.is_tmp_connected():
+            return False, "TMP 연결 안됨"
+
+        if has_error := self.has_tmp_error():
+            return False, f"TMP 에러 상태: {self.get_alarm_text()}"
+
+        snap = self._last_snapshot or {}
+
+        if snap.get("decelerating", False):
+            return False, "TMP 감속 중"
+
+        if not snap.get("normal_operation", False):
+            return False, "TMP 정상 운전 아님"
+
+        return True, ""
+
+
+    def check_tmp_safe_for_vent(self) -> tuple[bool, str]:
+        """
+        TMP 상태만 보고 vent 가능 여부 판단
+        """
+        if not self.is_tmp_connected():
+            return False, "TMP 연결 안됨"
+
+        if self.has_tmp_error():
+            return False, f"TMP 에러 상태: {self.get_alarm_text()}"
+
+        snap = self._last_snapshot or {}
+
+        if snap.get("pump_turning", False):
+            return False, "TMP 회전 중"
+
+        if snap.get("accelerating", False):
+            return False, "TMP 가속 중"
+
+        if snap.get("decelerating", False):
+            return False, "TMP 감속 중"
+
+        if int(snap.get("freq_hz", 0) or 0) > 0:
+            return False, f"TMP 주파수 남아있음: {int(snap.get('freq_hz', 0))} Hz"
+
+        return True, ""
+
+
+    def check_tmp_safe_for_door(self) -> tuple[bool, str]:
+        """
+        door 인터락은 사실상 vent와 동일 기준으로 두는 것이 안전
+        """
+        return self.check_tmp_safe_for_vent()
 
     # ---------------------------------------------------------
     # worker

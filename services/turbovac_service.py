@@ -251,6 +251,33 @@ class TurbovacService(QObject):
 
     def check_tmp_ready_for_mv(self) -> tuple[bool, str]:
         return self.check_tmp_ready_for_power()
+    
+    def check_tmp_ready_for_start(self) -> tuple[bool, str]:
+        """
+        TMP 자체 상태만 보고 start command 가능 여부 판단
+        PLC 상태(Air/Water/RP 등)는 상위 모듈에서 추가 판단
+        """
+        if not self.is_tmp_connected():
+            return False, "TMP 연결 안됨"
+
+        if self.has_tmp_error():
+            return False, f"TMP 에러 상태: {self.get_alarm_text()}"
+
+        snap = self._last_snapshot or {}
+
+        if snap.get("switch_on_lock", False):
+            return False, "TMP switch-on lock 상태"
+
+        if snap.get("accelerating", False):
+            return False, "TMP 이미 가속 중"
+
+        if snap.get("decelerating", False):
+            return False, "TMP 감속 중"
+
+        if snap.get("pump_turning", False):
+            return False, "TMP 이미 회전 중"
+
+        return True, ""
 
     def check_tmp_safe_for_vent(self) -> tuple[bool, str]:
         if not self.is_tmp_connected():

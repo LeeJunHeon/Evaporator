@@ -23,7 +23,7 @@ class TurbovacCommandError(TurbovacProtocolError):
 # - USB = CDC-Data(COM port emulation)
 # - 19200 baud fixed
 # - address 0 fixed
-# - 프로토콜 = serial protocol via COM port acc. to VDI/VDE 3689
+# - protocol = VDI/VDE 3689 (USS style)
 USB_FIXED_ADDRESS = 0
 USS_STX = 0x02
 USS_LGE = 22           # bytes 3..22 payload + 2 = 22
@@ -129,7 +129,6 @@ _WARNING_BIT_MAP = {
     14: "SupplyVoltageWarn",
 }
 
-# 자주 나올 가능성이 높은 것 위주
 _ERROR_CODE_MAP = {
     0: "OK",
     1: "OverspeedWarning",
@@ -250,7 +249,6 @@ def _bcc_xor(buf: bytes) -> int:
 
 
 def _make_pke(query_designator: int, pnu: int) -> int:
-    # bit 15..12 = AK, bit 10..0 = parameter number
     return ((query_designator & 0xF) << 12) | (pnu & 0x07FF)
 
 
@@ -299,23 +297,23 @@ def _safe_call(default, fn, *args, **kwargs):
         return fn(*args, **kwargs)
     except Exception:
         return default
-    
+
 
 class Turbovac(BaseSerialDevice):
     """
     Leybold TURBOVAC i/iX USB(COM port emulation) 드라이버
 
-    메뉴얼 기준 핵심:
+    핵심:
     - USB = COM port emulation
     - baud = 19200 fixed
     - address = 0 fixed
-    - USS/VDI-VDE 3689 telegram
+    - telegram = USS/VDI-VDE 3689 style
     """
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
-        # 현재 제어 상태를 계속 유지해야 polling 시 start bit가 날아가지 않음
+        # polling 때도 start bit가 날아가지 않도록 현재 제어 상태 유지
         self._address = USB_FIXED_ADDRESS
         self._control_word: int = 0
         self._setpoint_hz: int = 0
@@ -340,28 +338,27 @@ class Turbovac(BaseSerialDevice):
             hsw = self._setpoint_hz
 
         payload = bytearray()
-        payload.append(USS_STX)               # byte 0
-        payload.append(USS_LGE)               # byte 1
-        payload.append(self._address)         # byte 2
+        payload.append(USS_STX)
+        payload.append(USS_LGE)
+        payload.append(self._address)
 
         pke_hi, pke_lo = _split_u16(pke)
-        payload.append(pke_hi)                # byte 3
-        payload.append(pke_lo)                # byte 4
+        payload.append(pke_hi)
+        payload.append(pke_lo)
 
-        payload.append(0x00)                  # byte 5 reserved
-        payload.append(ind & 0xFF)            # byte 6 IND
+        payload.append(0x00)  # reserved
+        payload.append(ind & 0xFF)
 
-        payload.extend(_split_u32(pwe))       # byte 7..10 PWE
+        payload.extend(_split_u32(pwe))
 
         stw_hi, stw_lo = _split_u16(stw)
-        payload.append(stw_hi)                # byte 11
-        payload.append(stw_lo)                # byte 12
+        payload.append(stw_hi)
+        payload.append(stw_lo)
 
         hsw_hi, hsw_lo = _split_u16(hsw)
-        payload.append(hsw_hi)                # byte 13
-        payload.append(hsw_lo)                # byte 14
+        payload.append(hsw_hi)
+        payload.append(hsw_lo)
 
-        # byte 15..22
         payload.extend(b"\x00" * 8)
 
         if len(payload) != 23:
@@ -388,7 +385,6 @@ class Turbovac(BaseSerialDevice):
         if rx[1] != USS_LGE:
             raise TurbovacProtocolError(f"invalid LGE: {rx[1]}")
 
-        # USB는 주소 0 고정
         if rx[2] != self._address:
             raise TurbovacProtocolError(f"invalid address: {rx[2]}")
 
@@ -429,10 +425,10 @@ class Turbovac(BaseSerialDevice):
         pwe_rx = _join_u32(rx[7], rx[8], rx[9], rx[10])
         zsw = _join_u16(rx[11], rx[12])
         hiw = _join_u16(rx[13], rx[14])
-        p11 = _join_u16(rx[15], rx[16])      # converter temperature (°C)
-        p5 = _join_u16(rx[17], rx[18])       # motor current (0.1A)
-        p125 = _join_u16(rx[19], rx[20])     # bearing temperature (°C)
-        p4 = _join_u16(rx[21], rx[22])       # DC bus (V)
+        p11 = _join_u16(rx[15], rx[16])      # converter temperature
+        p5 = _join_u16(rx[17], rx[18])       # motor current (0.1 A)
+        p125 = _join_u16(rx[19], rx[20])     # bearing temperature
+        p4 = _join_u16(rx[21], rx[22])       # DC bus voltage
 
         if ak_resp == RESP_CANNOT_RUN:
             raise TurbovacCommandError(
@@ -463,7 +459,6 @@ class Turbovac(BaseSerialDevice):
     # ---------------------------------------------------------
     def connect(self) -> None:
         super().connect()
-        # 연결 검증: 실제 주파수(P3)는 기본 응답 PZD2로 항상 받을 수 있음
         try:
             self.read_fast_status()
         except Exception as e:
@@ -472,8 +467,8 @@ class Turbovac(BaseSerialDevice):
 
     def relinquish_control(self) -> None:
         """
-        제어권/프로세스 비트까지 모두 내림.
-        일반 stop 이후 완전히 손 떼고 싶을 때 사용.
+        완전히 제어권을 내려놓을 때 사용.
+        stop 이후에도 polling은 가능하지만, 정말 손을 떼고 싶을 때만 호출.
         """
         self._control_word = 0
         self._setpoint_hz = 0
@@ -501,8 +496,8 @@ class Turbovac(BaseSerialDevice):
 
     def stop_pump(self) -> None:
         """
-        메뉴얼상 stop은 start bit(bit0)를 내리면 됨.
-        bit10(process enable)은 유지해서 통신/상태 polling은 계속 가능하게 둠.
+        stop은 start bit(bit0)와 setpoint bit(bit6)만 내린다.
+        bit10은 유지해서 통신/상태 polling은 계속 가능하게 둔다.
         """
         self._control_word &= ~(1 << CW_START_STOP)
         self._control_word &= ~(1 << CW_ENABLE_SETPOINT)
@@ -512,21 +507,18 @@ class Turbovac(BaseSerialDevice):
     def reset_error(self) -> None:
         """
         메뉴얼상 reset은 bit7.
-        단, bit0(start)가 살아있으면 reset 불가.
-        그래서 잠깐 start를 내리고 reset 후, 기존 제어 상태를 복원.
+        단, reset은 bit0(start)가 살아있으면 불가하므로
+        잠깐 start를 내리고 reset 후 기존 제어 상태를 복원한다.
         """
         prev_cw = self._control_word
         prev_hsw = self._setpoint_hz
 
-        # 1) start bit를 내리고 reset
         cw_reset = (prev_cw | (1 << CW_ENABLE_PROCESS) | (1 << CW_RESET_ERROR))
         cw_reset &= ~(1 << CW_START_STOP)
         self._txrx(stw=cw_reset, hsw=0)
 
-        # 2) reset bit 제거
         time.sleep(0.05)
 
-        # 3) 이전 제어 상태 복원
         self._txrx(stw=prev_cw, hsw=prev_hsw)
 
     # ---------------------------------------------------------
@@ -579,9 +571,6 @@ class Turbovac(BaseSerialDevice):
         return _i32_from_u32(self.read_parameter_u32(pnu, index=index))
 
     def read_parameter_ascii(self, pnu: int, length: int) -> str:
-        """
-        1 char per index 형식(예: product name / serial no.) 읽기
-        """
         chars: list[str] = []
         for idx in range(length):
             v = self.read_parameter_u16(pnu, index=idx)
@@ -595,13 +584,8 @@ class Turbovac(BaseSerialDevice):
     # ---------------------------------------------------------
     def read_fast_status(self) -> Dict[str, Any]:
         """
-        파라미터 채널 없이 현재 상태만 빠르게 읽는다.
-        - ZSW
-        - P3  (actual rotor frequency)
-        - P11 (converter temp)
-        - P5  (motor current)
-        - P125(bearing temp)
-        - P4  (DC bus voltage)
+        파라미터 채널 없이 빠르게 읽는 현재 상태.
+        PZD2~PZD6를 그대로 활용한다.
         """
         resp = self._txrx(pke=0, ind=0, pwe=0)
         zsw = int(resp["zsw"])
@@ -632,23 +616,11 @@ class Turbovac(BaseSerialDevice):
         """
         UI/로그용 종합 상태 읽기
 
-        UI 매핑 권장:
-        - Conn   -> connected
-        - State  -> state_text
-        - Freq   -> freq_hz
-        - Current-> current_a
-        - Temp   -> motor_temp_c   (UI 온도 1칸 기준)
-        - Alarm  -> alarm_text
+        - fast status는 최대한 항상 유지
+        - extended 값(P7/P171/P174/P176/P227)은 실패해도 전체 snapshot을 죽이지 않음
         """
         ts = time.time()
         fast = self.read_fast_status()
-
-        # 메뉴얼상 UI에 의미 있는 추가 파라미터
-        # P7   = actual motor temp
-        # P171 = latest error code (index 0)
-        # P174 = rotor frequency at error
-        # P176 = operating hours at error (0.01 h)
-        # P227 = warning bits
         prev = self._last_snapshot
 
         if include_extended:
@@ -669,13 +641,14 @@ class Turbovac(BaseSerialDevice):
             warning_bits = _safe_call(None, self.read_parameter_u16, 227)
             if warning_bits is None:
                 warning_bits = _safe_call(0, self.read_parameter_u16, 227, index=0)
-
         else:
             motor_temp_c = prev.motor_temp_c if prev else None
             last_error_code = prev.last_error_code if prev else 0
             last_error_freq_hz = prev.last_error_freq_hz if prev else None
             last_error_hours_raw = (
-                int(prev.last_error_hours * 100) if (prev and prev.last_error_hours is not None) else None
+                int(prev.last_error_hours * 100)
+                if (prev and prev.last_error_hours is not None)
+                else None
             )
             warning_bits = prev.warning_bits if prev else 0
 
@@ -758,12 +731,6 @@ class Turbovac(BaseSerialDevice):
     # convenience / identity
     # ---------------------------------------------------------
     def read_identity(self) -> Dict[str, str]:
-        """
-        필요 시 디버깅용으로 장비 문자열 읽기
-        - 313 product name
-        - 350 catalog no. of pump
-        - 355 serial no. of pump
-        """
         return {
             "product_name": self.read_parameter_ascii(313, 18),
             "catalog_no": self.read_parameter_ascii(350, 18),

@@ -39,12 +39,14 @@ class TurbovacService(QObject):
         ini_path: str | Path,
         *,
         poll_s: float = 1.0,
+        slow_poll_s: float = 5.0,
         reconnect_interval_s: float = 1.0,
     ) -> None:
         super().__init__()
 
         self._ini_path = Path(ini_path)
         self._poll_s = max(0.2, float(poll_s))
+        self._slow_poll_s = max(self._poll_s, float(slow_poll_s))
         self._reconnect_interval_s = max(0.5, float(reconnect_interval_s))
 
         self._lock = threading.RLock()
@@ -64,13 +66,16 @@ class TurbovacService(QObject):
 
         # poll/read 실패 관리
         self._poll_fail_count: int = 0
-        self._poll_fail_threshold: int = 3   # 예: 3회 연속 실패 시에만 close
+        self._poll_fail_threshold: int = 3
         self._last_good_snapshot_ts: float = 0.0
 
         # reconnect backoff 관리
         self._connect_fail_count: int = 0
         self._reconnect_backoff_s: float = self._reconnect_interval_s
         self._reconnect_backoff_max_s: float = 30.0
+
+        # slow poll 관리
+        self._last_slow_poll_ts: float = 0.0
 
         self._load_config()
 
@@ -173,11 +178,11 @@ class TurbovacService(QObject):
 
     def get_last_snapshot(self) -> Optional[Dict[str, Any]]:
         return dict(self._last_snapshot) if self._last_snapshot else None
-    
+
     # ---------------------------------------------------------
     # interlock helper
     # ---------------------------------------------------------
-
+    # 아래 helper 들은 외부 인터락 용도이므로 그대로 유지
     def has_snapshot(self) -> bool:
         return self._last_snapshot is not None
 
@@ -226,12 +231,8 @@ class TurbovacService(QObject):
         snap = self._last_snapshot or {}
         text = str(snap.get("alarm_text", "") or "").strip()
         return text or "-"
-    
+
     def check_tmp_ready_for_power(self) -> tuple[bool, str]:
-        """
-        TMP 상태만 보고 power 투입 가능 여부 판단
-        PLC 상태(RP/FV/MV 등)는 상위 모듈에서 추가 판단
-        """
         if not self.is_tmp_connected():
             return False, "TMP 연결 안됨"
 
@@ -247,18 +248,11 @@ class TurbovacService(QObject):
             return False, "TMP 정상 운전 아님"
 
         return True, ""
-    
+
     def check_tmp_ready_for_mv(self) -> tuple[bool, str]:
-        """
-        TMP 상태만 보고 MV 허용 가능 여부 판단
-        현재 기준은 power와 동일하게 둔다.
-        """
         return self.check_tmp_ready_for_power()
 
     def check_tmp_safe_for_vent(self) -> tuple[bool, str]:
-        """
-        TMP 상태만 보고 vent 가능 여부 판단
-        """
         if not self.is_tmp_connected():
             return False, "TMP 연결 안됨"
 
@@ -281,11 +275,7 @@ class TurbovacService(QObject):
 
         return True, ""
 
-
     def check_tmp_safe_for_door(self) -> tuple[bool, str]:
-        """
-        door 인터락은 사실상 vent와 동일 기준으로 두는 것이 안전
-        """
         return self.check_tmp_safe_for_vent()
 
     # ---------------------------------------------------------
@@ -305,8 +295,12 @@ class TurbovacService(QObject):
 
                 now = time.monotonic()
                 if now >= next_poll_ts:
-                    # poll 실패는 내부에서 누적 관리하고 threshold 초과 시에만 close
-                    self._poll_once()
+                    include_extended = (now - self._last_slow_poll_ts) >= self._slow_poll_s
+                    self._poll_once(include_extended=include_extended)
+
+                    if include_extended:
+                        self._last_slow_poll_ts = now
+
                     next_poll_ts = now + self._poll_s
 
                 time.sleep(0.05)
@@ -346,16 +340,19 @@ class TurbovacService(QObject):
             f"[TMPService] start_pump sent"
             + (f" (setpoint_hz={int(setpoint_hz)})" if setpoint_hz is not None else "")
         )
+        # 즉시 poll 생략: 다음 주기 poll에서 상태 반영
 
     def _cmd_stop(self) -> None:
         dev = self._require_device(allow_connect=True)
         dev.stop_pump()
         self.sig_log.emit("[TMPService] stop_pump sent")
+        # 즉시 poll 생략
 
     def _cmd_reset_error(self) -> None:
         dev = self._require_device(allow_connect=True)
         dev.reset_error()
         self.sig_log.emit("[TMPService] reset_error sent")
+        # 즉시 poll 생략
 
     def _cmd_reload_config(self) -> None:
         self.sig_log.emit("[TMPService] reloading config")
@@ -364,7 +361,7 @@ class TurbovacService(QObject):
         self._ensure_connected(force=True)
 
     def _cmd_snapshot(self) -> None:
-        self._poll_once()
+        self._poll_once(include_extended=True)
 
     # ---------------------------------------------------------
     # connect / close / poll
@@ -405,14 +402,15 @@ class TurbovacService(QObject):
             self._connect_fail_count = 0
             self._poll_fail_count = 0
             self._reconnect_backoff_s = self._reconnect_interval_s
+            self._last_slow_poll_ts = 0.0
 
             self.sig_log.emit(
                 f"[TMPService] connected: port={self._cfg['port']} "
                 f"baud={self._cfg['baudrate']} {self._cfg['bytesize']}{self._cfg['parity']}{self._cfg['stopbits']}"
             )
 
-            # 연결 직후 1회 snapshot
-            self._poll_once()
+            # 연결 직후 1회는 full snapshot
+            self._poll_once(include_extended=True)
 
         except Exception as e:
             self._dev = None
@@ -445,10 +443,10 @@ class TurbovacService(QObject):
 
         self._emit_connected(False)
 
-    def _poll_once(self) -> None:
+    def _poll_once(self, *, include_extended: bool = True) -> None:
         dev = self._require_device(allow_connect=False)
         try:
-            snap = dev.read_snapshot()
+            snap = dev.read_snapshot(include_extended=include_extended)
             d = self._snapshot_to_dict(snap)
             self._last_snapshot = d
             self.sig_snapshot.emit(d)
@@ -456,7 +454,7 @@ class TurbovacService(QObject):
             self._last_error_text = ""
             self._emit_connected(True)
 
-            # 성공했으면 실패 카운터 초기화
+            # 성공 시 실패 카운터 초기화
             self._poll_fail_count = 0
             self._last_good_snapshot_ts = time.time()
 
@@ -472,11 +470,11 @@ class TurbovacService(QObject):
                 self.sig_error.emit(msg)
                 self.sig_log.emit(msg)
 
-            # threshold 전까지는 연결 유지, UI도 마지막 정상값 유지
+            # threshold 전까지는 연결 유지 / 마지막 정상 snapshot 유지
             if self._poll_fail_count < self._poll_fail_threshold:
                 return
 
-            # 연속 실패 threshold 초과 시에만 close + reconnect 모드 전환
+            # threshold 초과 시에만 close + backoff reconnect
             self._handle_runtime_error(
                 f"[TMPService] poll failed repeatedly "
                 f"({self._poll_fail_count} times): {e!r}"
@@ -486,10 +484,10 @@ class TurbovacService(QObject):
     # error handling
     # ---------------------------------------------------------
     def _handle_runtime_error(self, msg: str) -> None:
-        # 여기로 들어오는 경우는 "연속 실패 threshold 초과" 또는 진짜 fatal만
+        # 여기로 들어오는 경우는 연속 poll 실패 threshold 초과 또는 worker fatal
+        # 중요: 여기서도 stop_pump() 는 절대 자동 호출하지 않음
         self._close_device()
 
-        # reconnect backoff 증가
         self._connect_fail_count += 1
         self._reconnect_backoff_s = min(
             self._reconnect_backoff_max_s,
@@ -501,7 +499,6 @@ class TurbovacService(QObject):
             self.sig_error.emit(msg)
             self.sig_log.emit(msg)
 
-        # 마지막 alarm 문맥 유지
         prev_alarm = "-"
         if self._last_snapshot:
             prev_alarm = str(self._last_snapshot.get("alarm_text", "-") or "-")

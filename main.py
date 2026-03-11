@@ -19,8 +19,10 @@ from ui.windows.hmi_window import HmiWindow
 from config.plc_config import load_plc_settings
 from controller.hmi_plc_binder import HmiPlcBinder
 from controller.process_controller import ProcessController
+
 from services.log_service import LogService
 from services.acs_service import ACSService
+from services.turbovac_service import TurbovacService
 
 
 # ============================================================
@@ -240,6 +242,25 @@ def main():
             pass
         _hmi_log(f"[BOOT][WARN] ACSService init failed: {e!r}")
 
+    # ✅ TMP(Turbovac)는 프로그램 부팅 즉시 연결
+    turbovac_service: Any = None
+    try:
+        turbovac_service = TurbovacService(
+            ini_path=ini_path,
+            poll_s=1.0,
+            reconnect_interval_s=1.0,
+        )
+        turbovac_service.start()
+    except Exception as e:
+        turbovac_service = None
+        _hmi_log(f"[BOOT][WARN] TurbovacService init failed: {e!r}")
+
+    # ✅ TMP 서비스 주입 (수동 버튼 / TMP status 표시 / TMP 인터락용)
+    try:
+        plc_binder.set_turbovac_service(turbovac_service)
+    except Exception as e:
+        _hmi_log(f"[BOOT][WARN] set_turbovac_service failed: {e!r}")
+
     # ------------------------------
     # LogService (신규)
     # ------------------------------
@@ -261,6 +282,7 @@ def main():
             log=log_service,
             stm=None,          # STM은 Start에서 붙임
             acs=acs_service,   # ✅ ACS는 부팅부터 유지
+            turbovac=turbovac_service,
         )
     except Exception as e:
         process_controller = None
@@ -283,7 +305,12 @@ def main():
             pass
 
         # ✅ stop()만 시도
-        for svc in (getattr(hmi, "_stm_service", None), getattr(hmi, "_acs_service", None), log_service):
+        for svc in (
+            getattr(hmi, "_stm_service", None),
+            getattr(hmi, "_acs_service", None),
+            turbovac_service,
+            log_service,
+        ):
             if svc is None:
                 continue
             fn = getattr(svc, "stop", None)

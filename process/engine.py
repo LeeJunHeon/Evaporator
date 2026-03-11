@@ -122,6 +122,7 @@ class ProcessEngine:
         acs: Optional[ACSService],
         log: LogService,
         *,
+        turbovac: Optional[Any] = None,
         callbacks: Optional[EngineCallbacks] = None,
         plc_cmd_timeout_s: float = 2.0,
         status_emit_interval_s: float = 0.2,
@@ -129,6 +130,7 @@ class ProcessEngine:
         self.plc = plc
         self.stm = stm
         self.acs = acs
+        self.turbovac = turbovac
         self.log = log
 
         self.callbacks = callbacks or EngineCallbacks()
@@ -499,9 +501,28 @@ class ProcessEngine:
     def _plc_write_coil(self, coil: Optional[str], on: bool, *, tag: str) -> None:
         if not coil:
             raise EngineFailed(tag, "coil is None")
-        fut = self.plc.submit_write_coil(coil_name=str(coil), on=bool(on), momentary=False, pulse_ms=None, tag=tag)
-        self._wait_future(fut, timeout_s=self._plc_cmd_timeout_s, where=f"PLC_WRITE_COIL {coil}={on}")
-        self._tele_event(event="WRITE_COIL", target=str(coil), value=int(bool(on)), detail=f"tag={tag}")
+
+        # ✅ 자동 공정에서 Power ON 전 TMP 상태 확인
+        self._check_tmp_interlock_for_power_coil(str(coil), bool(on), tag=tag)
+
+        fut = self.plc.submit_write_coil(
+            coil_name=str(coil),
+            on=bool(on),
+            momentary=False,
+            pulse_ms=None,
+            tag=tag,
+        )
+        self._wait_future(
+            fut,
+            timeout_s=self._plc_cmd_timeout_s,
+            where=f"PLC_WRITE_COIL {coil}={on}",
+        )
+        self._tele_event(
+            event="WRITE_COIL",
+            target=str(coil),
+            value=int(bool(on)),
+            detail=f"tag={tag}",
+        )
 
     def _plc_pulse_coil(self, coil: Optional[str], pulse_ms: int, *, tag: str) -> None:
         if not coil:
@@ -862,6 +883,47 @@ class ProcessEngine:
         if v is None:
             return False
         return bool(v) == bool(expected)
+    
+    # --------------------------------------------------------
+    # TMP 인터락
+    # --------------------------------------------------------
+    def _check_tmp_interlock_for_power_coil(self, coil: str, on: bool, *, tag: str) -> None:
+        """
+        현재 PLC에서 Turbo를 제거하며 사라진 Power 관련 인터락만 자동 공정에서 복원한다.
+        - POWER_1_SW / POWER_2_SW ON 전에 TMP ready for power 확인
+        """
+        if not bool(on):
+            return
+
+        coil_u = str(coil or "").upper()
+        if coil_u not in ("POWER_1_SW", "POWER_2_SW"):
+            return
+
+        svc = getattr(self, "turbovac", None)
+        if svc is None:
+            raise EngineFailed(tag, f"TMP service is not set (coil={coil_u})")
+
+        fn = getattr(svc, "check_tmp_ready_for_power", None)
+        if not callable(fn):
+            raise EngineFailed(tag, "TMP helper missing: check_tmp_ready_for_power")
+
+        try:
+            result = fn()
+        except Exception as e:
+            raise EngineFailed(tag, f"TMP helper failed: {e!r}")
+
+        ok = False
+        reason = ""
+        if isinstance(result, tuple) and len(result) == 2:
+            ok = bool(result[0])
+            reason = str(result[1] or "")
+        else:
+            ok = bool(result)
+
+        if not ok:
+            if not reason:
+                reason = f"TMP interlock blocked: coil={coil_u}"
+            raise EngineFailed(tag, reason)
 
     # --------------------------------------------------------
     # Status / Telemetry emit

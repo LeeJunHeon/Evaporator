@@ -441,22 +441,24 @@ class HmiPlcBinder(QObject):
                 self._revert_tmp_button_to_service()
                 return
 
-            # ✅ PLC 상태 기반 start 인터락
+            # ✅ PLC 상태 기반 TMP START 인터락
+            # 현재 PLC에서 Turbo만 제거했으므로,
+            # 기존 Turbo 블록의 핵심 조건(Air + Water + RP)만 여기서 복원한다.
+            if not self._get_state_locked("AIR_SW", False):
+                self._set_hmi_log("[BLOCK] TMP START (AIR OFF)")
+                self._popup_warn("인터락", "Air가 OFF 상태입니다.\nAir를 먼저 확인해주세요.")
+                self._revert_tmp_button_to_service()
+                return
+
+            if not self._get_state_locked("WATER_SW", False):
+                self._set_hmi_log("[BLOCK] TMP START (WATER OFF)")
+                self._popup_warn("인터락", "Water가 OFF 상태입니다.\nCooling water를 먼저 확인해주세요.")
+                self._revert_tmp_button_to_service()
+                return
+
             if not self._get_state_locked("R_P_SW", False):
                 self._set_hmi_log("[BLOCK] TMP START (RP OFF)")
                 self._popup_warn("인터락", "RP가 꺼져 있습니다.\nRP를 먼저 켜주세요.")
-                self._revert_tmp_button_to_service()
-                return
-
-            if not self._get_state_locked("F_V_SW", False):
-                self._set_hmi_log("[BLOCK] TMP START (FV OFF)")
-                self._popup_warn("인터락", "FV가 닫혀 있습니다.\nFV를 먼저 열어주세요.")
-                self._revert_tmp_button_to_service()
-                return
-
-            if self._get_state_locked("V_V_SW", False):
-                self._set_hmi_log("[BLOCK] TMP START (VENT ON)")
-                self._popup_warn("인터락", "Vent가 켜져 있습니다.\nVent를 먼저 꺼주세요.")
                 self._revert_tmp_button_to_service()
                 return
 
@@ -547,6 +549,24 @@ class HmiPlcBinder(QObject):
                 self._popup_warn("인터락", "Door가 열리거나 닫히는 중에는\nMain Shutter를 닫을 수 없습니다.")
                 self._revert_button_to_plc(binding, fallback=True)
                 return
+            
+        # ✅ MV ON 시: 현재 PLC에서 빠진 Turbo 조건만 복원
+        if binding.coil_name == "M_V_SW" and bool(on):
+            ok, reason = self._call_tmp_helper("check_tmp_ready_for_mv")
+            if not ok:
+                self._set_hmi_log(f"[BLOCK] M_V_SW <- {on_i} ({reason})")
+                self._popup_warn("TMP 인터락", reason)
+                self._revert_button_to_plc(binding, fallback=False)
+                return
+            
+        # ✅ POWER ON 시: 현재 PLC에서 빠진 Turbo 조건만 복원
+        if binding.coil_name in ("POWER_1_SW", "POWER_2_SW") and bool(on):
+            ok, reason = self._call_tmp_helper("check_tmp_ready_for_power")
+            if not ok:
+                self._set_hmi_log(f"[BLOCK] {binding.coil_name} <- {on_i} ({reason})")
+                self._popup_warn("TMP 인터락", reason)
+                self._revert_button_to_plc(binding, fallback=False)
+                return
 
         # 일반 토글: 하단 로그만
         self._plc.enqueue_write_coil(
@@ -562,6 +582,14 @@ class HmiPlcBinder(QObject):
             self._set_hmi_log("[BLOCK] ALL STOP (PLC not connected)")
             self._popup_warn("PLC 미연결", "PLC가 연결되지 않아 ALL STOP을 전송할 수 없습니다.")
             return
+        
+        # ✅ TMP는 PLC가 아니라 TurbovacService로 직접 정지
+        if self._turbovac_service is not None:
+            try:
+                self._turbovac_service.stop_pump()
+                self._set_hmi_log("[UI] TMP STOP sent (ALL STOP)")
+            except Exception as e:
+                self._set_hmi_log(f"[WARN] TMP STOP failed in ALL STOP: {e!r}")
 
         # ✅ 안전 순서(권장): MAIN_SHUTTER close → DAC=0 → POWER off → 나머지 off
         self._plc.enqueue_write_coil("MAIN_SHUTTER_SW", False, tag="HMI:ALL_STOP")

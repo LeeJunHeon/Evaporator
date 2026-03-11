@@ -65,6 +65,7 @@ class ProcessController(QObject):
         *,
         stm: Optional[Any] = None,
         acs: Optional[Any] = None,
+        turbovac: Optional[Any] = None,
         parent: Optional[QObject] = None,
     ):
         super().__init__(parent)
@@ -72,6 +73,7 @@ class ProcessController(QObject):
         self.plc = plc
         self.stm = stm
         self.acs = acs
+        self.turbovac = turbovac
         self.log = log
 
         self._recipe: Optional[ProcessRecipe] = None
@@ -413,6 +415,7 @@ class ProcessController(QObject):
             plc=self.plc,
             stm=self.stm,
             acs=self.acs,
+            turbovac=self.turbovac,
             log=self.log,
             callbacks=None,  # worker에서 콜백 브릿지로 교체됨
         )
@@ -583,6 +586,16 @@ class ProcessController(QObject):
                     self.acs.start()
             except Exception as e:
                 self._ui_warn(f"ACS 서비스 start 실패: {e!r}")
+
+        if self.turbovac is not None:
+            try:
+                if hasattr(self.turbovac, "start") and hasattr(self.turbovac, "is_running"):
+                    if not self.turbovac.is_running():
+                        self.turbovac.start()
+                elif hasattr(self.turbovac, "start"):
+                    self.turbovac.start()
+            except Exception as e:
+                self._ui_warn(f"Turbovac 서비스 start 실패: {e!r}")
 
     def _on_worker_result(self, result: EngineResult) -> None:
         """

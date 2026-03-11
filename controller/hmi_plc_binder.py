@@ -946,6 +946,9 @@ class HmiPlcBinder(QObject):
         if self._dac2_reset_btn is not None:
             self._dac2_reset_btn.clicked.connect(lambda: self._on_reset_dac(2))
 
+        self._set_dac_actual_text(1, None)
+        self._set_dac_actual_text(2, None)
+
     def _on_reset_dac(self, ch: int) -> None:
         sp = self._dac1_spin if int(ch) == 1 else self._dac2_spin
         if sp is None:

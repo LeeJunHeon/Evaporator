@@ -856,8 +856,8 @@ class Ui_Form(object):
 
         self.dacActual1Label.setText(QCoreApplication.translate("Form", "Power 1", None))
         self.dacActual2Label.setText(QCoreApplication.translate("Form", "Power 2", None))
-        self.dacActual1Edit.setText(QCoreApplication.translate("Form", "--- A", None))
-        self.dacActual2Edit.setText(QCoreApplication.translate("Form", "--- A", None))
+        self.dacActual1Edit.setText(QCoreApplication.translate("Form", "---", None))
+        self.dacActual2Edit.setText(QCoreApplication.translate("Form", "---", None))
 
         self.ms1powerBtn.setText(QCoreApplication.translate("Form", "M.S 1\nPower", None))
         self.allstopBtn.setText(QCoreApplication.translate("Form", "ALL\nSTOP", None))

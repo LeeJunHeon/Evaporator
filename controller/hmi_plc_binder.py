@@ -45,7 +45,6 @@ class HmiPlcBinder(QObject):
         ButtonBinding("fvBtn", "F_V_SW"),
         ButtonBinding("mvBtn", "M_V_SW"),
         ButtonBinding("vvBtn", "V_V_SW"),
-        ButtonBinding("pushButton_13", "TMP_SW"),
         ButtonBinding("doorBtn", "DOOR_SW"),
         ButtonBinding("ftmBtn", "FTM_SW"),
         ButtonBinding("mainshutterBtn", "MAIN_SHUTTER_SW"),
@@ -80,6 +79,11 @@ class HmiPlcBinder(QObject):
         # ✅ 상단 상태라인에는 "연결 상태만" 표시하기 위한 외부 장비 연결 상태 저장소
         self._external_connected: Dict[str, bool] = {}
 
+        # ✅ TMP(TURBOVAC) 서비스 연결/상태
+        self._turbovac_service: Optional[object] = None
+        self._tmp_connected: bool = False
+        self._tmp_last_snapshot: Dict[str, Any] = {}
+
         # (선택) 초기 표시
         self._render_status_line()
 
@@ -94,6 +98,8 @@ class HmiPlcBinder(QObject):
         self._plc.sig_connected.connect(self._on_connected)
         self._plc.sig_error.connect(self._on_error)
         self._plc.sig_coils.connect(self._apply_states)  # PLCService는 coils dict를 emit
+        if hasattr(self._plc, "sig_regs"):
+            self._plc.sig_regs.connect(self._apply_regs)  # register(readback) 상태
 
         # ✅ PLC 명령 실행 trace → 공정 CSV로 저장
         if hasattr(self._plc, "sig_cmd_trace"):
@@ -114,6 +120,45 @@ class HmiPlcBinder(QObject):
         with self._state_lock:
             self._external_connected[key] = bool(ok)
         self._render_status_line()
+
+    def set_turbovac_service(self, svc: object | None) -> None:
+        """
+        main.py 등에서 TurbovacService를 주입한다.
+        이 메서드는 보통 1회만 호출하는 전제를 둔다.
+        """
+        self._turbovac_service = svc
+        self._tmp_connected = False
+        self._tmp_last_snapshot = {}
+
+        if svc is None:
+            self.set_external_connected("TMP", False)
+            self._apply_tmp_button_from_snapshot()
+            self._set_controls_enabled(self.is_ui_connected())
+            return
+
+        if hasattr(svc, "sig_snapshot"):
+            svc.sig_snapshot.connect(self._on_tmp_snapshot)
+        if hasattr(svc, "sig_connected"):
+            svc.sig_connected.connect(self._on_tmp_connected)
+        if hasattr(svc, "sig_error"):
+            svc.sig_error.connect(self._on_tmp_error)
+
+        # 현재 연결 상태/마지막 snapshot 즉시 반영
+        try:
+            v = getattr(svc, "is_connected", False)
+            self._tmp_connected = bool(v() if callable(v) else v)
+        except Exception:
+            self._tmp_connected = False
+
+        try:
+            snap = svc.get_last_snapshot() if hasattr(svc, "get_last_snapshot") else None
+            self._tmp_last_snapshot = dict(snap or {})
+        except Exception:
+            self._tmp_last_snapshot = {}
+
+        self.set_external_connected("TMP", self._tmp_connected)
+        self._apply_tmp_button_from_snapshot()
+        self._set_controls_enabled(self.is_ui_connected())
 
     def _render_status_line(self) -> None:
         """상단 상태라인(processMonitor_HMI)에는 연결 상태만 표시."""
@@ -207,6 +252,9 @@ class HmiPlcBinder(QObject):
         self._plc.sig_error.connect(self._on_error)
         self._plc.sig_coils.connect(self._apply_states)
 
+        if hasattr(self._plc, "sig_regs"):
+            self._plc.sig_regs.connect(self._apply_regs)
+
         if hasattr(self._plc, "sig_cmd_trace"):
             self._plc.sig_cmd_trace.connect(self._on_plc_cmd_trace)
 
@@ -266,6 +314,16 @@ class HmiPlcBinder(QObject):
 
             w.toggled.connect(lambda on, bb=b: self._on_button_toggled(bb, on))
 
+        # ✅ TMP 버튼은 PLC가 아니라 TurbovacService로 직접 제어
+        tmp_btn = getattr(self.ui, "pushButton_13", None)
+        if tmp_btn is None:
+            raise AttributeError("UI 위젯 누락: pushButton_13 (TMP button)")
+        try:
+            tmp_btn.setCheckable(True)
+        except Exception:
+            pass
+        tmp_btn.toggled.connect(self._on_tmp_button_toggled)
+
         all_stop = getattr(self.ui, "allstopBtn", None)
         if all_stop is not None:
             all_stop.clicked.connect(self._on_all_stop_clicked)
@@ -273,6 +331,160 @@ class HmiPlcBinder(QObject):
     def _get_state_locked(self, coil: str, default: bool = False) -> bool:
         with self._state_lock:
             return bool(self._last_states.get(coil, default))
+        
+    def _tmp_ui_checked_from_snapshot(self, snap: Optional[Dict[str, Any]] = None) -> bool:
+        s = dict(snap or self._tmp_last_snapshot or {})
+        if not bool(s.get("connected", self._tmp_connected)):
+            return False
+
+        freq = int(s.get("freq_hz", 0) or 0)
+        return bool(
+            s.get("pump_turning", False)
+            or s.get("accelerating", False)
+            or s.get("decelerating", False)
+            or s.get("normal_operation", False)
+            or freq > 0
+        )
+
+    def _apply_tmp_button_from_snapshot(self) -> None:
+        w = getattr(self.ui, "pushButton_13", None)
+        if w is None:
+            return
+
+        checked = self._tmp_ui_checked_from_snapshot()
+        try:
+            with QSignalBlocker(w):
+                w.setChecked(bool(checked))
+        except Exception:
+            pass
+
+    def _revert_tmp_button_to_service(self) -> None:
+        self._apply_tmp_button_from_snapshot()
+
+    def _call_tmp_helper(self, helper_name: str) -> tuple[bool, str]:
+        svc = self._turbovac_service
+        if svc is None:
+            return False, "TMP 서비스가 설정되지 않았습니다."
+
+        fn = getattr(svc, helper_name, None)
+        if not callable(fn):
+            return False, f"TMP helper 누락: {helper_name}"
+
+        try:
+            result = fn()
+            if isinstance(result, tuple) and len(result) == 2:
+                return bool(result[0]), str(result[1] or "")
+            return bool(result), ""
+        except Exception as e:
+            return False, f"TMP 상태 확인 실패: {e!r}"
+
+    def _on_tmp_connected(self, ok: bool) -> None:
+        prev = bool(self._tmp_connected)
+        self._tmp_connected = bool(ok)
+        self.set_external_connected("TMP", self._tmp_connected)
+        self._apply_tmp_button_from_snapshot()
+        self._set_controls_enabled(self.is_ui_connected())
+
+        if prev != self._tmp_connected:
+            self._set_hmi_log("TMP CONNECTED" if self._tmp_connected else "TMP DISCONNECTED")
+
+    def _on_tmp_snapshot(self, snap_obj: object) -> None:
+        prev_checked = self._tmp_ui_checked_from_snapshot(self._tmp_last_snapshot)
+
+        snap = dict(snap_obj or {})
+        self._tmp_last_snapshot = snap
+
+        if "connected" in snap:
+            self._tmp_connected = bool(snap.get("connected", False))
+            self.set_external_connected("TMP", self._tmp_connected)
+
+        now_checked = self._tmp_ui_checked_from_snapshot(self._tmp_last_snapshot)
+        self._apply_tmp_button_from_snapshot()
+        self._set_controls_enabled(self.is_ui_connected())
+
+        if prev_checked != now_checked:
+            self._set_hmi_log(f"[STATE] TMP -> {int(now_checked)}")
+
+    def _on_tmp_error(self, msg: str) -> None:
+        self._set_hmi_log(f"[TMP] {msg}")
+
+    def _on_tmp_button_toggled(self, on: bool) -> None:
+        on_i = int(bool(on))
+        svc = self._turbovac_service
+
+        if svc is None:
+            self._set_hmi_log(f"[BLOCK] TMP <- {on_i} (TMP service not set)")
+            self._popup_warn("TMP 미설정", "TMP 서비스가 연결되지 않았습니다.")
+            self._revert_tmp_button_to_service()
+            return
+
+        # -----------------------------
+        # TMP START
+        # -----------------------------
+        if bool(on):
+            if not self.is_ui_connected():
+                self._set_hmi_log("[BLOCK] TMP START (PLC not connected)")
+                self._popup_warn("PLC 미연결", "PLC가 연결되지 않아 TMP START를 수행할 수 없습니다.")
+                self._revert_tmp_button_to_service()
+                return
+
+            if not self.get_states():
+                self._set_hmi_log("[BLOCK] TMP START (PLC state not ready)")
+                self._popup_warn("인터락", "PLC 상태를 아직 읽지 못했습니다.\n잠시 후 다시 시도하세요.")
+                self._revert_tmp_button_to_service()
+                return
+
+            ok, reason = self._call_tmp_helper("check_tmp_ready_for_start")
+            if not ok:
+                self._set_hmi_log(f"[BLOCK] TMP START ({reason})")
+                self._popup_warn("TMP 인터락", reason)
+                self._revert_tmp_button_to_service()
+                return
+
+            # ✅ PLC 상태 기반 start 인터락
+            if not self._get_state_locked("R_P_SW", False):
+                self._set_hmi_log("[BLOCK] TMP START (RP OFF)")
+                self._popup_warn("인터락", "RP가 꺼져 있습니다.\nRP를 먼저 켜주세요.")
+                self._revert_tmp_button_to_service()
+                return
+
+            if not self._get_state_locked("F_V_SW", False):
+                self._set_hmi_log("[BLOCK] TMP START (FV OFF)")
+                self._popup_warn("인터락", "FV가 닫혀 있습니다.\nFV를 먼저 열어주세요.")
+                self._revert_tmp_button_to_service()
+                return
+
+            if self._get_state_locked("V_V_SW", False):
+                self._set_hmi_log("[BLOCK] TMP START (VENT ON)")
+                self._popup_warn("인터락", "Vent가 켜져 있습니다.\nVent를 먼저 꺼주세요.")
+                self._revert_tmp_button_to_service()
+                return
+
+            try:
+                svc.start_pump()
+                self._set_hmi_log("[UI] TMP START")
+            except Exception as e:
+                self._set_hmi_log(f"[FAIL] TMP START: {e!r}")
+                self._popup_warn("TMP 전송 실패", f"TMP START 실패: {e!r}")
+                self._revert_tmp_button_to_service()
+            return
+
+        # -----------------------------
+        # TMP STOP
+        # -----------------------------
+        if not self._tmp_connected:
+            self._set_hmi_log("[BLOCK] TMP STOP (TMP not connected)")
+            self._popup_warn("TMP 미연결", "TMP가 연결되지 않아 STOP을 전송할 수 없습니다.")
+            self._revert_tmp_button_to_service()
+            return
+
+        try:
+            svc.stop_pump()
+            self._set_hmi_log("[UI] TMP STOP")
+        except Exception as e:
+            self._set_hmi_log(f"[FAIL] TMP STOP: {e!r}")
+            self._popup_warn("TMP 전송 실패", f"TMP STOP 실패: {e!r}")
+            self._revert_tmp_button_to_service()
 
     def _on_button_toggled(self, binding: ButtonBinding, on: bool) -> None:
         on_i = int(bool(on))
@@ -511,6 +723,10 @@ class HmiPlcBinder(QObject):
         self._render_status_line()
         self._set_controls_enabled(self.is_ui_connected())
 
+        if not now_ui:
+            self._set_dac_actual_text(1, None)
+            self._set_dac_actual_text(2, None)
+
         if prev_ui != now_ui:
             self._set_hmi_log("PLC CONNECTED" if now_ui else "PLC DISCONNECTED")
 
@@ -532,7 +748,7 @@ class HmiPlcBinder(QObject):
         box = QMessageBox(QMessageBox.Warning, title, message, QMessageBox.Ok, parent)
         box.setWindowFlag(Qt.WindowStaysOnTopHint, True)
         box.exec()
-        
+            
     def _mark_io_failed(self, reason: str = "") -> None:
         with self._state_lock:
             prev_ui = bool(self._connected) and bool(self._io_healthy)
@@ -542,6 +758,8 @@ class HmiPlcBinder(QObject):
         if prev_ui != now_ui:
             self._render_status_line()
             self._set_controls_enabled(False)
+            self._set_dac_actual_text(1, None)
+            self._set_dac_actual_text(2, None)
             self._set_hmi_log("PLC DISCONNECTED (I/O failed)")
 
         if reason:
@@ -658,6 +876,40 @@ class HmiPlcBinder(QObject):
         except Exception:
             pass
 
+    def _set_dac_actual_text(self, ch: int, value: Optional[int]) -> None:
+        w = self._dac1_actual if int(ch) == 1 else self._dac2_actual
+        if w is None:
+            return
+
+        try:
+            if value is None:
+                text = "---"
+            else:
+                text = str(int(value))
+
+            if hasattr(w, "setPlainText"):
+                w.setPlainText(text)
+            elif hasattr(w, "setText"):
+                w.setText(text)
+        except Exception:
+            pass
+
+    def _apply_regs(self, regs_obj: object) -> None:
+        regs = dict(regs_obj or {})
+
+        raw1 = regs.get("POWER_READ_1", None)
+        raw2 = regs.get("POWER_READ_2", None)
+
+        try:
+            self._set_dac_actual_text(1, None if raw1 is None else int(raw1))
+        except Exception:
+            self._set_dac_actual_text(1, None)
+
+        try:
+            self._set_dac_actual_text(2, None if raw2 is None else int(raw2))
+        except Exception:
+            self._set_dac_actual_text(2, None)
+
     # ============================================================
     # DAC 수동 입력 (PLCService로 write_reg만)
     # ============================================================
@@ -669,10 +921,12 @@ class HmiPlcBinder(QObject):
         self._dac1_spin = getattr(self.ui, "dac1Spin", None)
         self._dac1_set_btn = getattr(self.ui, "dac1SetBtn", None)
         self._dac1_reset_btn = getattr(self.ui, "dac1ResetBtn", None)
+        self._dac1_actual = getattr(self.ui, "dacActual1Edit", None)
 
         self._dac2_spin = getattr(self.ui, "dac2Spin", None)
         self._dac2_set_btn = getattr(self.ui, "dac2SetBtn", None)
         self._dac2_reset_btn = getattr(self.ui, "dac2ResetBtn", None)
+        self._dac2_actual = getattr(self.ui, "dacActual2Edit", None)
 
         for sp in (self._dac1_spin, self._dac2_spin):
             if sp is not None and hasattr(sp, "setRange"):

@@ -133,6 +133,7 @@ class HmiPlcBinder(QObject):
         if svc is None:
             self.set_external_connected("TMP", False)
             self._apply_tmp_button_from_snapshot()
+            self._render_tmp_status()
             self._set_controls_enabled(self.is_ui_connected())
             return
 
@@ -142,6 +143,8 @@ class HmiPlcBinder(QObject):
             svc.sig_connected.connect(self._on_tmp_connected)
         if hasattr(svc, "sig_error"):
             svc.sig_error.connect(self._on_tmp_error)
+        if hasattr(svc, "sig_log"):
+            svc.sig_log.connect(self._on_tmp_log)
 
         # 현재 연결 상태/마지막 snapshot 즉시 반영
         try:
@@ -158,6 +161,7 @@ class HmiPlcBinder(QObject):
 
         self.set_external_connected("TMP", self._tmp_connected)
         self._apply_tmp_button_from_snapshot()
+        self._render_tmp_status()
         self._set_controls_enabled(self.is_ui_connected())
 
     def _render_status_line(self) -> None:
@@ -361,6 +365,55 @@ class HmiPlcBinder(QObject):
     def _revert_tmp_button_to_service(self) -> None:
         self._apply_tmp_button_from_snapshot()
 
+    def _set_tmp_field(self, widget_name: str, text: str) -> None:
+        w = getattr(self.ui, widget_name, None)
+        if w is None:
+            return
+        try:
+            if hasattr(w, "setPlainText"):
+                w.setPlainText(str(text))
+            elif hasattr(w, "setText"):
+                w.setText(str(text))
+        except Exception:
+            pass
+
+    def _render_tmp_status(self) -> None:
+        snap = dict(self._tmp_last_snapshot or {})
+
+        connected = bool(snap.get("connected", self._tmp_connected))
+        state_text = str(snap.get("state_text", "") or "").strip()
+        freq_hz = snap.get("freq_hz", None)
+        current_a = snap.get("current_a", None)
+        motor_temp_c = snap.get("motor_temp_c", None)
+        alarm_text = str(snap.get("alarm_text", "") or "").strip()
+
+        if not state_text:
+            if not connected:
+                state_text = "DISCONNECTED"
+            elif snap.get("normal_operation", False):
+                state_text = "NORMAL"
+            elif snap.get("accelerating", False):
+                state_text = "ACCEL"
+            elif snap.get("decelerating", False):
+                state_text = "DECEL"
+            elif snap.get("pump_turning", False):
+                state_text = "TURNING"
+            else:
+                state_text = "STOPPED"
+
+        conn_text = "CONNECTED" if connected else "DISCONNECTED"
+        freq_text = "---" if freq_hz is None else str(int(freq_hz))
+        curr_text = "---" if current_a is None else f"{float(current_a):.2f}"
+        temp_text = "---" if motor_temp_c is None else f"{float(motor_temp_c):.1f}"
+        alarm_disp = alarm_text if alarm_text else "-"
+
+        self._set_tmp_field("tmpConnEdit", conn_text)
+        self._set_tmp_field("tmpStateEdit", state_text)
+        self._set_tmp_field("tmpFreqEdit", freq_text)
+        self._set_tmp_field("tmpCurrentEdit", curr_text)
+        self._set_tmp_field("tmpTempEdit", temp_text)
+        self._set_tmp_field("tmpAlarmEdit", alarm_disp)
+
     def _call_tmp_helper(self, helper_name: str) -> tuple[bool, str]:
         svc = self._turbovac_service
         if svc is None:
@@ -383,6 +436,7 @@ class HmiPlcBinder(QObject):
         self._tmp_connected = bool(ok)
         self.set_external_connected("TMP", self._tmp_connected)
         self._apply_tmp_button_from_snapshot()
+        self._render_tmp_status()
         self._set_controls_enabled(self.is_ui_connected())
 
         if prev != self._tmp_connected:
@@ -400,6 +454,7 @@ class HmiPlcBinder(QObject):
 
         now_checked = self._tmp_ui_checked_from_snapshot(self._tmp_last_snapshot)
         self._apply_tmp_button_from_snapshot()
+        self._render_tmp_status()
         self._set_controls_enabled(self.is_ui_connected())
 
         if prev_checked != now_checked:
@@ -407,6 +462,10 @@ class HmiPlcBinder(QObject):
 
     def _on_tmp_error(self, msg: str) -> None:
         self._set_hmi_log(f"[TMP] {msg}")
+        self._render_tmp_status()
+
+    def _on_tmp_log(self, msg: str) -> None:
+        self._set_hmi_log(str(msg))
 
     def _on_tmp_button_toggled(self, on: bool) -> None:
         on_i = int(bool(on))
@@ -821,6 +880,17 @@ class HmiPlcBinder(QObject):
                     w.setEnabled(bool(enabled))
                 except Exception:
                     pass
+
+        # TMP 버튼은 별도 처리
+        tmp_btn = getattr(self.ui, "pushButton_13", None)
+        if tmp_btn is not None and hasattr(tmp_btn, "setEnabled"):
+            try:
+                # PLC가 연결되어 있어야 START 가능
+                # 단, TMP가 이미 도는 상태면 STOP은 가능하게 유지
+                tmp_enabled = bool(enabled) or self._tmp_ui_checked_from_snapshot()
+                tmp_btn.setEnabled(bool(tmp_enabled))
+            except Exception:
+                pass
 
     def _revert_button_to_plc(self, binding: ButtonBinding, fallback: Optional[bool] = None) -> None:
         w = getattr(self.ui, binding.widget_name, None)

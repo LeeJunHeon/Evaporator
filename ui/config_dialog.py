@@ -172,6 +172,11 @@ class ConfigDialog(QDialog):
         self.tabs.addTab(self.tab_acs, "ACS-2000")
         self.acs = self._build_serial_tab(self.tab_acs, with_eom=True)
 
+        # 4) TURBOVAC
+        self.tab_turbo = QWidget()
+        self.tabs.addTab(self.tab_turbo, "TMP (TURBOVAC)")
+        self.turbo = self._build_serial_tab(self.tab_turbo, with_eom=False)
+
         btn_row = QHBoxLayout()
         root.addLayout(btn_row)
         btn_row.addStretch(1)
@@ -260,6 +265,7 @@ class ConfigDialog(QDialog):
 
         self._load_serial_section("stm100", self.stm, defaults=dict(timeout_s=0.3, write_timeout_s=0.5))
         self._load_serial_section("acs2000", self.acs, defaults=dict(timeout_s=0.5, write_timeout_s=0.5))
+        self._load_serial_section("turbovac", self.turbo, defaults=dict(timeout_s=0.5, write_timeout_s=0.5))
 
         acs = self._cfg["acs2000"] if self._cfg.has_section("acs2000") else {}
         if hasattr(self, "acs_eom"):
@@ -309,6 +315,8 @@ class ConfigDialog(QDialog):
             self._save_serial(ed, "acs2000", self.acs)
             if hasattr(self, "acs_eom"):
                 ed.set("acs2000", "eom", self.acs_eom.currentText())
+
+            self._save_serial(ed, "turbovac", self.turbo)
 
             ed.save()
 

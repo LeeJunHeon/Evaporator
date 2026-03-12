@@ -46,6 +46,7 @@ class HmiWindow(QWidget):
         self._log_service: Any = None
         self._stm_service: Any = None
         self._acs_service: Any = None
+        self._turbovac_service: Any = None
 
         # Process 버튼: Process 창 앞으로 (기존 유지)
         self.ui.processBtn.clicked.connect(self.goto_process_window)
@@ -92,6 +93,7 @@ class HmiWindow(QWidget):
         log_service: Any = None,
         stm_service: Any = None,
         acs_service: Any = None,
+        turbovac_service: Any = None,
     ) -> None:
         """main()에서 만든 런타임 객체 주입(PLC/센서 재연결에 사용)"""
         self._plc_binder = plc_binder
@@ -101,6 +103,7 @@ class HmiWindow(QWidget):
         self._log_service = log_service
         self._stm_service = stm_service
         self._acs_service = acs_service
+        self._turbovac_service = turbovac_service
 
         # ✅ HMI 로그 위젯을 LogService에 연결 (일별 로그 저장)
         if self._log_service is not None and hasattr(self._log_service, "attach_text_widget"):
@@ -197,14 +200,26 @@ class HmiWindow(QWidget):
         except Exception as e:
             errors.append(f"ACS reconnect failed: {e}")
 
-        # ✅ 3) STM은 Start에서만(F.T.M ON 후) 연결 (기존 규칙 유지)
+        # ✅ 3) TMP(TURBOVAC)도 config 저장 시 즉시 reload 적용
+        try:
+            if self._turbovac_service is not None:
+                if hasattr(self._turbovac_service, "reload_from_ini"):
+                    self._turbovac_service.reload_from_ini(self._ini_path)
+                elif hasattr(self._turbovac_service, "reload_config"):
+                    self._turbovac_service.reload_config()
+                else:
+                    raise RuntimeError("TurbovacService에 reload_from_ini/reload_config가 없습니다.")
+        except Exception as e:
+            errors.append(f"TMP reconnect failed: {e}")
+
+        # ✅ 4) STM은 Start에서만(F.T.M ON 후) 연결 (기존 규칙 유지)
         if errors:
             QMessageBox.warning(self, "Reconnect", "일부 장비 재연결 실패:\n" + "\n".join(errors))
         else:
             QMessageBox.information(
                 self,
                 "Reconnect",
-                "저장 완료. (PLC/ACS 즉시 적용)\nSTM은 다음 Start에서 FTM ON 후 새로 연결됩니다.",
+                "저장 완료. (PLC/ACS/TMP 즉시 적용)\nSTM은 다음 Start에서 FTM ON 후 새로 연결됩니다.",
             )
 
     def _confirm_exit(self) -> bool:

@@ -330,6 +330,7 @@ def main():
         log_service=log_service,
         stm_service=stm_service,
         acs_service=acs_service,   # ✅ 부팅에서 만든 ACSService 주입
+        turbovac_service=turbovac_service,
     )
 
     # ✅ HMI 표시 (기존 유지)

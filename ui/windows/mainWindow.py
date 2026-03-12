@@ -146,13 +146,15 @@ class Ui_Form(object):
         # =========================
         self.tmpGroup = QGroupBox(self.hmiFooter)
         self.tmpGroup.setObjectName("tmpGroup")
-        self.tmpGroup.setGeometry(QRect(0, 0, 310, 130))
+        self.tmpGroup.setGeometry(QRect(0, 0, 330, 130))
         self.tmpGroup.setAutoFillBackground(True)
 
         self.tmpGroupLayout = QGridLayout(self.tmpGroup)
         self.tmpGroupLayout.setContentsMargins(6, 18, 8, 8)
         self.tmpGroupLayout.setHorizontalSpacing(6)
         self.tmpGroupLayout.setVerticalSpacing(6)
+        self.tmpGroupLayout.setColumnStretch(1, 1)
+        self.tmpGroupLayout.setColumnStretch(3, 1)
 
         # Row 0
         self.tmpConnLabel = QLabel(self.tmpGroup)
@@ -165,7 +167,8 @@ class Ui_Form(object):
         self.tmpConnEdit.setReadOnly(True)
         self.tmpConnEdit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.tmpConnEdit.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
-        self.tmpConnEdit.setFixedWidth(100)
+        self.tmpConnEdit.setFixedWidth(112)
+        self.tmpConnEdit.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.tmpGroupLayout.addWidget(self.tmpConnEdit, 0, 1)
 
         self.tmpStateLabel = QLabel(self.tmpGroup)
@@ -178,7 +181,8 @@ class Ui_Form(object):
         self.tmpStateEdit.setReadOnly(True)
         self.tmpStateEdit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.tmpStateEdit.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
-        self.tmpStateEdit.setFixedWidth(100)
+        self.tmpStateEdit.setFixedWidth(112)
+        self.tmpStateEdit.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.tmpGroupLayout.addWidget(self.tmpStateEdit, 0, 3)
 
         # Row 1
@@ -193,6 +197,7 @@ class Ui_Form(object):
         self.tmpFreqEdit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.tmpFreqEdit.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
         self.tmpFreqEdit.setFixedWidth(100)
+        self.tmpFreqEdit.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.tmpGroupLayout.addWidget(self.tmpFreqEdit, 1, 1)
 
         self.tmpCurrentLabel = QLabel(self.tmpGroup)
@@ -206,6 +211,7 @@ class Ui_Form(object):
         self.tmpCurrentEdit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.tmpCurrentEdit.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
         self.tmpCurrentEdit.setFixedWidth(100)
+        self.tmpCurrentEdit.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.tmpGroupLayout.addWidget(self.tmpCurrentEdit, 1, 3)
 
         # Row 2
@@ -220,6 +226,7 @@ class Ui_Form(object):
         self.tmpTempEdit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.tmpTempEdit.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
         self.tmpTempEdit.setFixedWidth(100)
+        self.tmpTempEdit.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.tmpGroupLayout.addWidget(self.tmpTempEdit, 2, 1)
 
         self.tmpAlarmLabel = QLabel(self.tmpGroup)
@@ -233,6 +240,7 @@ class Ui_Form(object):
         self.tmpAlarmEdit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.tmpAlarmEdit.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
         self.tmpAlarmEdit.setFixedWidth(100)
+        self.tmpAlarmEdit.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.tmpGroupLayout.addWidget(self.tmpAlarmEdit, 2, 3)
 
         # =========================
@@ -244,7 +252,7 @@ class Ui_Form(object):
         # =========================
         self.dacGroup = QGroupBox(self.hmiFooter)
         self.dacGroup.setObjectName("dacGroup")
-        self.dacGroup.setGeometry(QRect(320, 0, 340, 130))
+        self.dacGroup.setGeometry(QRect(340, 0, 340, 130))
         self.dacGroup.setAutoFillBackground(True)
 
         self.dacGroupLayout = QVBoxLayout(self.dacGroup)

@@ -112,6 +112,8 @@ class ConfigDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Config")
         self.setModal(True)
+        self.resize(820, 430)
+        self.setMinimumWidth(820)
 
         self.ini_path = Path(ini_path)
         self.on_saved = on_saved
@@ -127,6 +129,8 @@ class ConfigDialog(QDialog):
         root = QVBoxLayout(self)
 
         self.tabs = QTabWidget()
+        self.tabs.setUsesScrollButtons(False)
+        self.tabs.tabBar().setElideMode(Qt.TextElideMode.ElideNone)
         root.addWidget(self.tabs)
 
         # 1) PLC

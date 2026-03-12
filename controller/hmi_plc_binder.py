@@ -427,6 +427,8 @@ class HmiPlcBinder(QObject):
                 w.setPlainText(str(text))
             elif hasattr(w, "setText"):
                 w.setText(str(text))
+                if hasattr(w, "setCursorPosition"):
+                    w.setCursorPosition(0)
         except Exception:
             pass
 
@@ -514,7 +516,6 @@ class HmiPlcBinder(QObject):
             self._set_hmi_log(f"[STATE] TMP -> {int(now_checked)}")
 
     def _on_tmp_error(self, msg: str) -> None:
-        self._set_hmi_log(f"[TMP] {msg}")
         self._render_tmp_status()
 
     def _on_tmp_log(self, msg: str) -> None:

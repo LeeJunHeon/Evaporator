@@ -100,8 +100,8 @@ class TurbovacService(QObject):
             "bytesize": sec.getint("bytesize", fallback=8),
             "parity": sec.get("parity", "E").strip().upper(),
             "stopbits": sec.getint("stopbits", fallback=1),
-            "timeout": sec.getfloat("timeout_s", fallback=0.5),
-            "write_timeout": sec.getfloat("write_timeout_s", fallback=0.5),
+            "timeout_s": sec.getfloat("timeout_s", fallback=0.5),
+            "write_timeout_s": sec.getfloat("write_timeout_s", fallback=0.5),
             "rtscts": sec.getboolean("rtscts", fallback=False),
             "dsrdtr": sec.getboolean("dsrdtr", fallback=False),
         }
@@ -403,8 +403,8 @@ class TurbovacService(QObject):
             bytesize=self._cfg["bytesize"],
             parity=self._cfg["parity"],
             stopbits=self._cfg["stopbits"],
-            timeout=self._cfg["timeout"],
-            write_timeout=self._cfg["write_timeout"],
+            timeout_s=self._cfg["timeout_s"],
+            write_timeout_s=self._cfg["write_timeout_s"],
             rtscts=self._cfg["rtscts"],
             dsrdtr=self._cfg["dsrdtr"],
         )

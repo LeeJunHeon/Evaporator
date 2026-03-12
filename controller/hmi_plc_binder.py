@@ -84,6 +84,15 @@ class HmiPlcBinder(QObject):
         self._tmp_connected: bool = False
         self._tmp_last_snapshot: Dict[str, Any] = {}
 
+        # TMP command 상태 (예전 PLC의 Turbo_SW 역할)
+        self._tmp_cmd_on: bool = False
+
+        # FV OFF + TMP command ON -> 12초 후 TMP STOP
+        self._tmp_fv_off_timer = QTimer(self)
+        self._tmp_fv_off_timer.setSingleShot(True)
+        self._tmp_fv_off_timer.setInterval(12000)
+        self._tmp_fv_off_timer.timeout.connect(self._on_tmp_fv_off_timeout)
+
         # (선택) 초기 표시
         self._render_status_line()
 
@@ -365,6 +374,50 @@ class HmiPlcBinder(QObject):
     def _revert_tmp_button_to_service(self) -> None:
         self._apply_tmp_button_from_snapshot()
 
+    def _update_tmp_fv_off_timer(self) -> None:
+        """
+        예전 PLC의 T0006 대체:
+        TMP command가 ON인데 FV가 OFF이면 12초 타이머 시작
+        조건이 해제되면 타이머 취소
+        """
+        fv_on = self._get_state_locked("F_V_SW", False)
+        should_run = bool(self._tmp_cmd_on) and (not fv_on)
+
+        if should_run:
+            if not self._tmp_fv_off_timer.isActive():
+                self._tmp_fv_off_timer.start()
+                self._set_hmi_log("[TMP TIMER] FV OFF + TMP ON -> 12s timer start")
+        else:
+            if self._tmp_fv_off_timer.isActive():
+                self._tmp_fv_off_timer.stop()
+                self._set_hmi_log("[TMP TIMER] cancelled")
+
+
+    def _on_tmp_fv_off_timeout(self) -> None:
+        """
+        12초 후 다시 조건 확인하고, 여전히 TMP command ON + FV OFF이면 TMP STOP
+        """
+        fv_on = self._get_state_locked("F_V_SW", False)
+        if (not self._tmp_cmd_on) or fv_on:
+            return
+
+        svc = self._turbovac_service
+        if svc is None:
+            self._set_hmi_log("[TMP TIMER] timeout but TMP service not set")
+            return
+
+        # MV 열려 있으면 타이머로 인한 STOP도 차단
+        if self._get_state_locked("M_V_SW", False):
+            self._set_hmi_log("[TMP TIMER] timeout but MV is ON -> TMP STOP blocked")
+            return
+
+        try:
+            svc.stop_pump()
+            self._tmp_cmd_on = False
+            self._set_hmi_log("[TMP TIMER] FV OFF 12s -> TMP STOP")
+        except Exception as e:
+            self._set_hmi_log(f"[TMP TIMER][FAIL] TMP STOP: {e!r}")
+
     def _set_tmp_field(self, widget_name: str, text: str) -> None:
         w = getattr(self.ui, widget_name, None)
         if w is None:
@@ -523,6 +576,8 @@ class HmiPlcBinder(QObject):
 
             try:
                 svc.start_pump()
+                self._tmp_cmd_on = True
+                self._update_tmp_fv_off_timer()
                 self._set_hmi_log("[UI] TMP START")
             except Exception as e:
                 self._set_hmi_log(f"[FAIL] TMP START: {e!r}")
@@ -533,6 +588,12 @@ class HmiPlcBinder(QObject):
         # -----------------------------
         # TMP STOP
         # -----------------------------
+        if self._get_state_locked("M_V_SW", False):
+            self._set_hmi_log("[BLOCK] TMP STOP (M_V ON)")
+            self._popup_warn("인터락", "Main Valve(MV)가 열려 있어 TMP를 정지할 수 없습니다.\nMV를 먼저 닫아주세요.")
+            self._revert_tmp_button_to_service()
+            return
+        
         if not self._tmp_connected:
             self._set_hmi_log("[BLOCK] TMP STOP (TMP not connected)")
             self._popup_warn("TMP 미연결", "TMP가 연결되지 않아 STOP을 전송할 수 없습니다.")
@@ -541,6 +602,8 @@ class HmiPlcBinder(QObject):
 
         try:
             svc.stop_pump()
+            self._tmp_cmd_on = False
+            self._update_tmp_fv_off_timer()
             self._set_hmi_log("[UI] TMP STOP")
         except Exception as e:
             self._set_hmi_log(f"[FAIL] TMP STOP: {e!r}")
@@ -646,6 +709,8 @@ class HmiPlcBinder(QObject):
         if self._turbovac_service is not None:
             try:
                 self._turbovac_service.stop_pump()
+                self._tmp_cmd_on = False
+                self._update_tmp_fv_off_timer()
                 self._set_hmi_log("[UI] TMP STOP sent (ALL STOP)")
             except Exception as e:
                 self._set_hmi_log(f"[WARN] TMP STOP failed in ALL STOP: {e!r}")
@@ -749,6 +814,8 @@ class HmiPlcBinder(QObject):
 
     def _apply_states(self, states_obj: object) -> None:
         states: Dict[str, bool] = dict(states_obj or {})
+
+        self._update_tmp_fv_off_timer()
 
         # ✅ 이전값 보관 후 갱신
         with self._state_lock:

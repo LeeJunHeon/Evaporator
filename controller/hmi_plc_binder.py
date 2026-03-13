@@ -88,15 +88,6 @@ class HmiPlcBinder(QObject):
         # TMP service thread를 이미 시작했는지
         self._tmp_service_started: bool = False
 
-        # TMP ON은 눌렀지만 아직 연결 전이라, 연결되면 start를 보내야 하는 상태
-        self._tmp_start_pending: bool = False
-
-        # PLC TMP_SW ON 후 실제 TMP START를 약간 지연해서 보낸다.
-        self._tmp_start_delay_timer = QTimer(self)
-        self._tmp_start_delay_timer.setSingleShot(True)
-        self._tmp_start_delay_timer.setInterval(5000)
-        self._tmp_start_delay_timer.timeout.connect(self._on_tmp_start_delay_timeout)
-
         # (선택) 초기 표시
         self._render_status_line()
 
@@ -143,7 +134,6 @@ class HmiPlcBinder(QObject):
         self._tmp_connected = False
         self._tmp_last_snapshot = {}
         self._tmp_service_started = False
-        self._tmp_start_pending = False
 
         if svc is None:
             self.set_external_connected("TMP", False)
@@ -331,6 +321,16 @@ class HmiPlcBinder(QObject):
 
             w.toggled.connect(lambda on, bb=b: self._on_button_toggled(bb, on))
 
+        tmp_start_btn = getattr(self.ui, "tmpStartBtn", None)
+        if tmp_start_btn is None:
+            raise AttributeError("UI 위젯 누락: tmpStartBtn")
+        tmp_start_btn.clicked.connect(self._on_tmp_start_clicked)
+
+        tmp_stop_btn = getattr(self.ui, "tmpStopBtn", None)
+        if tmp_stop_btn is None:
+            raise AttributeError("UI 위젯 누락: tmpStopBtn")
+        tmp_stop_btn.clicked.connect(self._on_tmp_stop_clicked)
+
         all_stop = getattr(self.ui, "allstopBtn", None)
         if all_stop is not None:
             all_stop.clicked.connect(self._on_all_stop_clicked)
@@ -338,14 +338,6 @@ class HmiPlcBinder(QObject):
     def _get_state_locked(self, coil: str, default: bool = False) -> bool:
         with self._state_lock:
             return bool(self._last_states.get(coil, default))
-        
-    def _cancel_tmp_start_delay(self) -> None:
-        self._tmp_start_pending = False
-        try:
-            if self._tmp_start_delay_timer.isActive():
-                self._tmp_start_delay_timer.stop()
-        except Exception:
-            pass
 
     def _ensure_tmp_service_started(self) -> bool:
         svc = self._turbovac_service
@@ -366,35 +358,6 @@ class HmiPlcBinder(QObject):
             self._set_hmi_log(f"[FAIL] TMP service start: {e!r}")
             self._popup_warn("TMP 시작 실패", f"TMP service 시작 실패: {e!r}")
             return False
-
-    def _on_tmp_start_delay_timeout(self) -> None:
-        svc = self._turbovac_service
-
-        # 지연 중 사용자가 다시 껐으면 아무것도 하지 않음
-        if not self.read_coil("TMP_SW", False):
-            self._set_hmi_log("[TMP] delayed start cancelled (TMP_SW already OFF)")
-            return
-
-        if svc is None:
-            self._set_hmi_log("[FAIL] TMP delayed start: service not set")
-            self._popup_warn("TMP 미설정", "TMP 서비스가 설정되지 않아 START를 보낼 수 없습니다.")
-            self._plc.enqueue_write_coil("TMP_SW", False, tag="HMI:TMP_SW_ROLLBACK")
-            return
-
-        ok, reason = self._call_tmp_helper("check_tmp_ready_for_start")
-        if not ok:
-            self._set_hmi_log(f"[FAIL] TMP delayed start blocked ({reason})")
-            self._popup_warn("TMP 인터락", reason)
-            self._plc.enqueue_write_coil("TMP_SW", False, tag="HMI:TMP_SW_ROLLBACK")
-            return
-
-        try:
-            svc.start_pump()
-            self._set_hmi_log("[UI] TMP START sent after 5s PLC delay")
-        except Exception as e:
-            self._set_hmi_log(f"[FAIL] TMP delayed start: {e!r}")
-            self._popup_warn("TMP 전송 실패", f"TMP START 실패: {e!r}")
-            self._plc.enqueue_write_coil("TMP_SW", False, tag="HMI:TMP_SW_ROLLBACK")
 
     def _set_tmp_field(self, widget_name: str, text: str) -> None:
         w = getattr(self.ui, widget_name, None)
@@ -475,14 +438,6 @@ class HmiPlcBinder(QObject):
         if prev != self._tmp_connected:
             self._set_hmi_log("TMP CONNECTED" if self._tmp_connected else "TMP DISCONNECTED")
 
-        # TMP ON 요청이 이미 들어온 상태라면,
-        # 연결 완료 후에야 delayed start를 시작한다.
-        if self._tmp_connected and self._tmp_start_pending and self.read_coil("TMP_SW", False):
-            self._tmp_start_pending = False
-            self._cancel_tmp_start_delay()
-            self._tmp_start_delay_timer.start()
-            self._set_hmi_log("[TMP] connected -> TMP START scheduled after 5s")
-
     def _on_tmp_snapshot(self, snap_obj: object) -> None:
         snap = dict(snap_obj or {})
         self._tmp_last_snapshot = snap
@@ -509,90 +464,27 @@ class HmiPlcBinder(QObject):
             self._revert_button_to_plc(binding, fallback=not bool(on))
             return
 
-        # -------------------------------------------------
-        # TMP_SW 특수 처리
-        # -------------------------------------------------
         if binding.coil_name == "TMP_SW":
-            svc = self._turbovac_service
-
-            # TMP ON
-            if bool(on):
-                if svc is None:
-                    self._set_hmi_log("[BLOCK] TMP_SW <- 1 (TMP service not set)")
-                    self._popup_warn("TMP 미설정", "TMP 서비스가 연결되지 않았습니다.")
-                    self._revert_button_to_plc(binding, fallback=False)
-                    return
-
-                if not self.get_states():
-                    self._set_hmi_log("[BLOCK] TMP_SW <- 1 (PLC state not ready)")
-                    self._popup_warn("인터락", "PLC 상태를 아직 읽지 못했습니다.\n잠시 후 다시 시도하세요.")
-                    self._revert_button_to_plc(binding, fallback=False)
-                    return
-
-                # 1) 먼저 PLC Turbo ON
-                self._plc.enqueue_write_coil(
-                    "TMP_SW",
-                    True,
-                    momentary=False,
-                    pulse_ms=None,
-                    tag="HMI:TMP_SW",
-                )
-
-                # 2) TMP service thread 시작
-                if not self._ensure_tmp_service_started():
-                    try:
-                        self._plc.enqueue_write_coil(
-                            "TMP_SW",
-                            False,
-                            momentary=False,
-                            pulse_ms=None,
-                            tag="HMI:TMP_SW_ROLLBACK",
-                        )
-                    except Exception:
-                        pass
-                    self._revert_button_to_plc(binding, fallback=False)
-                    return
-
-                # 3) 이미 연결돼 있으면 바로 delayed start,
-                #    아직 연결 전이면 연결 완료 시점에 delayed start
-                self._cancel_tmp_start_delay()
-                if self._tmp_connected:
-                    self._tmp_start_delay_timer.start()
-                    self._set_hmi_log("[UI] TMP_SW <- 1 (PLC ON, TMP START scheduled after 5s)")
-                else:
-                    self._tmp_start_pending = True
-                    self._set_hmi_log("[UI] TMP_SW <- 1 (PLC ON, waiting for TMP connection)")
+            if not self.get_states():
+                self._set_hmi_log(f"[BLOCK] TMP_SW <- {on_i} (PLC state not ready)")
+                self._popup_warn("인터락", "PLC 상태를 아직 읽지 못했습니다.\n잠시 후 다시 시도하세요.")
+                self._revert_button_to_plc(binding, fallback=not bool(on))
                 return
 
-            # TMP OFF
-            if self._get_state_locked("M_V_SW", False):
+            if (not bool(on)) and self._get_state_locked("M_V_SW", False):
                 self._set_hmi_log("[BLOCK] TMP_SW <- 0 (M_V ON)")
-                self._popup_warn("인터락", "Main Valve(MV)가 열려 있어 TMP를 정지할 수 없습니다.\nMV를 먼저 닫아주세요.")
+                self._popup_warn("인터락", "Main Valve(MV)가 열려 있어 TMP 전원을 끌 수 없습니다.\nMV를 먼저 닫아주세요.")
                 self._revert_button_to_plc(binding, fallback=True)
                 return
 
-            # 예약된 delayed start 취소
-            self._cancel_tmp_start_delay()
-
-            # 실제 TMP STOP 먼저 전송
-            if svc is not None and self._tmp_connected:
-                try:
-                    svc.stop_pump()
-                    self._set_hmi_log("[UI] TMP STOP sent")
-                except Exception as e:
-                    self._set_hmi_log(f"[WARN] TMP STOP failed before PLC OFF: {e!r}")
-            else:
-                self._set_hmi_log("[WARN] TMP STOP skipped (service not connected)")
-
-            # 그 다음 PLC Turbo OFF
             self._plc.enqueue_write_coil(
                 "TMP_SW",
-                False,
+                bool(on),
                 momentary=False,
                 pulse_ms=None,
                 tag="HMI:TMP_SW",
             )
-            self._set_hmi_log("[UI] TMP_SW <- 0")
+            self._set_hmi_log(f"[UI] TMP_SW <- {on_i}")
             return
 
         # Door 인터락(기존 유지) + 차단 사유도 하단 로그로
@@ -680,9 +572,7 @@ class HmiPlcBinder(QObject):
             self._popup_warn("PLC 미연결", "PLC가 연결되지 않아 ALL STOP을 전송할 수 없습니다.")
             return
         
-        # ✅ TMP는 PLC가 아니라 TurbovacService로 직접 정지
-        self._cancel_tmp_start_delay()
-
+        # ✅ ALL STOP에서는 TMP 장비 정지 + PLC TMP OFF 둘 다 수행
         if self._turbovac_service is not None:
             try:
                 self._turbovac_service.stop_pump()
@@ -705,6 +595,61 @@ class HmiPlcBinder(QObject):
 
         # ✅ 상단 상태라인은 건드리지 않고, 하단 로그만 남김
         self._set_hmi_log("[UI] ALL STOP sent (MAIN_SHUTTER close + DAC=0 + POWER OFF + others OFF)")
+
+    def _on_tmp_start_clicked(self) -> None:
+        svc = self._turbovac_service
+        if svc is None:
+            self._popup_warn("TMP 미설정", "TMP 서비스가 설정되지 않았습니다.")
+            return
+
+        if not self.read_coil("TMP_SW", False):
+            self._set_hmi_log("[BLOCK] TMP START (TMP_SW OFF)")
+            self._popup_warn("인터락", "PLC TMP 전원이 OFF 상태입니다.\n먼저 T.M.P 버튼으로 전원을 켜주세요.")
+            return
+
+        if not self._ensure_tmp_service_started():
+            return
+
+        if not self._tmp_connected:
+            self._set_hmi_log("[BLOCK] TMP START (TMP not connected yet)")
+            self._popup_warn("TMP 연결 대기", "TMP 연결 중입니다.\nConn이 CONNECTED로 바뀐 후 Start를 다시 눌러주세요.")
+            return
+
+        ok, reason = self._call_tmp_helper("check_tmp_ready_for_start")
+        if not ok:
+            self._set_hmi_log(f"[BLOCK] TMP START ({reason})")
+            self._popup_warn("TMP 인터락", reason)
+            return
+
+        try:
+            svc.start_pump()
+            self._set_hmi_log("[UI] TMP START sent")
+        except Exception as e:
+            self._set_hmi_log(f"[FAIL] TMP START: {e!r}")
+            self._popup_warn("TMP 전송 실패", f"TMP START 실패: {e!r}")
+
+    def _on_tmp_stop_clicked(self) -> None:
+        svc = self._turbovac_service
+        if svc is None:
+            self._popup_warn("TMP 미설정", "TMP 서비스가 설정되지 않았습니다.")
+            return
+
+        if self._get_state_locked("M_V_SW", False):
+            self._set_hmi_log("[BLOCK] TMP STOP (M_V ON)")
+            self._popup_warn("인터락", "Main Valve(MV)가 열려 있어 TMP를 정지할 수 없습니다.\nMV를 먼저 닫아주세요.")
+            return
+
+        if not self._tmp_connected:
+            self._set_hmi_log("[BLOCK] TMP STOP (TMP not connected)")
+            self._popup_warn("TMP 미연결", "TMP가 아직 연결되지 않았습니다.")
+            return
+
+        try:
+            svc.stop_pump()
+            self._set_hmi_log("[UI] TMP STOP sent")
+        except Exception as e:
+            self._set_hmi_log(f"[FAIL] TMP STOP: {e!r}")
+            self._popup_warn("TMP 전송 실패", f"TMP STOP 실패: {e!r}")
 
     # ============================================================
     # PLCService signals → UI apply
@@ -914,6 +859,7 @@ class HmiPlcBinder(QObject):
         for w in (
             getattr(self, "_dac1_spin", None), getattr(self, "_dac1_set_btn", None), getattr(self, "_dac1_reset_btn", None),
             getattr(self, "_dac2_spin", None), getattr(self, "_dac2_set_btn", None), getattr(self, "_dac2_reset_btn", None),
+            getattr(self.ui, "tmpStartBtn", None), getattr(self.ui, "tmpStopBtn", None),
         ):
             if w is not None and hasattr(w, "setEnabled"):
                 try:

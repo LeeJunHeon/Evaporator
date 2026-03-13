@@ -43,7 +43,7 @@ class Ui_Form(object):
         # =========================
         self.hmiFooter = QWidget(Form)
         self.hmiFooter.setObjectName("hmiFooter")
-        self.hmiFooter.setGeometry(QRect(20, 705, 680, 140))
+        self.hmiFooter.setGeometry(QRect(20, 705, 680, 150))
         self.hmiFooter.setAutoFillBackground(False)
 
         # =========================
@@ -139,14 +139,14 @@ class Ui_Form(object):
         self.mainshutterBtn.setGeometry(QRect(430, 250, 101, 71))
 
         # =========================
-        # Turbo status (HMI display only)
-        # - Start/Stop은 기존 TMP 버튼(pushButton_13) 사용
-        # - 상세 설정은 Config 팝업에서 처리
-        # - 여기서는 현재 상태만 표시
+        # Turbo status
+        # - TMP 상태 표시
+        # - Start / Stop 버튼으로 실제 TMP 장비 명령 전송
+        # - 상단 TMP 버튼(pushButton_13)은 PLC TMP coil만 제어
         # =========================
         self.tmpGroup = QGroupBox(self.hmiFooter)
         self.tmpGroup.setObjectName("tmpGroup")
-        self.tmpGroup.setGeometry(QRect(0, 0, 310, 130))
+        self.tmpGroup.setGeometry(QRect(0, 0, 310, 140))
         self.tmpGroup.setAutoFillBackground(True)
 
         self.tmpGroupLayout = QGridLayout(self.tmpGroup)
@@ -235,6 +235,21 @@ class Ui_Form(object):
         self.tmpAlarmEdit.setFixedWidth(100)
         self.tmpGroupLayout.addWidget(self.tmpAlarmEdit, 2, 3)
 
+        # Row 3 : TMP command buttons
+        tmp_btn_h = self.tmpConnEdit.sizeHint().height()
+
+        self.tmpStartBtn = QPushButton(self.tmpGroup)
+        self.tmpStartBtn.setObjectName("tmpStartBtn")
+        self.tmpStartBtn.setAutoDefault(False)
+        self.tmpStartBtn.setFixedHeight(tmp_btn_h)
+        self.tmpGroupLayout.addWidget(self.tmpStartBtn, 3, 0, 1, 2)
+
+        self.tmpStopBtn = QPushButton(self.tmpGroup)
+        self.tmpStopBtn.setObjectName("tmpStopBtn")
+        self.tmpStopBtn.setAutoDefault(False)
+        self.tmpStopBtn.setFixedHeight(tmp_btn_h)
+        self.tmpGroupLayout.addWidget(self.tmpStopBtn, 3, 2, 1, 2)
+
         # =========================
         # DAC manual set (Power1/Power2)
         # - Turbo Status와 같은 "박스형" 느낌으로 맞추기 위해
@@ -244,7 +259,7 @@ class Ui_Form(object):
         # =========================
         self.dacGroup = QGroupBox(self.hmiFooter)
         self.dacGroup.setObjectName("dacGroup")
-        self.dacGroup.setGeometry(QRect(320, 0, 340, 130))
+        self.dacGroup.setGeometry(QRect(320, 0, 340, 140))
         self.dacGroup.setAutoFillBackground(True)
 
         self.dacGroupLayout = QVBoxLayout(self.dacGroup)
@@ -845,6 +860,9 @@ class Ui_Form(object):
         self.tmpTempEdit.setText(QCoreApplication.translate("Form", "- °C", None))
         self.tmpAlarmEdit.setText(QCoreApplication.translate("Form", "-", None))
 
+        self.tmpStartBtn.setText(QCoreApplication.translate("Form", "Start", None))
+        self.tmpStopBtn.setText(QCoreApplication.translate("Form", "Stop", None))
+
         # DAC 수동 입력
         self.dacGroup.setTitle(QCoreApplication.translate("Form", "Power Manual", None))
         self.dac1Label.setText(QCoreApplication.translate("Form", "Power 1", None))
@@ -1067,7 +1085,11 @@ class Ui_Form(object):
         self.tmpGroup.setStyleSheet(footer_group_qss)
         self.dacGroup.setStyleSheet(footer_group_qss)
 
-        for b in (self.dac1SetBtn, self.dac1ResetBtn, self.dac2SetBtn, self.dac2ResetBtn):
+        for b in (
+            self.dac1SetBtn, self.dac1ResetBtn, 
+            self.dac2SetBtn, self.dac2ResetBtn,
+            self.tmpStartBtn, self.tmpStopBtn,
+        ):
             b.setStyleSheet(footer_action_btn_qss)
 
         footer_font = self.tmpConnEdit.font()
@@ -1078,6 +1100,7 @@ class Ui_Form(object):
             self.dacActual1Edit, self.dacActual2Edit,
             self.dac1SetBtn, self.dac1ResetBtn,
             self.dac2SetBtn, self.dac2ResetBtn,
+            self.tmpStartBtn, self.tmpStopBtn,
         ):
             w.setFont(footer_font)
 

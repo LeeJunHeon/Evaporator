@@ -85,6 +85,12 @@ class HmiPlcBinder(QObject):
         self._tmp_connected: bool = False
         self._tmp_last_snapshot: Dict[str, Any] = {}
 
+        # TMP service thread를 이미 시작했는지
+        self._tmp_service_started: bool = False
+
+        # TMP ON은 눌렀지만 아직 연결 전이라, 연결되면 start를 보내야 하는 상태
+        self._tmp_start_pending: bool = False
+
         # PLC TMP_SW ON 후 실제 TMP START를 약간 지연해서 보낸다.
         self._tmp_start_delay_timer = QTimer(self)
         self._tmp_start_delay_timer.setSingleShot(True)
@@ -136,6 +142,8 @@ class HmiPlcBinder(QObject):
         self._turbovac_service = svc
         self._tmp_connected = False
         self._tmp_last_snapshot = {}
+        self._tmp_service_started = False
+        self._tmp_start_pending = False
 
         if svc is None:
             self.set_external_connected("TMP", False)
@@ -332,12 +340,32 @@ class HmiPlcBinder(QObject):
             return bool(self._last_states.get(coil, default))
         
     def _cancel_tmp_start_delay(self) -> None:
+        self._tmp_start_pending = False
         try:
             if self._tmp_start_delay_timer.isActive():
                 self._tmp_start_delay_timer.stop()
         except Exception:
             pass
 
+    def _ensure_tmp_service_started(self) -> bool:
+        svc = self._turbovac_service
+        if svc is None:
+            self._set_hmi_log("[BLOCK] TMP service not set")
+            self._popup_warn("TMP 미설정", "TMP 서비스가 연결되지 않았습니다.")
+            return False
+
+        if self._tmp_service_started:
+            return True
+
+        try:
+            svc.start()
+            self._tmp_service_started = True
+            self._set_hmi_log("[TMP] service start requested")
+            return True
+        except Exception as e:
+            self._set_hmi_log(f"[FAIL] TMP service start: {e!r}")
+            self._popup_warn("TMP 시작 실패", f"TMP service 시작 실패: {e!r}")
+            return False
 
     def _on_tmp_start_delay_timeout(self) -> None:
         svc = self._turbovac_service
@@ -362,7 +390,7 @@ class HmiPlcBinder(QObject):
 
         try:
             svc.start_pump()
-            self._set_hmi_log("[UI] TMP START sent after 3s PLC delay")
+            self._set_hmi_log("[UI] TMP START sent after 5s PLC delay")
         except Exception as e:
             self._set_hmi_log(f"[FAIL] TMP delayed start: {e!r}")
             self._popup_warn("TMP 전송 실패", f"TMP START 실패: {e!r}")
@@ -447,6 +475,14 @@ class HmiPlcBinder(QObject):
         if prev != self._tmp_connected:
             self._set_hmi_log("TMP CONNECTED" if self._tmp_connected else "TMP DISCONNECTED")
 
+        # TMP ON 요청이 이미 들어온 상태라면,
+        # 연결 완료 후에야 delayed start를 시작한다.
+        if self._tmp_connected and self._tmp_start_pending and self.read_coil("TMP_SW", False):
+            self._tmp_start_pending = False
+            self._cancel_tmp_start_delay()
+            self._tmp_start_delay_timer.start()
+            self._set_hmi_log("[TMP] connected -> TMP START scheduled after 5s")
+
     def _on_tmp_snapshot(self, snap_obj: object) -> None:
         snap = dict(snap_obj or {})
         self._tmp_last_snapshot = snap
@@ -502,11 +538,30 @@ class HmiPlcBinder(QObject):
                     tag="HMI:TMP_SW",
                 )
 
-                # 2) 3초 뒤 실제 TMP START 예약
-                self._cancel_tmp_start_delay()
-                self._tmp_start_delay_timer.start()
+                # 2) TMP service thread 시작
+                if not self._ensure_tmp_service_started():
+                    try:
+                        self._plc.enqueue_write_coil(
+                            "TMP_SW",
+                            False,
+                            momentary=False,
+                            pulse_ms=None,
+                            tag="HMI:TMP_SW_ROLLBACK",
+                        )
+                    except Exception:
+                        pass
+                    self._revert_button_to_plc(binding, fallback=False)
+                    return
 
-                self._set_hmi_log("[UI] TMP_SW <- 1 (PLC ON, TMP START scheduled after 3s)")
+                # 3) 이미 연결돼 있으면 바로 delayed start,
+                #    아직 연결 전이면 연결 완료 시점에 delayed start
+                self._cancel_tmp_start_delay()
+                if self._tmp_connected:
+                    self._tmp_start_delay_timer.start()
+                    self._set_hmi_log("[UI] TMP_SW <- 1 (PLC ON, TMP START scheduled after 5s)")
+                else:
+                    self._tmp_start_pending = True
+                    self._set_hmi_log("[UI] TMP_SW <- 1 (PLC ON, waiting for TMP connection)")
                 return
 
             # TMP OFF

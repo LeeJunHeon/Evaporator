@@ -1015,9 +1015,20 @@ class HmiPlcBinder(QObject):
 
         # DAC 수동 컨트롤
         for w in (
-            getattr(self, "_dac1_spin", None), getattr(self, "_dac1_set_btn", None), getattr(self, "_dac1_reset_btn", None),
-            getattr(self, "_dac2_spin", None), getattr(self, "_dac2_set_btn", None), getattr(self, "_dac2_reset_btn", None),
-            getattr(self.ui, "tmpStartBtn", None), getattr(self.ui, "tmpStopBtn", None),
+            getattr(self, "_dac1_spin", None),
+            getattr(self, "_dac1_down100_btn", None),
+            getattr(self, "_dac1_up100_btn", None),
+            getattr(self, "_dac1_set_btn", None),
+            getattr(self, "_dac1_reset_btn", None),
+
+            getattr(self, "_dac2_spin", None),
+            getattr(self, "_dac2_down100_btn", None),
+            getattr(self, "_dac2_up100_btn", None),
+            getattr(self, "_dac2_set_btn", None),
+            getattr(self, "_dac2_reset_btn", None),
+
+            getattr(self.ui, "tmpStartBtn", None),
+            getattr(self.ui, "tmpStopBtn", None),
         ):
             if w is not None and hasattr(w, "setEnabled"):
                 try:
@@ -1150,11 +1161,15 @@ class HmiPlcBinder(QObject):
         lo, hi = off, off + fs
 
         self._dac1_spin = getattr(self.ui, "dac1Spin", None)
+        self._dac1_down100_btn = getattr(self.ui, "dac1Down100Btn", None)
+        self._dac1_up100_btn = getattr(self.ui, "dac1Up100Btn", None)
         self._dac1_set_btn = getattr(self.ui, "dac1SetBtn", None)
         self._dac1_reset_btn = getattr(self.ui, "dac1ResetBtn", None)
         self._dac1_actual = getattr(self.ui, "dacActual1Edit", None)
 
         self._dac2_spin = getattr(self.ui, "dac2Spin", None)
+        self._dac2_down100_btn = getattr(self.ui, "dac2Down100Btn", None)
+        self._dac2_up100_btn = getattr(self.ui, "dac2Up100Btn", None)
         self._dac2_set_btn = getattr(self.ui, "dac2SetBtn", None)
         self._dac2_reset_btn = getattr(self.ui, "dac2ResetBtn", None)
         self._dac2_actual = getattr(self.ui, "dacActual2Edit", None)
@@ -1167,11 +1182,19 @@ class HmiPlcBinder(QObject):
                 except Exception:
                     pass
 
+        if self._dac1_down100_btn is not None:
+            self._dac1_down100_btn.clicked.connect(lambda: self._on_step_dac_code(1, -100))
+        if self._dac1_up100_btn is not None:
+            self._dac1_up100_btn.clicked.connect(lambda: self._on_step_dac_code(1, +100))
         if self._dac1_set_btn is not None:
             self._dac1_set_btn.clicked.connect(lambda: self._on_apply_dac_code(1))
         if self._dac1_reset_btn is not None:
             self._dac1_reset_btn.clicked.connect(lambda: self._on_reset_dac(1))
 
+        if self._dac2_down100_btn is not None:
+            self._dac2_down100_btn.clicked.connect(lambda: self._on_step_dac_code(2, -100))
+        if self._dac2_up100_btn is not None:
+            self._dac2_up100_btn.clicked.connect(lambda: self._on_step_dac_code(2, +100))
         if self._dac2_set_btn is not None:
             self._dac2_set_btn.clicked.connect(lambda: self._on_apply_dac_code(2))
         if self._dac2_reset_btn is not None:
@@ -1192,6 +1215,29 @@ class HmiPlcBinder(QObject):
             pass
 
         self._apply_dac_code(ch, 0)
+
+    def _on_step_dac_code(self, ch: int, delta: int) -> None:
+        sp = self._dac1_spin if int(ch) == 1 else self._dac2_spin
+        if sp is None:
+            self._popup_warn("UI 오류", "DAC 입력 위젯(QSpinBox)을 찾지 못했습니다.")
+            return
+
+        try:
+            cur = int(sp.value())
+        except Exception:
+            self._popup_warn("입력 오류", "현재 DAC 값 읽기 실패")
+            return
+
+        new_v = int(cur) + int(delta)
+
+        # 버튼 누른 즉시 입력칸(QSpinBox)에 증가/감소된 값이 보이게 함
+        try:
+            sp.setValue(int(new_v))
+        except Exception:
+            pass
+
+        # 실제 전송은 기존 공용 apply 경로 재사용
+        self._apply_dac_code(ch, new_v)
 
     def _on_apply_dac_code(self, ch: int) -> None:
         sp = self._dac1_spin if int(ch) == 1 else self._dac2_spin

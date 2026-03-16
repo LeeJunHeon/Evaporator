@@ -555,13 +555,6 @@ class HmiPlcBinder(QObject):
         prev = bool(self._tmp_connected)
         self._tmp_connected = bool(ok)
 
-        if self._tmp_connected:
-            self._tmp_attach_prompt_done = True
-
-    def _on_tmp_connected(self, ok: bool) -> None:
-        prev = bool(self._tmp_connected)
-        self._tmp_connected = bool(ok)
-
         self.set_external_connected("TMP", self._tmp_connected)
         self._render_tmp_status()
         self._set_controls_enabled(self.is_ui_connected())

@@ -270,12 +270,52 @@ class ACSServiceWorker(QThread):
         try:
             self._acs.start_pressure_stream(interval_a=self._stream_interval_a)
             self.sig_error.emit(f"[ACSService] stream mode ON (A={self._stream_interval_a})")
+
+            # ✅ 추가: 연결 직후 버퍼 드레인 (3초간 읽고 버림)
+            self._drain_stale_stream_buffer(drain_s=3.0)
         except Exception as e:
             # ✅ 폴백하지 말고, 다음 루프에서 재연결 후 다시 stream 시도
             self.sig_error.emit(f"[ACSService] stream start failed -> reconnect: {e!r}")
             self._safe_close()
             self._set_connected(False)
             self._next_try = time.time() + 0.1
+
+    def _drain_stale_stream_buffer(self, drain_s: float = 3.0) -> None:
+        """
+        재연결 직후 버퍼에 쌓인 오래된 데이터를 버린다.
+        drain_s 초 동안 읽어서 모두 무시.
+        """
+        if self._acs is None:
+            return
+        
+        deadline = time.monotonic() + drain_s
+        drained = 0
+        try:
+            # ✅ 먼저 OS 버퍼 명시적 초기화
+            ser = getattr(self._acs, '_ser', None)
+            if ser and ser.is_open:
+                ser.reset_input_buffer()
+            
+            # ✅ 그 다음 drain_s 초간 계속 읽어서 버림
+            while time.monotonic() < deadline:
+                try:
+                    self._acs.read_stream_sample(timeout_s=0.5)
+                    drained += 1
+                except Exception:
+                    break
+                    
+        except Exception:
+            pass
+        
+        self.sig_error.emit(f"[ACSService] stale buffer drained: {drained} samples discarded")
+        
+        # ✅ 드레인 후 OS 버퍼 한 번 더 초기화
+        try:
+            ser = getattr(self._acs, '_ser', None)
+            if ser and ser.is_open:
+                ser.reset_input_buffer()
+        except Exception:
+            pass
 
     def _handle_reload(self, ini_path: Path) -> None:
         self._ini_path = Path(ini_path)

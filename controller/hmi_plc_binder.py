@@ -167,6 +167,11 @@ class HmiPlcBinder(QObject):
         self._render_tmp_status()
         self._set_controls_enabled(self.is_ui_connected())
 
+        # PLC 상태를 이미 읽은 뒤 service가 주입된 경우,
+        # 실제 TMP_SW가 ON이면 TMP service를 자동 시작한다.
+        if self.is_ui_connected() and self.read_coil("TMP_SW", False):
+            self._ensure_tmp_service_started(silent=True)
+
     def _render_status_line(self) -> None:
         """상단 상태라인(processMonitor_HMI)에는 연결 상태만 표시."""
         parts = []
@@ -339,11 +344,12 @@ class HmiPlcBinder(QObject):
         with self._state_lock:
             return bool(self._last_states.get(coil, default))
 
-    def _ensure_tmp_service_started(self) -> bool:
+    def _ensure_tmp_service_started(self, *, silent: bool = False) -> bool:
         svc = self._turbovac_service
         if svc is None:
             self._set_hmi_log("[BLOCK] TMP service not set")
-            self._popup_warn("TMP 미설정", "TMP 서비스가 연결되지 않았습니다.")
+            if not silent:
+                self._popup_warn("TMP 미설정", "TMP 서비스가 연결되지 않았습니다.")
             return False
 
         if self._tmp_service_started:
@@ -356,7 +362,8 @@ class HmiPlcBinder(QObject):
             return True
         except Exception as e:
             self._set_hmi_log(f"[FAIL] TMP service start: {e!r}")
-            self._popup_warn("TMP 시작 실패", f"TMP service 시작 실패: {e!r}")
+            if not silent:
+                self._popup_warn("TMP 시작 실패", f"TMP service 시작 실패: {e!r}")
             return False
 
     def _set_tmp_field(self, widget_name: str, text: str) -> None:
@@ -426,6 +433,20 @@ class HmiPlcBinder(QObject):
             return bool(result), ""
         except Exception as e:
             return False, f"TMP 상태 확인 실패: {e!r}"
+        
+    def _set_tmp_connect_hint(self, running: bool) -> None:
+        svc = self._turbovac_service
+        if svc is None:
+            return
+
+        fn = getattr(svc, "set_connect_hint_running", None)
+        if not callable(fn):
+            return
+
+        try:
+            fn(bool(running))
+        except Exception as e:
+            self._set_hmi_log(f"[WARN] TMP connect hint set failed: {e!r}")
 
     def _on_tmp_connected(self, ok: bool) -> None:
         prev = bool(self._tmp_connected)
@@ -477,6 +498,10 @@ class HmiPlcBinder(QObject):
                 self._revert_button_to_plc(binding, fallback=True)
                 return
 
+            # TMP 전원이 실제로 OFF가 되면 다음 attach는 idle 기준이어야 한다.
+            if not bool(on):
+                self._set_tmp_connect_hint(False)
+
             self._plc.enqueue_write_coil(
                 "TMP_SW",
                 bool(on),
@@ -484,7 +509,12 @@ class HmiPlcBinder(QObject):
                 pulse_ms=None,
                 tag="HMI:TMP_SW",
             )
-            self._set_hmi_log(f"[UI] TMP_SW <- {on_i}")
+
+            if bool(on):
+                self._set_hmi_log("[UI] TMP_SW <- 1 (service attach after PLC ON confirmed)")
+            else:
+                self._set_hmi_log("[UI] TMP_SW <- 0")
+
             return
 
         # Door 인터락(기존 유지) + 차단 사유도 하단 로그로
@@ -575,6 +605,7 @@ class HmiPlcBinder(QObject):
         # ✅ ALL STOP에서는 TMP 장비 정지 + PLC TMP OFF 둘 다 수행
         if self._turbovac_service is not None:
             try:
+                self._set_tmp_connect_hint(False)
                 self._turbovac_service.stop_pump()
                 self._set_hmi_log("[UI] TMP STOP sent (ALL STOP)")
             except Exception as e:
@@ -622,6 +653,7 @@ class HmiPlcBinder(QObject):
             return
 
         try:
+            self._set_tmp_connect_hint(True)
             svc.start_pump()
             self._set_hmi_log("[UI] TMP START sent")
         except Exception as e:
@@ -645,6 +677,7 @@ class HmiPlcBinder(QObject):
             return
 
         try:
+            self._set_tmp_connect_hint(False)
             svc.stop_pump()
             self._set_hmi_log("[UI] TMP STOP sent")
         except Exception as e:
@@ -780,6 +813,18 @@ class HmiPlcBinder(QObject):
                     w.setChecked(target)
             except Exception:
                 pass
+
+        # TMP service attach 타이밍은 "버튼 클릭"이 아니라
+        # "실제 PLC에서 TMP_SW가 ON으로 읽힌 시점" 기준으로 맞춘다.
+        prev_tmp_sw = bool(prev.get("TMP_SW", False)) if prev else None
+        now_tmp_sw = bool(states.get("TMP_SW", False))
+
+        if now_tmp_sw:
+            self._ensure_tmp_service_started(silent=True)
+        elif prev_tmp_sw is None or prev_tmp_sw != now_tmp_sw:
+            # 실제 PLC에서 TMP 전원이 OFF로 확인되면
+            # 다음 reconnect는 idle 기준으로 본다.
+            self._set_tmp_connect_hint(False)
 
     def _on_connected(self, ok: bool) -> None:
         with self._state_lock:

@@ -88,6 +88,11 @@ class HmiPlcBinder(QObject):
         # TMP service thread를 이미 시작했는지
         self._tmp_service_started: bool = False
 
+        # TMP 최초 attach 사용자 확인 상태
+        self._tmp_attach_prompt_open: bool = False
+        self._tmp_attach_prompt_done: bool = False
+        self._tmp_attach_prompt_suppressed: bool = False
+
         # (선택) 초기 표시
         self._render_status_line()
 
@@ -168,9 +173,9 @@ class HmiPlcBinder(QObject):
         self._set_controls_enabled(self.is_ui_connected())
 
         # PLC 상태를 이미 읽은 뒤 service가 주입된 경우,
-        # 실제 TMP_SW가 ON이면 TMP service를 자동 시작한다.
+        # 실제 TMP_SW가 ON이면 바로 attach하지 말고 사용자에게 먼저 묻는다.
         if self.is_ui_connected() and self.read_coil("TMP_SW", False):
-            self._ensure_tmp_service_started(silent=True)
+            self._queue_tmp_attach_prompt(force=False)
 
     def _render_status_line(self) -> None:
         """상단 상태라인(processMonitor_HMI)에는 연결 상태만 표시."""
@@ -448,6 +453,111 @@ class HmiPlcBinder(QObject):
         except Exception as e:
             self._set_hmi_log(f"[WARN] TMP connect hint set failed: {e!r}")
 
+    def _reset_tmp_attach_prompt_state(self) -> None:
+        self._tmp_attach_prompt_open = False
+        self._tmp_attach_prompt_done = False
+        self._tmp_attach_prompt_suppressed = False
+
+    def _prompt_tmp_attach_choice(self) -> Optional[bool]:
+        """
+        반환:
+        True  -> 현재 TMP가 이미 회전 중
+        False -> 현재 TMP가 정지 상태
+        None  -> 취소(attach 보류)
+        """
+        parent = None
+        try:
+            btn = getattr(self.ui, "tmpStartBtn", None)
+            parent = btn.window() if btn is not None else None
+        except Exception:
+            parent = None
+
+        box = QMessageBox(parent)
+        box.setIcon(QMessageBox.Question)
+        box.setWindowTitle("TMP 연결 확인")
+        box.setText("현재 터보펌프가 이미 회전 중입니까?")
+        box.setInformativeText(
+            "회전 중이면 [회전 중], 정지 상태면 [정지],\n"
+            "지금 연결하지 않으려면 [취소]를 선택하세요."
+        )
+        box.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+
+        running_btn = box.addButton("회전 중", QMessageBox.YesRole)
+        stopped_btn = box.addButton("정지", QMessageBox.NoRole)
+        cancel_btn = box.addButton("취소", QMessageBox.RejectRole)
+
+        box.exec()
+
+        clicked = box.clickedButton()
+        if clicked is running_btn:
+            return True
+        if clicked is stopped_btn:
+            return False
+        return None
+    
+    def _queue_tmp_attach_prompt(self, *, force: bool = False) -> None:
+        """
+        TMP auto attach 전에 사용자 선택을 받는다.
+
+        force=False:
+            PLC readback 기반 자동 attach 경로
+        force=True:
+            사용자가 TMP START를 눌렀을 때의 수동 경로
+        """
+        if not self.is_ui_connected():
+            return
+        if not self.read_coil("TMP_SW", False):
+            return
+        if self._tmp_service_started or self._tmp_connected:
+            return
+        if self._tmp_attach_prompt_open:
+            return
+
+        if not force:
+            if self._tmp_attach_prompt_done or self._tmp_attach_prompt_suppressed:
+                return
+
+        self._tmp_attach_prompt_open = True
+
+        def _run() -> None:
+            try:
+                # 다시 한 번 조건 확인
+                if not self.is_ui_connected():
+                    return
+                if not self.read_coil("TMP_SW", False):
+                    return
+                if self._tmp_service_started or self._tmp_connected:
+                    return
+
+                choice = self._prompt_tmp_attach_choice()
+
+                if choice is None:
+                    self._tmp_attach_prompt_suppressed = True
+                    self._set_hmi_log("[TMP] attach deferred by user")
+                    return
+
+                self._set_tmp_connect_hint(bool(choice))
+
+                ok = self._ensure_tmp_service_started(silent=not force)
+                if ok:
+                    self._tmp_attach_prompt_done = True
+                    self._tmp_attach_prompt_suppressed = False
+                    self._set_hmi_log(
+                        "[TMP] attach requested with hint="
+                        + ("running" if choice else "idle")
+                    )
+            finally:
+                self._tmp_attach_prompt_open = False
+
+        QTimer.singleShot(0, _run)
+
+    def _on_tmp_connected(self, ok: bool) -> None:
+        prev = bool(self._tmp_connected)
+        self._tmp_connected = bool(ok)
+
+        if self._tmp_connected:
+            self._tmp_attach_prompt_done = True
+
     def _on_tmp_connected(self, ok: bool) -> None:
         prev = bool(self._tmp_connected)
         self._tmp_connected = bool(ok)
@@ -638,6 +748,10 @@ class HmiPlcBinder(QObject):
             self._popup_warn("인터락", "PLC TMP 전원이 OFF 상태입니다.\n먼저 T.M.P 버튼으로 전원을 켜주세요.")
             return
 
+        if not self._tmp_service_started and not self._tmp_connected:
+            self._queue_tmp_attach_prompt(force=True)
+            return
+
         if not self._ensure_tmp_service_started():
             return
 
@@ -814,17 +928,16 @@ class HmiPlcBinder(QObject):
             except Exception:
                 pass
 
-        # TMP service attach 타이밍은 "버튼 클릭"이 아니라
-        # "실제 PLC에서 TMP_SW가 ON으로 읽힌 시점" 기준으로 맞춘다.
         prev_tmp_sw = bool(prev.get("TMP_SW", False)) if prev else None
         now_tmp_sw = bool(states.get("TMP_SW", False))
 
         if now_tmp_sw:
-            self._ensure_tmp_service_started(silent=True)
+            # TMP_SW가 실제로 ON이면, 바로 attach하지 말고 사용자에게 먼저 묻는다.
+            self._queue_tmp_attach_prompt(force=False)
         elif prev_tmp_sw is None or prev_tmp_sw != now_tmp_sw:
-            # 실제 PLC에서 TMP 전원이 OFF로 확인되면
-            # 다음 reconnect는 idle 기준으로 본다.
+            # TMP 전원이 실제로 OFF가 되면 다음 ON 사이클에서는 다시 물어봐야 한다.
             self._set_tmp_connect_hint(False)
+            self._reset_tmp_attach_prompt_state()
 
     def _on_connected(self, ok: bool) -> None:
         with self._state_lock:

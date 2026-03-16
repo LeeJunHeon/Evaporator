@@ -268,9 +268,14 @@ class Ui_Form(object):
 
         control_h = self.tmpConnEdit.sizeHint().height()
         label_w = 56
-        field_w = 95
-        btn_w = 58
-        half_w = 159   # (340 - 좌우 margin 16 - 중간 spacing 6) / 2
+
+        # 입력칸 / 버튼 폭 분리
+        input_field_w = 62
+        read_field_w = 95
+        step_btn_w = 38
+        action_btn_w = 46
+
+        half_w = 159   # ADC readback row용
 
         # -------------------------
         # Row 0 : Power 1 set
@@ -279,22 +284,15 @@ class Ui_Form(object):
         self.dacRow1.setObjectName("dacRow1")
         self.dacRow1Layout = QHBoxLayout(self.dacRow1)
         self.dacRow1Layout.setContentsMargins(0, 0, 0, 0)
-        self.dacRow1Layout.setSpacing(6)
+        self.dacRow1Layout.setSpacing(4)
 
-        self.dacRow1Left = QWidget(self.dacRow1)
-        self.dacRow1Left.setObjectName("dacRow1Left")
-        self.dacRow1Left.setFixedWidth(half_w)
-        self.dacRow1LeftLayout = QHBoxLayout(self.dacRow1Left)
-        self.dacRow1LeftLayout.setContentsMargins(0, 0, 0, 0)
-        self.dacRow1LeftLayout.setSpacing(6)
-
-        self.dac1Label = QLabel(self.dacRow1Left)
+        self.dac1Label = QLabel(self.dacRow1)
         self.dac1Label.setObjectName("dac1Label")
         self.dac1Label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.dac1Label.setFixedWidth(label_w)
-        self.dacRow1LeftLayout.addWidget(self.dac1Label)
+        self.dacRow1Layout.addWidget(self.dac1Label)
 
-        self.dac1Spin = QSpinBox(self.dacRow1Left)
+        self.dac1Spin = QSpinBox(self.dacRow1)
         self.dac1Spin.setObjectName("dac1Spin")
         self.dac1Spin.setRange(0, 4000)
         self.dac1Spin.setSingleStep(1)
@@ -302,32 +300,30 @@ class Ui_Form(object):
         self.dac1Spin.setKeyboardTracking(False)
         self.dac1Spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         self.dac1Spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.dac1Spin.setFixedSize(field_w, control_h)
-        self.dacRow1LeftLayout.addWidget(self.dac1Spin)
+        self.dac1Spin.setFixedSize(input_field_w, control_h)
+        self.dacRow1Layout.addWidget(self.dac1Spin)
 
-        self.dacRow1LeftLayout.addStretch(1)
+        self.dac1Down100Btn = QPushButton(self.dacRow1)
+        self.dac1Down100Btn.setObjectName("dac1Down100Btn")
+        self.dac1Down100Btn.setFixedSize(step_btn_w, control_h)
+        self.dacRow1Layout.addWidget(self.dac1Down100Btn)
 
-        self.dacRow1Right = QWidget(self.dacRow1)
-        self.dacRow1Right.setObjectName("dacRow1Right")
-        self.dacRow1Right.setFixedWidth(half_w)
-        self.dacRow1RightLayout = QHBoxLayout(self.dacRow1Right)
-        self.dacRow1RightLayout.setContentsMargins(0, 0, 0, 0)
-        self.dacRow1RightLayout.setSpacing(6)
+        self.dac1Up100Btn = QPushButton(self.dacRow1)
+        self.dac1Up100Btn.setObjectName("dac1Up100Btn")
+        self.dac1Up100Btn.setFixedSize(step_btn_w, control_h)
+        self.dacRow1Layout.addWidget(self.dac1Up100Btn)
 
-        self.dac1SetBtn = QPushButton(self.dacRow1Right)
+        self.dac1SetBtn = QPushButton(self.dacRow1)
         self.dac1SetBtn.setObjectName("dac1SetBtn")
-        self.dac1SetBtn.setFixedSize(btn_w, control_h)
-        self.dacRow1RightLayout.addWidget(self.dac1SetBtn)
+        self.dac1SetBtn.setFixedSize(action_btn_w, control_h)
+        self.dacRow1Layout.addWidget(self.dac1SetBtn)
 
-        self.dac1ResetBtn = QPushButton(self.dacRow1Right)
+        self.dac1ResetBtn = QPushButton(self.dacRow1)
         self.dac1ResetBtn.setObjectName("dac1ResetBtn")
-        self.dac1ResetBtn.setFixedSize(btn_w, control_h)
-        self.dacRow1RightLayout.addWidget(self.dac1ResetBtn)
+        self.dac1ResetBtn.setFixedSize(action_btn_w, control_h)
+        self.dacRow1Layout.addWidget(self.dac1ResetBtn)
 
-        self.dacRow1RightLayout.addStretch(1)
-
-        self.dacRow1Layout.addWidget(self.dacRow1Left)
-        self.dacRow1Layout.addWidget(self.dacRow1Right)
+        self.dacRow1Layout.addStretch(1)
         self.dacGroupLayout.addWidget(self.dacRow1)
 
         # -------------------------
@@ -337,22 +333,15 @@ class Ui_Form(object):
         self.dacRow2.setObjectName("dacRow2")
         self.dacRow2Layout = QHBoxLayout(self.dacRow2)
         self.dacRow2Layout.setContentsMargins(0, 0, 0, 0)
-        self.dacRow2Layout.setSpacing(6)
+        self.dacRow2Layout.setSpacing(4)
 
-        self.dacRow2Left = QWidget(self.dacRow2)
-        self.dacRow2Left.setObjectName("dacRow2Left")
-        self.dacRow2Left.setFixedWidth(half_w)
-        self.dacRow2LeftLayout = QHBoxLayout(self.dacRow2Left)
-        self.dacRow2LeftLayout.setContentsMargins(0, 0, 0, 0)
-        self.dacRow2LeftLayout.setSpacing(6)
-
-        self.dac2Label = QLabel(self.dacRow2Left)
+        self.dac2Label = QLabel(self.dacRow2)
         self.dac2Label.setObjectName("dac2Label")
         self.dac2Label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.dac2Label.setFixedWidth(label_w)
-        self.dacRow2LeftLayout.addWidget(self.dac2Label)
+        self.dacRow2Layout.addWidget(self.dac2Label)
 
-        self.dac2Spin = QSpinBox(self.dacRow2Left)
+        self.dac2Spin = QSpinBox(self.dacRow2)
         self.dac2Spin.setObjectName("dac2Spin")
         self.dac2Spin.setRange(0, 4000)
         self.dac2Spin.setSingleStep(1)
@@ -360,32 +349,30 @@ class Ui_Form(object):
         self.dac2Spin.setKeyboardTracking(False)
         self.dac2Spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         self.dac2Spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.dac2Spin.setFixedSize(field_w, control_h)
-        self.dacRow2LeftLayout.addWidget(self.dac2Spin)
+        self.dac2Spin.setFixedSize(input_field_w, control_h)
+        self.dacRow2Layout.addWidget(self.dac2Spin)
 
-        self.dacRow2LeftLayout.addStretch(1)
+        self.dac2Down100Btn = QPushButton(self.dacRow2)
+        self.dac2Down100Btn.setObjectName("dac2Down100Btn")
+        self.dac2Down100Btn.setFixedSize(step_btn_w, control_h)
+        self.dacRow2Layout.addWidget(self.dac2Down100Btn)
 
-        self.dacRow2Right = QWidget(self.dacRow2)
-        self.dacRow2Right.setObjectName("dacRow2Right")
-        self.dacRow2Right.setFixedWidth(half_w)
-        self.dacRow2RightLayout = QHBoxLayout(self.dacRow2Right)
-        self.dacRow2RightLayout.setContentsMargins(0, 0, 0, 0)
-        self.dacRow2RightLayout.setSpacing(6)
+        self.dac2Up100Btn = QPushButton(self.dacRow2)
+        self.dac2Up100Btn.setObjectName("dac2Up100Btn")
+        self.dac2Up100Btn.setFixedSize(step_btn_w, control_h)
+        self.dacRow2Layout.addWidget(self.dac2Up100Btn)
 
-        self.dac2SetBtn = QPushButton(self.dacRow2Right)
+        self.dac2SetBtn = QPushButton(self.dacRow2)
         self.dac2SetBtn.setObjectName("dac2SetBtn")
-        self.dac2SetBtn.setFixedSize(btn_w, control_h)
-        self.dacRow2RightLayout.addWidget(self.dac2SetBtn)
+        self.dac2SetBtn.setFixedSize(action_btn_w, control_h)
+        self.dacRow2Layout.addWidget(self.dac2SetBtn)
 
-        self.dac2ResetBtn = QPushButton(self.dacRow2Right)
+        self.dac2ResetBtn = QPushButton(self.dacRow2)
         self.dac2ResetBtn.setObjectName("dac2ResetBtn")
-        self.dac2ResetBtn.setFixedSize(btn_w, control_h)
-        self.dacRow2RightLayout.addWidget(self.dac2ResetBtn)
+        self.dac2ResetBtn.setFixedSize(action_btn_w, control_h)
+        self.dacRow2Layout.addWidget(self.dac2ResetBtn)
 
-        self.dacRow2RightLayout.addStretch(1)
-
-        self.dacRow2Layout.addWidget(self.dacRow2Left)
-        self.dacRow2Layout.addWidget(self.dacRow2Right)
+        self.dacRow2Layout.addStretch(1)
         self.dacGroupLayout.addWidget(self.dacRow2)
 
         # -------------------------
@@ -416,7 +403,7 @@ class Ui_Form(object):
         self.dacActual1Edit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.dacActual1Edit.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
         self.dacActual1Edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.dacActual1Edit.setFixedSize(field_w, control_h)
+        self.dacActual1Edit.setFixedSize(read_field_w, control_h)
         self.dacRow3LeftLayout.addWidget(self.dacActual1Edit)
 
         self.dacRow3LeftLayout.addStretch(1)
@@ -440,7 +427,7 @@ class Ui_Form(object):
         self.dacActual2Edit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.dacActual2Edit.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
         self.dacActual2Edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.dacActual2Edit.setFixedSize(field_w, control_h)
+        self.dacActual2Edit.setFixedSize(read_field_w, control_h)
         self.dacRow3RightLayout.addWidget(self.dacActual2Edit)
 
         self.dacRow3RightLayout.addStretch(1)
@@ -867,6 +854,12 @@ class Ui_Form(object):
         self.dacGroup.setTitle(QCoreApplication.translate("Form", "Power Manual", None))
         self.dac1Label.setText(QCoreApplication.translate("Form", "Power 1", None))
         self.dac2Label.setText(QCoreApplication.translate("Form", "Power 2", None))
+
+        self.dac1Down100Btn.setText(QCoreApplication.translate("Form", "-100", None))
+        self.dac1Up100Btn.setText(QCoreApplication.translate("Form", "+100", None))
+        self.dac2Down100Btn.setText(QCoreApplication.translate("Form", "-100", None))
+        self.dac2Up100Btn.setText(QCoreApplication.translate("Form", "+100", None))
+
         self.dac1SetBtn.setText(QCoreApplication.translate("Form", "Apply", None))
         self.dac2SetBtn.setText(QCoreApplication.translate("Form", "Apply", None))
         self.dac1ResetBtn.setText(QCoreApplication.translate("Form", "Reset", None))
@@ -1086,7 +1079,9 @@ class Ui_Form(object):
         self.dacGroup.setStyleSheet(footer_group_qss)
 
         for b in (
+            self.dac1Down100Btn, self.dac1Up100Btn,
             self.dac1SetBtn, self.dac1ResetBtn, 
+            self.dac2Down100Btn, self.dac2Up100Btn,
             self.dac2SetBtn, self.dac2ResetBtn,
             self.tmpStartBtn, self.tmpStopBtn,
         ):
@@ -1098,7 +1093,9 @@ class Ui_Form(object):
             self.dacActual1Label, self.dacActual2Label,
             self.dac1Spin, self.dac2Spin,
             self.dacActual1Edit, self.dacActual2Edit,
+            self.dac1Down100Btn, self.dac1Up100Btn,
             self.dac1SetBtn, self.dac1ResetBtn,
+            self.dac2Down100Btn, self.dac2Up100Btn,
             self.dac2SetBtn, self.dac2ResetBtn,
             self.tmpStartBtn, self.tmpStopBtn,
         ):

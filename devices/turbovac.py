@@ -320,6 +320,56 @@ class Turbovac(BaseSerialDevice):
 
         self._last_snapshot: Optional[TurbovacSnapshot] = None
 
+
+    def _build_running_hold_cw(self, *, use_setpoint: bool = False) -> int:
+        cw = (1 << CW_ENABLE_PROCESS) | (1 << CW_START_STOP)
+        if use_setpoint:
+            cw |= (1 << CW_ENABLE_SETPOINT)
+        return cw
+
+
+    def prime_idle_control(self) -> None:
+        """
+        최초 attach 전에 '정지 상태 기준'으로 제어 seed.
+        아직 장비를 돌릴 의도가 없을 때 사용.
+        """
+        self._control_word = 0
+        self._setpoint_hz = 0
+
+
+    def prime_running_control(self, *, setpoint_hz: Optional[int] = None) -> None:
+        """
+        최초 attach 전에 '이미 운전 중인 장비를 유지'하기 위한 제어 seed.
+        첫 telegram 부터 start 유지 성격의 control word 가 나가게 한다.
+
+        주의:
+        이 함수는 '이미 돌아가고 있는 상태를 유지'하거나
+        상위 로직이 TMP가 반드시 ON 상태여야 한다고 확신할 때만 써야 한다.
+        """
+        use_setpoint = setpoint_hz is not None
+        self._control_word = self._build_running_hold_cw(use_setpoint=use_setpoint)
+        self._setpoint_hz = int(setpoint_hz or 0)
+
+
+    def adopt_running_state_from_fast(self, fast: Dict[str, Any]) -> bool:
+        """
+        fast status 응답을 보고 내부 control seed 를 동기화한다.
+
+        - 이미 회전 중 / 가속 중 / 정상 운전이면 running hold 로 채택
+        - decelerating 중이면 기존 stop 의도를 존중하므로 채택하지 않음
+        """
+        is_running_like = bool(
+            fast.get("pump_turning", False)
+            or fast.get("accelerating", False)
+            or fast.get("normal_operation", False)
+        )
+        is_decelerating = bool(fast.get("decelerating", False))
+
+        if is_running_like and not is_decelerating:
+            self.prime_running_control()
+            return True
+        return False
+
     # ---------------------------------------------------------
     # Low-level telegram
     # ---------------------------------------------------------
@@ -458,12 +508,16 @@ class Turbovac(BaseSerialDevice):
     # connect / control state
     # ---------------------------------------------------------
     def connect(self) -> None:
+        """
+        시리얼 포트만 연다.
+        최초 상태 판독/제어 seed는 상위 로직에서 명시적으로 수행한다.
+
+        중요:
+        connect() 안에서 자동으로 read_fast_status() 를 호출하면
+        새 객체의 _control_word=0 상태가 첫 telegram 에 실릴 수 있으므로
+        재접속 시 이미 회전 중인 TMP를 건드릴 위험이 있다.
+        """
         super().connect()
-        try:
-            self.read_fast_status()
-        except Exception as e:
-            self.close()
-            raise TurbovacProtocolError(f"Turbovac USB connect/ping failed: {e}") from e
 
     def relinquish_control(self) -> None:
         """
@@ -481,17 +535,10 @@ class Turbovac(BaseSerialDevice):
         setpoint active start:
             bit10 + bit6 + bit0 + HSW
         """
-        cw = (1 << CW_ENABLE_PROCESS) | (1 << CW_START_STOP)
+        if setpoint_hz is not None and int(setpoint_hz) < 0:
+            raise ValueError("setpoint_hz must be >= 0")
 
-        hsw = 0
-        if setpoint_hz is not None:
-            if int(setpoint_hz) < 0:
-                raise ValueError("setpoint_hz must be >= 0")
-            hsw = int(setpoint_hz)
-            cw |= (1 << CW_ENABLE_SETPOINT)
-
-        self._control_word = cw
-        self._setpoint_hz = hsw
+        self.prime_running_control(setpoint_hz=setpoint_hz)
         self._txrx(stw=self._control_word, hsw=self._setpoint_hz)
 
     def stop_pump(self) -> None:
@@ -586,6 +633,17 @@ class Turbovac(BaseSerialDevice):
         """
         파라미터 채널 없이 빠르게 읽는 현재 상태.
         PZD2~PZD6를 그대로 활용한다.
+
+        주의:
+        이 함수는 '순수 read-only'가 아니다.
+        내부적으로 _txrx()를 사용하므로 현재 self._control_word / self._setpoint_hz 가
+        함께 전송된다.
+
+        따라서 최초 attach 전에 반드시
+        - prime_idle_control()
+        또는
+        - prime_running_control()
+        중 하나로 control seed 를 명시하는 것이 안전하다.
         """
         resp = self._txrx(pke=0, ind=0, pwe=0)
         zsw = int(resp["zsw"])
@@ -726,6 +784,35 @@ class Turbovac(BaseSerialDevice):
 
     def get_last_snapshot(self) -> Optional[TurbovacSnapshot]:
         return self._last_snapshot
+    
+    def connect_and_probe(self, *, assume_running: bool = False) -> Dict[str, Any]:
+        """
+        최초 attach 전용 helper.
+
+        - assume_running=False:
+            idle seed 후 연결/상태 확인
+        - assume_running=True:
+            running hold seed 후 연결/상태 확인
+
+        반환된 fast status를 보고 상위 로직에서 UI/state를 결정한다.
+        """
+        if assume_running:
+            self.prime_running_control()
+        else:
+            self.prime_idle_control()
+
+        try:
+            self.connect()
+            fast = self.read_fast_status()
+
+            # assume_running=False 였더라도,
+            # 첫 응답 결과가 이미 운전 중이면 내부 상태를 그에 맞게 채택 가능
+            self.adopt_running_state_from_fast(fast)
+            return fast
+
+        except Exception as e:
+            self.close()
+            raise TurbovacProtocolError(f"Turbovac connect/probe failed: {e}") from e
 
     # ---------------------------------------------------------
     # convenience / identity

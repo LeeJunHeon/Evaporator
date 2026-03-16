@@ -243,7 +243,7 @@ def main():
         _hmi_log(f"[BOOT][WARN] ACSService init failed: {e!r}")
 
     # ✅ TMP(Turbovac)는 프로그램 부팅 시 객체만 생성하고,
-    #    실제 연결 시도는 TMP 버튼 ON 시점에 시작한다.
+    #    실제 연결 시도는 PLC에서 TMP_SW=ON readback이 확인된 시점에 binder가 시작한다.
     turbovac_service: Any = None
     try:
         turbovac_service = TurbovacService(
@@ -251,7 +251,7 @@ def main():
             poll_s=1.0,
             reconnect_interval_s=1.0,
         )
-        _hmi_log("[BOOT] TMP service prepared (connect on TMP ON)")
+        _hmi_log("[BOOT] TMP service prepared (attach on PLC TMP_SW ON confirm)")
     except Exception as e:
         turbovac_service = None
         _hmi_log(f"[BOOT][WARN] TurbovacService init failed: {e!r}")

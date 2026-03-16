@@ -77,6 +77,11 @@ class TurbovacService(QObject):
         # slow poll 관리
         self._last_slow_poll_ts: float = 0.0
 
+        # 최초 연결/재연결 시 attach 전략 힌트
+        # False: idle 기준 attach
+        # True : 이미 회전 중인 TMP 상태 유지 기준 attach
+        self._connect_hint_running: bool = False
+
         self._load_config()
 
     # ---------------------------------------------------------
@@ -178,6 +183,16 @@ class TurbovacService(QObject):
 
     def get_last_snapshot(self) -> Optional[Dict[str, Any]]:
         return dict(self._last_snapshot) if self._last_snapshot else None
+    
+    def set_connect_hint_running(self, running: bool) -> None:
+        """
+        다음 최초 연결/재연결 시 attach 전략을 지정한다.
+
+        True  -> running hold 기준으로 attach
+        False -> idle 기준으로 attach
+        """
+        with self._lock:
+            self._connect_hint_running = bool(running)
 
     # ---------------------------------------------------------
     # interlock helper
@@ -278,7 +293,7 @@ class TurbovacService(QObject):
             return False, "TMP 이미 가속 중"
 
         if snap.get("pump_turning", False):
-            return False, "TMP 이미 회전 중"
+            return False, "TMP 이미 회전 중입니다. 연결은 정상이며 추가 START는 필요 없습니다."
 
         return True, ""
 
@@ -364,6 +379,9 @@ class TurbovacService(QObject):
     # commands
     # ---------------------------------------------------------
     def _cmd_start(self, *, setpoint_hz: Optional[int] = None) -> None:
+        # START 의도가 들어왔으면, 재연결 시에도 running 기준 attach
+        self._connect_hint_running = True
+
         dev = self._require_device(allow_connect=True)
         dev.start_pump(setpoint_hz=setpoint_hz)
         self.sig_log.emit(
@@ -373,6 +391,9 @@ class TurbovacService(QObject):
         # 즉시 poll 생략: 다음 주기 poll에서 상태 반영
 
     def _cmd_stop(self) -> None:
+        # STOP 의도가 들어왔으면, 재연결 시 idle 기준 attach
+        self._connect_hint_running = False
+
         dev = self._require_device(allow_connect=True)
         dev.stop_pump()
         self.sig_log.emit("[TMPService] stop_pump sent")
@@ -423,7 +444,11 @@ class TurbovacService(QObject):
 
         try:
             dev = self._build_device()
-            dev.connect()
+
+            # 핵심:
+            # 최초 attach/reconnect 시 현재 의도에 맞는 전략으로 probe
+            assume_running = bool(self._connect_hint_running)
+            fast = dev.connect_and_probe(assume_running=assume_running)
 
             self._dev = dev
             self._emit_connected(True)
@@ -432,15 +457,23 @@ class TurbovacService(QObject):
             self._connect_fail_count = 0
             self._poll_fail_count = 0
             self._reconnect_backoff_s = self._reconnect_interval_s
-            self._last_slow_poll_ts = 0.0
+
+            # 연결 직후에는 fast probe 결과만 반영하고,
+            # 첫 scheduled poll 은 fast-only 로 시작되게 한다.
+            self._last_slow_poll_ts = time.monotonic()
+
+            d = self._fast_probe_to_dict(fast)
+            self._last_snapshot = d
+            self.sig_snapshot.emit(d)
+            self._last_good_snapshot_ts = time.time()
+            self._update_connect_hint_from_snapshot(d)
 
             self.sig_log.emit(
                 f"[TMPService] connected: port={self._cfg['port']} "
-                f"baud={self._cfg['baudrate']} {self._cfg['bytesize']}{self._cfg['parity']}{self._cfg['stopbits']}"
+                f"baud={self._cfg['baudrate']} {self._cfg['bytesize']}{self._cfg['parity']}{self._cfg['stopbits']} "
+                f"attach={'running' if assume_running else 'idle'} "
+                f"state={d.get('state_text', '-')} freq={int(d.get('freq_hz', 0) or 0)} Hz"
             )
-
-            # 연결 직후 1회는 full snapshot
-            self._poll_once(include_extended=True)
 
         except Exception as e:
             self._dev = None
@@ -483,6 +516,9 @@ class TurbovacService(QObject):
 
             self._last_error_text = ""
             self._emit_connected(True)
+
+            # 현재 실측 상태를 바탕으로 다음 reconnect attach 힌트 갱신
+            self._update_connect_hint_from_snapshot(d)
 
             # 성공 시 실패 카운터 초기화
             self._poll_fail_count = 0
@@ -614,3 +650,59 @@ class TurbovacService(QObject):
         }
         d["ui"] = ui
         return d
+    
+    def _update_connect_hint_from_snapshot(self, snap: Dict[str, Any]) -> None:
+        if not snap.get("connected", False):
+            return
+
+        # 감속 중이면 stop 의도를 우선
+        if snap.get("decelerating", False):
+            self._connect_hint_running = False
+            return
+
+        if (
+            snap.get("pump_turning", False)
+            or snap.get("accelerating", False)
+            or snap.get("normal_operation", False)
+        ):
+            self._connect_hint_running = True
+            return
+
+        if int(snap.get("freq_hz", 0) or 0) <= 0:
+            self._connect_hint_running = False
+
+    def _fast_probe_to_dict(self, fast: Dict[str, Any]) -> Dict[str, Any]:
+        d = dict(fast)
+
+        d["ts"] = time.time()
+        d["connected"] = True
+
+        d.setdefault("motor_temp_c", None)
+        d.setdefault("converter_temp_c", None)
+        d.setdefault("bearing_temp_c", None)
+        d.setdefault("dc_bus_v", None)
+
+        d.setdefault("warning_bits", 0)
+        d.setdefault("last_error_code", 0)
+        d.setdefault("last_error_freq_hz", None)
+        d.setdefault("last_error_hours", None)
+        d.setdefault("alarm_text", "-")
+
+        d.setdefault("ready", False)
+        d.setdefault("operation_enabled", False)
+        d.setdefault("pump_turning", False)
+        d.setdefault("normal_operation", False)
+        d.setdefault("accelerating", False)
+        d.setdefault("decelerating", False)
+        d.setdefault("switch_on_lock", False)
+        d.setdefault("temp_warning", False)
+        d.setdefault("overload_warning", False)
+        d.setdefault("collective_warning", False)
+
+        d["control_word"] = int(getattr(self._dev, "_control_word", 0) or 0)
+
+        meta = dict(d.get("meta") or {})
+        meta["source"] = "fast_probe"
+        d["meta"] = meta
+
+        return self._snapshot_to_dict(d)

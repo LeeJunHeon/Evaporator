@@ -43,7 +43,7 @@ class Ui_Form(object):
         # =========================
         self.hmiFooter = QWidget(Form)
         self.hmiFooter.setObjectName("hmiFooter")
-        self.hmiFooter.setGeometry(QRect(20, 705, 680, 150))
+        self.hmiFooter.setGeometry(QRect(10, 705, 1101, 145))
         self.hmiFooter.setAutoFillBackground(False)
 
         # =========================
@@ -146,15 +146,17 @@ class Ui_Form(object):
         # =========================
         self.tmpGroup = QGroupBox(self.hmiFooter)
         self.tmpGroup.setObjectName("tmpGroup")
-        self.tmpGroup.setGeometry(QRect(0, 0, 310, 140))
+        self.tmpGroup.setGeometry(QRect(0, 0, 540, 140))
         self.tmpGroup.setAutoFillBackground(True)
 
         self.tmpGroupLayout = QGridLayout(self.tmpGroup)
-        self.tmpGroupLayout.setContentsMargins(6, 18, 8, 8)
-        self.tmpGroupLayout.setHorizontalSpacing(6)
-        self.tmpGroupLayout.setVerticalSpacing(6)
+        self.tmpGroupLayout.setContentsMargins(10, 18, 10, 8)
+        self.tmpGroupLayout.setHorizontalSpacing(8)
+        self.tmpGroupLayout.setVerticalSpacing(4)
+        self.tmpGroupLayout.setColumnStretch(1, 1)
+        self.tmpGroupLayout.setColumnStretch(3, 1)
 
-        # Row 0
+        # Row 0 : Conn / State
         self.tmpConnLabel = QLabel(self.tmpGroup)
         self.tmpConnLabel.setObjectName("tmpConnLabel")
         self.tmpConnLabel.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -165,7 +167,7 @@ class Ui_Form(object):
         self.tmpConnEdit.setReadOnly(True)
         self.tmpConnEdit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.tmpConnEdit.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
-        self.tmpConnEdit.setFixedWidth(100)
+        self.tmpConnEdit.setMinimumWidth(150)
         self.tmpGroupLayout.addWidget(self.tmpConnEdit, 0, 1)
 
         self.tmpStateLabel = QLabel(self.tmpGroup)
@@ -178,10 +180,10 @@ class Ui_Form(object):
         self.tmpStateEdit.setReadOnly(True)
         self.tmpStateEdit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.tmpStateEdit.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
-        self.tmpStateEdit.setFixedWidth(100)
+        self.tmpStateEdit.setMinimumWidth(150)
         self.tmpGroupLayout.addWidget(self.tmpStateEdit, 0, 3)
 
-        # Row 1
+        # Row 1 : Freq / Current
         self.tmpFreqLabel = QLabel(self.tmpGroup)
         self.tmpFreqLabel.setObjectName("tmpFreqLabel")
         self.tmpFreqLabel.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -192,7 +194,7 @@ class Ui_Form(object):
         self.tmpFreqEdit.setReadOnly(True)
         self.tmpFreqEdit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.tmpFreqEdit.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
-        self.tmpFreqEdit.setFixedWidth(100)
+        self.tmpFreqEdit.setMinimumWidth(150)
         self.tmpGroupLayout.addWidget(self.tmpFreqEdit, 1, 1)
 
         self.tmpCurrentLabel = QLabel(self.tmpGroup)
@@ -205,10 +207,10 @@ class Ui_Form(object):
         self.tmpCurrentEdit.setReadOnly(True)
         self.tmpCurrentEdit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.tmpCurrentEdit.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
-        self.tmpCurrentEdit.setFixedWidth(100)
+        self.tmpCurrentEdit.setMinimumWidth(150)
         self.tmpGroupLayout.addWidget(self.tmpCurrentEdit, 1, 3)
 
-        # Row 2
+        # Row 2 : Temp / Detail
         self.tmpTempLabel = QLabel(self.tmpGroup)
         self.tmpTempLabel.setObjectName("tmpTempLabel")
         self.tmpTempLabel.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -219,36 +221,50 @@ class Ui_Form(object):
         self.tmpTempEdit.setReadOnly(True)
         self.tmpTempEdit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.tmpTempEdit.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
-        self.tmpTempEdit.setFixedWidth(100)
+        self.tmpTempEdit.setMinimumWidth(150)
         self.tmpGroupLayout.addWidget(self.tmpTempEdit, 2, 1)
 
+        self.tmpDetailLabel = QLabel(self.tmpGroup)
+        self.tmpDetailLabel.setObjectName("tmpDetailLabel")
+        self.tmpDetailLabel.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.tmpGroupLayout.addWidget(self.tmpDetailLabel, 2, 2)
+
+        self.tmpDetailEdit = QLineEdit(self.tmpGroup)
+        self.tmpDetailEdit.setObjectName("tmpDetailEdit")
+        self.tmpDetailEdit.setReadOnly(True)
+        self.tmpDetailEdit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.tmpDetailEdit.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
+        self.tmpDetailEdit.setMinimumWidth(150)
+        self.tmpGroupLayout.addWidget(self.tmpDetailEdit, 2, 3)
+
+        # Row 3 : Alarm full width
         self.tmpAlarmLabel = QLabel(self.tmpGroup)
         self.tmpAlarmLabel.setObjectName("tmpAlarmLabel")
         self.tmpAlarmLabel.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.tmpGroupLayout.addWidget(self.tmpAlarmLabel, 2, 2)
+        self.tmpGroupLayout.addWidget(self.tmpAlarmLabel, 3, 0)
 
         self.tmpAlarmEdit = QLineEdit(self.tmpGroup)
         self.tmpAlarmEdit.setObjectName("tmpAlarmEdit")
         self.tmpAlarmEdit.setReadOnly(True)
         self.tmpAlarmEdit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.tmpAlarmEdit.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
-        self.tmpAlarmEdit.setFixedWidth(100)
-        self.tmpGroupLayout.addWidget(self.tmpAlarmEdit, 2, 3)
+        self.tmpAlarmEdit.setMinimumWidth(360)
+        self.tmpGroupLayout.addWidget(self.tmpAlarmEdit, 3, 1, 1, 3)
 
-        # Row 3 : TMP command buttons
+        # Row 4 : TMP command buttons
         tmp_btn_h = self.tmpConnEdit.sizeHint().height()
 
         self.tmpStartBtn = QPushButton(self.tmpGroup)
         self.tmpStartBtn.setObjectName("tmpStartBtn")
         self.tmpStartBtn.setAutoDefault(False)
         self.tmpStartBtn.setFixedHeight(tmp_btn_h)
-        self.tmpGroupLayout.addWidget(self.tmpStartBtn, 3, 0, 1, 2)
+        self.tmpGroupLayout.addWidget(self.tmpStartBtn, 4, 0, 1, 2)
 
         self.tmpStopBtn = QPushButton(self.tmpGroup)
         self.tmpStopBtn.setObjectName("tmpStopBtn")
         self.tmpStopBtn.setAutoDefault(False)
         self.tmpStopBtn.setFixedHeight(tmp_btn_h)
-        self.tmpGroupLayout.addWidget(self.tmpStopBtn, 3, 2, 1, 2)
+        self.tmpGroupLayout.addWidget(self.tmpStopBtn, 4, 2, 1, 2)
 
         # =========================
         # DAC manual set (Power1/Power2)
@@ -259,27 +275,48 @@ class Ui_Form(object):
         # =========================
         self.dacGroup = QGroupBox(self.hmiFooter)
         self.dacGroup.setObjectName("dacGroup")
-        self.dacGroup.setGeometry(QRect(320, 0, 340, 140))
+        self.dacGroup.setGeometry(QRect(551, 0, 540, 140))
         self.dacGroup.setAutoFillBackground(True)
 
         self.dacGroupLayout = QVBoxLayout(self.dacGroup)
-        self.dacGroupLayout.setContentsMargins(8, 18, 8, 8)
+        self.dacGroupLayout.setContentsMargins(10, 18, 10, 8)
         self.dacGroupLayout.setSpacing(6)
 
         control_h = self.tmpConnEdit.sizeHint().height()
-        label_w = 56
+        label_w = 58
+        input_field_w = 72
+        step_btn_w = 44
+        action_btn_w = 52
+        read_field_w = 90
 
-        # 입력칸 / 버튼 폭 분리
-        input_field_w = 62
-        read_field_w = 95
-        step_btn_w = 38
-        action_btn_w = 46
+        # Header row
+        self.dacHeaderRow = QWidget(self.dacGroup)
+        self.dacHeaderRow.setObjectName("dacHeaderRow")
+        self.dacHeaderRowLayout = QHBoxLayout(self.dacHeaderRow)
+        self.dacHeaderRowLayout.setContentsMargins(0, 0, 0, 0)
+        self.dacHeaderRowLayout.setSpacing(4)
 
-        half_w = 159   # ADC readback row용
+        self.dacHeaderSpacerLeft = QLabel(self.dacHeaderRow)
+        self.dacHeaderSpacerLeft.setFixedWidth(label_w)
+        self.dacHeaderRowLayout.addWidget(self.dacHeaderSpacerLeft)
 
-        # -------------------------
-        # Row 0 : Power 1 set
-        # -------------------------
+        self.dacSetHeader = QLabel(self.dacHeaderRow)
+        self.dacSetHeader.setObjectName("dacSetHeader")
+        self.dacSetHeader.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.dacSetHeader.setFixedWidth(242)
+        self.dacHeaderRowLayout.addWidget(self.dacSetHeader)
+
+        self.dacHeaderRowLayout.addStretch(1)
+
+        self.dacReadHeader = QLabel(self.dacHeaderRow)
+        self.dacReadHeader.setObjectName("dacReadHeader")
+        self.dacReadHeader.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.dacReadHeader.setFixedWidth(read_field_w)
+        self.dacHeaderRowLayout.addWidget(self.dacReadHeader)
+
+        self.dacGroupLayout.addWidget(self.dacHeaderRow)
+
+        # Row 1 : Power 1
         self.dacRow1 = QWidget(self.dacGroup)
         self.dacRow1.setObjectName("dacRow1")
         self.dacRow1Layout = QHBoxLayout(self.dacRow1)
@@ -324,11 +361,19 @@ class Ui_Form(object):
         self.dacRow1Layout.addWidget(self.dac1ResetBtn)
 
         self.dacRow1Layout.addStretch(1)
+
+        self.dacActual1Edit = QLineEdit(self.dacRow1)
+        self.dacActual1Edit.setObjectName("dacActual1Edit")
+        self.dacActual1Edit.setReadOnly(True)
+        self.dacActual1Edit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.dacActual1Edit.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
+        self.dacActual1Edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.dacActual1Edit.setFixedSize(read_field_w, control_h)
+        self.dacRow1Layout.addWidget(self.dacActual1Edit)
+
         self.dacGroupLayout.addWidget(self.dacRow1)
 
-        # -------------------------
-        # Row 1 : Power 2 set
-        # -------------------------
+        # Row 2 : Power 2
         self.dacRow2 = QWidget(self.dacGroup)
         self.dacRow2.setObjectName("dacRow2")
         self.dacRow2Layout = QHBoxLayout(self.dacRow2)
@@ -373,68 +418,18 @@ class Ui_Form(object):
         self.dacRow2Layout.addWidget(self.dac2ResetBtn)
 
         self.dacRow2Layout.addStretch(1)
-        self.dacGroupLayout.addWidget(self.dacRow2)
 
-        # -------------------------
-        # Row 2 : ADC readback
-        # -------------------------
-        self.dacRow3 = QWidget(self.dacGroup)
-        self.dacRow3.setObjectName("dacRow3")
-        self.dacRow3Layout = QHBoxLayout(self.dacRow3)
-        self.dacRow3Layout.setContentsMargins(0, 0, 0, 0)
-        self.dacRow3Layout.setSpacing(6)
-
-        self.dacRow3Left = QWidget(self.dacRow3)
-        self.dacRow3Left.setObjectName("dacRow3Left")
-        self.dacRow3Left.setFixedWidth(half_w)
-        self.dacRow3LeftLayout = QHBoxLayout(self.dacRow3Left)
-        self.dacRow3LeftLayout.setContentsMargins(0, 0, 0, 0)
-        self.dacRow3LeftLayout.setSpacing(6)
-
-        self.dacActual1Label = QLabel(self.dacRow3Left)
-        self.dacActual1Label.setObjectName("dacActual1Label")
-        self.dacActual1Label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.dacActual1Label.setFixedWidth(label_w)
-        self.dacRow3LeftLayout.addWidget(self.dacActual1Label)
-
-        self.dacActual1Edit = QLineEdit(self.dacRow3Left)
-        self.dacActual1Edit.setObjectName("dacActual1Edit")
-        self.dacActual1Edit.setReadOnly(True)
-        self.dacActual1Edit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.dacActual1Edit.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
-        self.dacActual1Edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.dacActual1Edit.setFixedSize(read_field_w, control_h)
-        self.dacRow3LeftLayout.addWidget(self.dacActual1Edit)
-
-        self.dacRow3LeftLayout.addStretch(1)
-
-        self.dacRow3Right = QWidget(self.dacRow3)
-        self.dacRow3Right.setObjectName("dacRow3Right")
-        self.dacRow3Right.setFixedWidth(half_w)
-        self.dacRow3RightLayout = QHBoxLayout(self.dacRow3Right)
-        self.dacRow3RightLayout.setContentsMargins(0, 0, 0, 0)
-        self.dacRow3RightLayout.setSpacing(6)
-
-        self.dacActual2Label = QLabel(self.dacRow3Right)
-        self.dacActual2Label.setObjectName("dacActual2Label")
-        self.dacActual2Label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.dacActual2Label.setFixedWidth(label_w)
-        self.dacRow3RightLayout.addWidget(self.dacActual2Label)
-
-        self.dacActual2Edit = QLineEdit(self.dacRow3Right)
+        self.dacActual2Edit = QLineEdit(self.dacRow2)
         self.dacActual2Edit.setObjectName("dacActual2Edit")
         self.dacActual2Edit.setReadOnly(True)
         self.dacActual2Edit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.dacActual2Edit.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
         self.dacActual2Edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.dacActual2Edit.setFixedSize(read_field_w, control_h)
-        self.dacRow3RightLayout.addWidget(self.dacActual2Edit)
+        self.dacRow2Layout.addWidget(self.dacActual2Edit)
 
-        self.dacRow3RightLayout.addStretch(1)
-
-        self.dacRow3Layout.addWidget(self.dacRow3Left)
-        self.dacRow3Layout.addWidget(self.dacRow3Right)
-        self.dacGroupLayout.addWidget(self.dacRow3)
+        self.dacGroupLayout.addWidget(self.dacRow2)
+        self.dacGroupLayout.addStretch(1)
 
         # ---- PIPES (frames) ----
         self.frame_17 = QFrame(self.page)
@@ -629,10 +624,13 @@ class Ui_Form(object):
         self.frame_34.setFrameShape(QFrame.Shape.StyledPanel)
         self.frame_34.setFrameShadow(QFrame.Shadow.Raised)
 
-        self.processMonitor_HMI = QLineEdit(self.page)
+        self.processMonitor_HMI = QLabel(self.page)
         self.processMonitor_HMI.setObjectName("processMonitor_HMI")
-        # Process/Config 버튼을 상단에 가로 배치하기 위해 폭을 줄이고 오른쪽으로 이동
-        self.processMonitor_HMI.setGeometry(QRect(230, 20, 371, 71))
+        self.processMonitor_HMI.setGeometry(QRect(230, 20, 365, 71))
+        self.processMonitor_HMI.setWordWrap(True)
+        self.processMonitor_HMI.setTextFormat(Qt.TextFormat.PlainText)
+        self.processMonitor_HMI.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.processMonitor_HMI.setMargin(10)
 
         self.stackedWidget.addWidget(self.page)
 
@@ -846,6 +844,8 @@ class Ui_Form(object):
         self.tmpCurrentEdit.setText(QCoreApplication.translate("Form", "- A", None))
         self.tmpTempEdit.setText(QCoreApplication.translate("Form", "- °C", None))
         self.tmpAlarmEdit.setText(QCoreApplication.translate("Form", "-", None))
+        self.tmpDetailLabel.setText(QCoreApplication.translate("Form", "Detail", None))
+        self.tmpDetailEdit.setText(QCoreApplication.translate("Form", "-", None))
 
         self.tmpStartBtn.setText(QCoreApplication.translate("Form", "Start", None))
         self.tmpStopBtn.setText(QCoreApplication.translate("Form", "Stop", None))
@@ -854,6 +854,9 @@ class Ui_Form(object):
         self.dacGroup.setTitle(QCoreApplication.translate("Form", "Power Manual", None))
         self.dac1Label.setText(QCoreApplication.translate("Form", "Power 1", None))
         self.dac2Label.setText(QCoreApplication.translate("Form", "Power 2", None))
+
+        self.dacSetHeader.setText(QCoreApplication.translate("Form", "Set Value", None))
+        self.dacReadHeader.setText(QCoreApplication.translate("Form", "Readback", None))
 
         self.dac1Down100Btn.setText(QCoreApplication.translate("Form", "-100", None))
         self.dac1Up100Btn.setText(QCoreApplication.translate("Form", "+100", None))
@@ -865,8 +868,6 @@ class Ui_Form(object):
         self.dac1ResetBtn.setText(QCoreApplication.translate("Form", "Reset", None))
         self.dac2ResetBtn.setText(QCoreApplication.translate("Form", "Reset", None))
 
-        self.dacActual1Label.setText(QCoreApplication.translate("Form", "Power 1", None))
-        self.dacActual2Label.setText(QCoreApplication.translate("Form", "Power 2", None))
         self.dacActual1Edit.setText(QCoreApplication.translate("Form", "---", None))
         self.dacActual2Edit.setText(QCoreApplication.translate("Form", "---", None))
 
@@ -1090,7 +1091,7 @@ class Ui_Form(object):
         footer_font = self.tmpConnEdit.font()
         for w in (
             self.dac1Label, self.dac2Label,
-            self.dacActual1Label, self.dacActual2Label,
+            self.dacSetHeader, self.dacReadHeader,
             self.dac1Spin, self.dac2Spin,
             self.dacActual1Edit, self.dacActual2Edit,
             self.dac1Down100Btn, self.dac1Up100Btn,
@@ -1101,20 +1102,27 @@ class Ui_Form(object):
         ):
             w.setFont(footer_font)
 
+        for hdr in (self.dacSetHeader, self.dacReadHeader):
+            hdr.setStyleSheet("color: #666666; background: transparent; font-weight: bold;")
+
         # ---- log windows (optional: 살짝 깔끔하게) ----
         self.hmiLogWindow.setStyleSheet("background: white; border: 1px solid #d0d0d0;")
         self.logWindow.setStyleSheet("background: white; border: 1px solid #d0d0d0;")
-        self.processMonitor_HMI.setStyleSheet("background: white; border: 1px solid #d0d0d0;")
 
-        # ✅ 상태 표시용 라인에딧: 입력 불가(표시 전용)
-        for le in (self.processMonitor_HMI, self.processMonitor_Process):
-            # ✅ 가독성: 패딩(여백) 추가
-            le.setStyleSheet("background: white; border: 1px solid #d0d0d0; padding-left: 10px;")
-            le.setReadOnly(True)
-            le.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            le.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
-            # ✅ 세로 중앙 정렬(한 줄 상태라인이 보기 좋아짐)
-            le.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.processMonitor_HMI.setStyleSheet(
+            "background: white; border: 1px solid #d0d0d0; padding: 6px 10px;"
+        )
+        self.processMonitor_HMI.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.processMonitor_HMI.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+
+        # ✅ Process 페이지 상태 표시만 QLineEdit 유지
+        self.processMonitor_Process.setStyleSheet(
+            "background: white; border: 1px solid #d0d0d0; padding-left: 10px;"
+        )
+        self.processMonitor_Process.setReadOnly(True)
+        self.processMonitor_Process.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.processMonitor_Process.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
+        self.processMonitor_Process.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
         # ✅ Process State(공정 상태) 폰트 크게
         if hasattr(self, "processMonitor_Process"):
@@ -1126,7 +1134,7 @@ class Ui_Form(object):
         # ✅ HMI State(장비 상태)도 조금 키우기(원하면 동일하게 16으로)
         if hasattr(self, "processMonitor_HMI"):
             f2 = QFont("Consolas")
-            f2.setPointSize(13)
+            f2.setPointSize(12)
             f2.setBold(True)
             self.processMonitor_HMI.setFont(f2)
 
@@ -1134,7 +1142,8 @@ class Ui_Form(object):
             self.currentRateEdit, self.currentThicknessEdit,
             self.tmpConnEdit, self.tmpStateEdit,
             self.tmpFreqEdit, self.tmpCurrentEdit,
-            self.tmpTempEdit, self.tmpAlarmEdit,
+            self.tmpTempEdit, self.tmpDetailEdit,
+            self.tmpAlarmEdit,
             self.dacActual1Edit, self.dacActual2Edit,
         ]
 

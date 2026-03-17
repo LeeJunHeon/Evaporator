@@ -14,6 +14,7 @@ ProcessController
 from __future__ import annotations
 
 import re
+import concurrent.futures
 from pathlib import Path
 from typing import Optional, Union, Any
 
@@ -410,6 +411,11 @@ class ProcessController(QObject):
         # 서비스 실행 보장(중복 호출 안전하게 작성)
         self._ensure_services_running()
 
+        # ✅ PLC 연결 상태 최종 확인
+        if not self._is_plc_ready():
+            self._ui_warn("PLC가 아직 연결되지 않아 공정을 시작할 수 없습니다.")
+            return
+
         # 엔진 구성
         engine = ProcessEngine(
             plc=self.plc,
@@ -417,7 +423,7 @@ class ProcessController(QObject):
             acs=self.acs,
             turbovac=self.turbovac,
             log=self.log,
-            callbacks=None,  # worker에서 콜백 브릿지로 교체됨
+            callbacks=None,
         )
 
         # 워커 생성 (✅ 여기서 ProcessWorker 사용)
@@ -442,22 +448,30 @@ class ProcessController(QObject):
         정상 정지(안전정지).
         - 공정 실행 중이 아니어도 '안전 출력'은 항상 수행
         """
-        self._issue_safe_stop_outputs(tag="STOP_BTN")
+        safe_ok = self._issue_safe_stop_outputs(tag="STOP_BTN")
+        if not safe_ok:
+            self._ui_warn("일부 안전 출력 전달이 실패했거나 timeout 되었습니다.")
+
         if self.is_running():
             self._request_engine_stop(StopMode.STOP)
         else:
             self._ui_info("실행 중 공정 없음 → 안전 출력만 수행")
 
     def abort(self) -> None:
-        self._issue_safe_stop_outputs(tag="ABORT_BTN")
+        safe_ok = self._issue_safe_stop_outputs(tag="ABORT_BTN")
+        if not safe_ok:
+            self._ui_warn("일부 안전 출력 전달이 실패했거나 timeout 되었습니다.")
+
         if self.is_running():
             self._request_engine_stop(StopMode.ABORT)
         else:
             self._ui_info("실행 중 공정 없음 → 안전 출력만 수행")
 
-
     def estop(self) -> None:
-        self._issue_safe_stop_outputs(tag="ESTOP_BTN")
+        safe_ok = self._issue_safe_stop_outputs(tag="ESTOP_BTN")
+        if not safe_ok:
+            self._ui_warn("일부 안전 출력 전달이 실패했거나 timeout 되었습니다.")
+
         if self.is_running():
             self._request_engine_stop(StopMode.ESTOP)
         else:
@@ -484,54 +498,76 @@ class ProcessController(QObject):
     # --------------------------------------------------------
     # Internal helpers
     # --------------------------------------------------------
-    def _issue_safe_stop_outputs(self, *, tag: str = "SAFE_STOP") -> None:
+    def _submit_safe_coil(self, coil: str, on: bool, *, tag: str, timeout_s: float) -> bool:
+        try:
+            fut = self.plc.submit_write_coil(coil, on, tag=tag)
+            fut.result(timeout=timeout_s)
+            self._csv_event(event="WRITE_COIL", target=coil, value=int(bool(on)), detail=f"OK tag={tag}")
+            return True
+        except concurrent.futures.TimeoutError as e:
+            self._csv_event(event="WRITE_COIL", target=coil, value=int(bool(on)), detail=f"TIMEOUT tag={tag} {e!r}")
+            self._ui_warn(f"{coil} write timeout: {e!r}")
+            return False
+        except Exception as e:
+            self._csv_event(event="WRITE_COIL", target=coil, value=int(bool(on)), detail=f"ERR tag={tag} {e!r}")
+            self._ui_warn(f"{coil} write 실패: {e!r}")
+            return False
+
+    def _submit_safe_reg(self, reg: str, value: int, *, tag: str, timeout_s: float) -> bool:
+        try:
+            fut = self.plc.submit_write_reg(reg, int(value), tag=tag)
+            fut.result(timeout=timeout_s)
+            self._csv_event(event="SET_DAC", target=reg, value=int(value), detail=f"OK tag={tag}")
+            return True
+        except concurrent.futures.TimeoutError as e:
+            self._csv_event(event="SET_DAC", target=reg, value=int(value), detail=f"TIMEOUT tag={tag} {e!r}")
+            self._ui_warn(f"{reg} write timeout: {e!r}")
+            return False
+        except Exception as e:
+            self._csv_event(event="SET_DAC", target=reg, value=int(value), detail=f"ERR tag={tag} {e!r}")
+            self._ui_warn(f"{reg} write 실패: {e!r}")
+            return False
+        
+    def _issue_safe_stop_outputs(self, *, tag: str = "SAFE_STOP", timeout_s: float = 0.8) -> bool:
         """
-        안전 출력(best-effort, enqueue만 사용):
+        안전 출력 전달 보장 시도:
         1) MAIN_SHUTTER close
         2) SOURCE SHUTTER close (1/2)
         3) DAC 0
         4) POWER off
         5) FTM off
+
+        반환값:
+        - True  : 모든 안전 출력 전달 성공
+        - False : 하나라도 timeout/실패
         """
         try:
             self._ensure_services_running()
         except Exception:
             pass
 
+        if not self._is_plc_ready():
+            self._ui_warn("PLC 미연결 상태여서 안전 출력 전달을 보장할 수 없습니다.")
+            return False
+
+        ok = True
+
         # 1) Shutters close
         for coil in ("MAIN_SHUTTER_SW", "SHUTTER_1_SW", "SHUTTER_2_SW"):
-            try:
-                self.plc.enqueue_write_coil(coil, False, tag=tag)
-                self._csv_event(event="WRITE_COIL", target=coil, value=0, detail=f"ENQ tag={tag}")
-            except Exception as e:
-                self._csv_event(event="WRITE_COIL", target=coil, value=0, detail=f"ERR tag={tag} {e!r}")
-                self._ui_warn(f"{coil} close 실패(enqueue): {e!r}")
+            ok = self._submit_safe_coil(coil, False, tag=tag, timeout_s=timeout_s) and ok
 
         # 2) DAC=0
         for reg in ("DAC_POWER_1", "DAC_POWER_2"):
-            try:
-                self.plc.enqueue_write_reg(reg, 0, tag=tag)
-                self._csv_event(event="SET_DAC", target=reg, value=0, detail=f"ENQ tag={tag}")
-            except Exception as e:
-                self._csv_event(event="SET_DAC", target=reg, value=0, detail=f"ERR tag={tag} {e!r}")
-                self._ui_warn(f"{reg} 0 실패(enqueue): {e!r}")
+            ok = self._submit_safe_reg(reg, 0, tag=tag, timeout_s=timeout_s) and ok
 
         # 3) Power off
         for coil in ("POWER_1_SW", "POWER_2_SW"):
-            try:
-                self.plc.enqueue_write_coil(coil, False, tag=tag)
-                self._csv_event(event="WRITE_COIL", target=coil, value=0, detail=f"ENQ tag={tag}")
-            except Exception as e:
-                self._csv_event(event="WRITE_COIL", target=coil, value=0, detail=f"ERR tag={tag} {e!r}")
-                self._ui_warn(f"{coil} off 실패(enqueue): {e!r}")
+            ok = self._submit_safe_coil(coil, False, tag=tag, timeout_s=timeout_s) and ok
 
         # 4) FTM off
-        try:
-            self.plc.enqueue_write_coil("FTM_SW", False, tag=tag)
-            self._csv_event(event="WRITE_COIL", target="FTM_SW", value=0, detail=f"ENQ tag={tag}")
-        except Exception as e:
-            self._csv_event(event="WRITE_COIL", target="FTM_SW", value=0, detail=f"ERR tag={tag} {e!r}")
-            self._ui_warn(f"FTM off 실패(enqueue): {e!r}")
+        ok = self._submit_safe_coil("FTM_SW", False, tag=tag, timeout_s=timeout_s) and ok
+
+        return ok
 
     def _request_engine_stop(self, mode: StopMode) -> None:
         if not self.is_running():
@@ -542,6 +578,22 @@ class ProcessController(QObject):
             self._ui_warn(f"정지 요청: {mode.value}")
         except Exception as e:
             self._ui_warn(f"stop 요청 실패: {e!r}")
+
+    def _is_plc_ready(self) -> bool:
+        """
+        공정 시작/안전정지 전에 PLC가 실제 I/O 가능한 상태인지 확인.
+        """
+        try:
+            if hasattr(self.plc, "is_running") and not self.plc.is_running():
+                return False
+
+            if hasattr(self.plc, "is_connected"):
+                return bool(self.plc.is_connected())
+
+            snap = self.plc.get_last_snapshot() if hasattr(self.plc, "get_last_snapshot") else None
+            return bool(getattr(snap, "connected", False)) if snap is not None else False
+        except Exception:
+            return False
 
     def _ensure_services_running(self) -> None:
         """

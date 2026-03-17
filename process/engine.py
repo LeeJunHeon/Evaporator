@@ -21,6 +21,7 @@ ProcessEngine
 from __future__ import annotations
 
 import contextlib
+import concurrent.futures
 import time
 import uuid
 import math
@@ -194,6 +195,11 @@ class ProcessEngine:
         self._last_status_emit_ts = 0.0
         self._last_telemetry_ts = 0.0
 
+        # ✅ 이전 run의 잔상 제거
+        self._last_dac_power_1 = 0
+        self._last_dac_power_2 = 0
+        self._ui_last_message = ""
+
         # run open
         try:
             self.log.open_run(
@@ -219,6 +225,11 @@ class ProcessEngine:
         ok = False
 
         try:
+            # ✅ controller 외에 engine도 한 번 더 PLC ready 확인
+            self._current_step_idx = -1
+            self._current_step_name = "ENGINE_START_CHECK"
+            self._ensure_plc_ready(where="ENGINE_START_CHECK")
+
             for idx, step in enumerate(recipe.steps):
                 self._current_step_idx = idx
                 self._current_step_name = step.name
@@ -446,6 +457,14 @@ class ProcessEngine:
 
         실패해도 예외는 삼키고 계속 진행(best-effort)한다.
         """
+        if not self._is_plc_ready():
+            self._log_warn(
+                f"[SAFETY:{tag}] PLC 미연결 상태라 안전 출력 시퀀스를 실제로 전달할 수 없습니다.",
+                tag="ENGINE",
+                also_ui=True,
+            )
+            return
+
         try:
             steps = build_engine_safe_shutdown_steps()
         except Exception as e:
@@ -584,8 +603,10 @@ class ProcessEngine:
     def _wait_future(fut: Any, *, timeout_s: float, where: str, msg: str = "") -> Any:
         try:
             return fut.result(timeout=float(timeout_s))
+        except concurrent.futures.TimeoutError as e:
+            raise EngineTimeout(where, f"{msg + ': ' if msg else ''}future timeout: {e!r}")
         except Exception as e:
-            raise EngineFailed(where, f"{msg + ': ' if msg else ''}future failed/timeout: {e!r}")
+            raise EngineFailed(where, f"{msg + ': ' if msg else ''}future failed: {e!r}")
 
     # --------------------------------------------------------
     # WAIT helpers
@@ -796,6 +817,23 @@ class ProcessEngine:
         if self._phase == ProcessPhase.PAUSED:
             self._phase = ProcessPhase.RUNNING
             self._emit_status(message="재개", force=True)
+
+    def _is_plc_ready(self) -> bool:
+        try:
+            if hasattr(self.plc, "is_running") and not self.plc.is_running():
+                return False
+
+            if hasattr(self.plc, "is_connected"):
+                return bool(self.plc.is_connected())
+
+            snap = self.plc.get_last_snapshot() if hasattr(self.plc, "get_last_snapshot") else None
+            return bool(getattr(snap, "connected", False)) if snap is not None else False
+        except Exception:
+            return False
+
+    def _ensure_plc_ready(self, *, where: str) -> None:
+        if not self._is_plc_ready():
+            raise EngineFailed(where, "PLC가 연결되지 않았거나 I/O 가능한 상태가 아닙니다.")
 
     # --------------------------------------------------------
     # Snapshot getters (센서/PLC 상태 읽기)

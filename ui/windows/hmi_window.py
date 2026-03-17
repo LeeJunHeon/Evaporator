@@ -67,15 +67,18 @@ class HmiWindow(QWidget):
             self.process_window.setAttribute(Qt.WA_DeleteOnClose, True)
             self.process_window.destroyed.connect(self._on_process_destroyed)
 
-            # ✅ 신규 공정/로그/센서 주입
+            # 최초 1회만 정식 주입
             self.process_window.set_runtime_objects(
-                self._plc_binder,           # ✅ positional 1
-                self._ini_path,             # ✅ positional 2
+                self._plc_binder,
+                self._ini_path,
                 process_controller=self._process_controller,
                 log_service=self._log_service,
                 stm_service=self._stm_service,
                 acs_service=self._acs_service,
             )
+
+        # ✅ 이미 떠 있는 창도 최신 참조를 보게 함
+        self._refresh_process_window_runtime_refs()
 
         self.process_window.show()
         self.process_window.raise_()
@@ -83,6 +86,55 @@ class HmiWindow(QWidget):
 
     def _on_process_destroyed(self, *args):
         self.process_window = None
+
+    def _refresh_process_window_runtime_refs(self) -> None:
+        """
+        이미 떠 있는 ProcessWindow가 최신 runtime object를 보도록
+        참조만 갱신한다.
+
+        주의:
+        - process_window.set_runtime_objects()를 다시 호출하면
+        ProcessController signal 중복 연결 가능성이 있으므로
+        여기서는 참조 필드만 갱신한다.
+        """
+        pw = self.process_window
+        if pw is None:
+            return
+
+        try:
+            pw.hmi_window = self
+        except Exception:
+            pass
+
+        try:
+            pw._plc_binder = self._plc_binder
+        except Exception:
+            pass
+
+        try:
+            pw._ini_path = Path(self._ini_path)
+        except Exception:
+            pass
+
+        try:
+            pw._process_controller = self._process_controller
+        except Exception:
+            pass
+
+        try:
+            pw._log_service = self._log_service
+        except Exception:
+            pass
+
+        try:
+            pw._stm_service = self._stm_service
+        except Exception:
+            pass
+
+        try:
+            pw._acs_service = self._acs_service
+        except Exception:
+            pass
 
     def set_runtime_objects(
         self,
@@ -109,6 +161,9 @@ class HmiWindow(QWidget):
         if self._log_service is not None and hasattr(self._log_service, "attach_text_widget"):
             with contextlib.suppress(Exception):
                 self._log_service.attach_text_widget(getattr(self.ui, "hmiLogWindow", None), channel="HMI")
+
+        # ✅ 이미 떠 있는 ProcessWindow가 있으면 최신 참조 반영
+        self._refresh_process_window_runtime_refs()
 
     def _set_process_controller_devices(self, stm: Any, acs: Any) -> None:
         """

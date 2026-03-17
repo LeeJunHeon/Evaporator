@@ -1111,7 +1111,7 @@ class HmiPlcBinder(QObject):
         except Exception:
             pass
 
-    def _set_dac_actual_text(self, ch: int, value: Optional[int]) -> None:
+    def _set_dac_actual_text(self, ch: int, value: Optional[float]) -> None:
         w = self._dac1_actual if int(ch) == 1 else self._dac2_actual
         if w is None:
             return
@@ -1120,7 +1120,7 @@ class HmiPlcBinder(QObject):
             if value is None:
                 text = "---"
             else:
-                text = str(int(value))
+                text = f"{float(value):.1f}"
 
             if hasattr(w, "setPlainText"):
                 w.setPlainText(text)
@@ -1136,14 +1136,17 @@ class HmiPlcBinder(QObject):
         raw2 = regs.get("POWER_READ_2", None)
 
         try:
-            self._set_dac_actual_text(1, None if raw1 is None else int(raw1))
+            v1 = None if raw1 is None else float(raw1)
         except Exception:
-            self._set_dac_actual_text(1, None)
+            v1 = None
 
         try:
-            self._set_dac_actual_text(2, None if raw2 is None else int(raw2))
+            v2 = None if raw2 is None else float(raw2)
         except Exception:
-            self._set_dac_actual_text(2, None)
+            v2 = None
+
+        self._set_dac_actual_text(1, v1)
+        self._set_dac_actual_text(2, v2)
 
     # ============================================================
     # DAC 수동 입력 (PLCService로 write_reg만)

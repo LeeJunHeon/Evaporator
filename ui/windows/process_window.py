@@ -961,24 +961,20 @@ class ProcessWindow(QWidget):
         except Exception:
             return None
         
-    def _convert_power_read_to_amp(self, raw: Optional[int]) -> Optional[float]:
+    def _convert_power_read_to_amp(self, raw: Optional[float]) -> Optional[float]:
         """
-        PLC D00010 / D00011 값을 표시용 A 값으로 변환.
-
-        중요:
-        - PLC가 이미 A 단위로 넣고 있으면 그대로 float(raw) 사용
-        - PLC가 AD raw count를 넣고 있으면 아래 식을 실제 스케일에 맞게 수정
+        plc_service.py에서 이미 sanitize + scale 된 값을 그대로 사용한다.
+        예:
+            0.0
+            100.0
+            253.4
         """
         if raw is None:
             return None
         try:
-            raw_f = float(raw)
+            return float(raw)
         except Exception:
             return None
-
-        # 현재는 'PLC가 이미 표시 가능한 값으로 넣는다' 가정
-        # 만약 AD raw count라면 여기서 변환식을 바꿔야 함
-        return raw_f
 
     def _read_plc_power_actual_pair(self) -> tuple[Optional[float], Optional[float]]:
         """
@@ -1019,9 +1015,9 @@ class ProcessWindow(QWidget):
         t2 = ""
 
         if use1:
-            t1 = f"{p1:.2f}" if p1 is not None else "---"
+            t1 = f"{p1:.1f}" if p1 is not None else "---"
         if use2:
-            t2 = f"{p2:.2f}" if p2 is not None else "---"
+            t2 = f"{p2:.1f}" if p2 is not None else "---"
 
         try:
             self.ui.actualPower1Edit.setText(t1)

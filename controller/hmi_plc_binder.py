@@ -15,7 +15,7 @@ from __future__ import annotations
 import time
 import threading
 import contextlib
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict, is_dataclass
 from typing import Dict, Optional, Tuple, Any
 from services.log_service import LogService
 
@@ -142,6 +142,7 @@ class HmiPlcBinder(QObject):
         ACS는 TMP처럼 start/stop attach 개념은 없고,
         연결 상태 + pressure/snapshot을 받아서 UI에 반영하는 역할만 맡는다.
         """
+        self._disconnect_acs_service(getattr(self, "_acs_service", None))
         self._acs_service = svc
         self._acs_connected = False
         self._acs_last_snapshot = {}
@@ -170,7 +171,7 @@ class HmiPlcBinder(QObject):
 
         try:
             snap = svc.get_last_snapshot() if hasattr(svc, "get_last_snapshot") else None
-            self._acs_last_snapshot = dict(snap or {})
+            self._acs_last_snapshot = self._snapshot_to_dict(snap)
         except Exception:
             self._acs_last_snapshot = {}
 
@@ -458,6 +459,32 @@ class HmiPlcBinder(QObject):
         except Exception:
             pass
 
+    def _snapshot_to_dict(self, snap_obj: object) -> Dict[str, Any]:
+        if snap_obj is None:
+            return {}
+
+        if isinstance(snap_obj, dict):
+            return dict(snap_obj)
+
+        try:
+            if is_dataclass(snap_obj):
+                return dict(asdict(snap_obj))
+        except Exception:
+            pass
+
+        out: Dict[str, Any] = {}
+        for name in ("ts", "connected", "pressure", "meta",
+                    "state_text", "freq_hz", "current_a",
+                    "motor_temp_c", "alarm_text",
+                    "normal_operation", "accelerating",
+                    "decelerating", "pump_turning"):
+            try:
+                if hasattr(snap_obj, name):
+                    out[name] = getattr(snap_obj, name)
+            except Exception:
+                pass
+        return out
+
     def _format_acs_pressure_text(self, value: Optional[float]) -> str:
         if value is None:
             return "---"
@@ -474,25 +501,27 @@ class HmiPlcBinder(QObject):
         return f"{v:.3e}"
 
     def _render_acs_status(self) -> None:
-        """
-        ACS 연결 상태와 pressure를 HMI에 반영한다.
-
-        주의:
-        아래 widget_name 두 개는 실제 mainWindow.py의 ACS 표시용 위젯 이름으로 바꿔야 한다.
-        현재 업로드된 hmi_plc_binder.py 안에는 ACS 전용 위젯명이 없어서
-        binder 쪽 로직만 정확히 제시한다.
-        """
         snap = dict(self._acs_last_snapshot or {})
 
         connected = bool(snap.get("connected", self._acs_connected))
         pressure = snap.get("pressure", self._acs_last_pressure)
 
-        conn_text = "CONNECTED" if connected else "DISCONNECTED"
-        pressure_text = self._format_acs_pressure_text(pressure)
+        # 상단 상태라인은 여기서 계속 반영
+        self.set_external_connected("ACS", connected)
 
-        # TODO: 아래 두 이름을 실제 ACS 위젯명으로 교체
-        self._set_acs_field("acsConnEdit", conn_text)
-        self._set_acs_field("acsPressureEdit", pressure_text)
+        # main.py 기준 실제 pressure 표시 위젯은 pressureValue
+        if pressure is None:
+            pressure_text = "--- Torr"
+        else:
+            try:
+                pressure_text = f"{float(pressure):.3e} Torr"
+            except Exception:
+                pressure_text = "--- Torr"
+
+        self._set_acs_field("pressureValue", pressure_text)
+
+        # ACS 전용 conn 위젯이 실제로 있다면, 그 이름 확인 후 아래처럼 추가
+        # self._set_acs_field("실제Conn위젯이름", "CONNECTED" if connected else "DISCONNECTED")
 
     def _render_tmp_status(self) -> None:
         snap = dict(self._tmp_last_snapshot or {})
@@ -679,8 +708,24 @@ class HmiPlcBinder(QObject):
         if prev != self._acs_connected:
             self._set_hmi_log("ACS CONNECTED" if self._acs_connected else "ACS DISCONNECTED")
 
+    def _disconnect_acs_service(self, svc: object | None) -> None:
+        if svc is None:
+            return
+        for sig_name, slot in (
+            ("sig_connected", self._on_acs_connected),
+            ("sig_snapshot", self._on_acs_snapshot),
+            ("sig_pressure", self._on_acs_pressure),
+            ("sig_error", self._on_acs_error),
+        ):
+            try:
+                sig = getattr(svc, sig_name, None)
+                if sig is not None:
+                    sig.disconnect(slot)
+            except Exception:
+                pass
+
     def _on_acs_snapshot(self, snap_obj: object) -> None:
-        snap = dict(snap_obj or {})
+        snap = self._snapshot_to_dict(snap_obj)
         self._acs_last_snapshot = snap
 
         if "connected" in snap:

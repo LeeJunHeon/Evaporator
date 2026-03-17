@@ -12,8 +12,9 @@ HMI(UI) ↔ PLC 연결 바인더 (깔끔 버전)
 
 from __future__ import annotations
 
-import threading
 import time
+import threading
+import contextlib
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple, Any
 from services.log_service import LogService
@@ -80,11 +81,16 @@ class HmiPlcBinder(QObject):
         # ✅ 상단 상태라인에는 "연결 상태만" 표시하기 위한 외부 장비 연결 상태 저장소
         self._external_connected: Dict[str, bool] = {}
 
+        # ✅ ACS 서비스 연결/상태
+        self._acs_service: Optional[object] = None
+        self._acs_connected: bool = False
+        self._acs_last_snapshot: Dict[str, Any] = {}
+        self._acs_last_pressure: Optional[float] = None
+
         # ✅ TMP(TURBOVAC) 서비스 연결/상태
         self._turbovac_service: Optional[object] = None
         self._tmp_connected: bool = False
         self._tmp_last_snapshot: Dict[str, Any] = {}
-
         # TMP service thread를 이미 시작했는지
         self._tmp_service_started: bool = False
 
@@ -129,6 +135,53 @@ class HmiPlcBinder(QObject):
         with self._state_lock:
             self._external_connected[key] = bool(ok)
         self._render_status_line()
+
+    def set_acs_service(self, svc: object | None) -> None:
+        """
+        main.py 또는 hmi_window 쪽에서 ACSService를 주입한다.
+        ACS는 TMP처럼 start/stop attach 개념은 없고,
+        연결 상태 + pressure/snapshot을 받아서 UI에 반영하는 역할만 맡는다.
+        """
+        self._acs_service = svc
+        self._acs_connected = False
+        self._acs_last_snapshot = {}
+        self._acs_last_pressure = None
+
+        if svc is None:
+            self.set_external_connected("ACS", False)
+            self._render_acs_status()
+            return
+
+        if hasattr(svc, "sig_connected"):
+            svc.sig_connected.connect(self._on_acs_connected)
+        if hasattr(svc, "sig_snapshot"):
+            svc.sig_snapshot.connect(self._on_acs_snapshot)
+        if hasattr(svc, "sig_pressure"):
+            svc.sig_pressure.connect(self._on_acs_pressure)
+        if hasattr(svc, "sig_error"):
+            svc.sig_error.connect(self._on_acs_error)
+
+        # 현재 상태 즉시 반영
+        try:
+            v = getattr(svc, "is_connected", False)
+            self._acs_connected = bool(v() if callable(v) else v)
+        except Exception:
+            self._acs_connected = False
+
+        try:
+            snap = svc.get_last_snapshot() if hasattr(svc, "get_last_snapshot") else None
+            self._acs_last_snapshot = dict(snap or {})
+        except Exception:
+            self._acs_last_snapshot = {}
+
+        try:
+            snap_pressure = self._acs_last_snapshot.get("pressure", None)
+            self._acs_last_pressure = float(snap_pressure) if snap_pressure is not None else None
+        except Exception:
+            self._acs_last_pressure = None
+
+        self.set_external_connected("ACS", self._acs_connected)
+        self._render_acs_status()
 
     def set_turbovac_service(self, svc: object | None) -> None:
         """
@@ -246,6 +299,12 @@ class HmiPlcBinder(QObject):
 
         self._render_status_line()
         self._set_controls_enabled(False)
+
+        # ACS/TMP는 외부 서비스이므로 객체는 유지하되, 상태표시는 즉시 최신화
+        with contextlib.suppress(Exception):
+            self._render_acs_status()
+        with contextlib.suppress(Exception):
+            self._render_tmp_status()
 
         self.settings = new_settings
 
@@ -384,6 +443,56 @@ class HmiPlcBinder(QObject):
                     w.setCursorPosition(0)
         except Exception:
             pass
+
+    def _set_acs_field(self, widget_name: str, text: str) -> None:
+        w = getattr(self.ui, widget_name, None)
+        if w is None:
+            return
+        try:
+            if hasattr(w, "setPlainText"):
+                w.setPlainText(str(text))
+            elif hasattr(w, "setText"):
+                w.setText(str(text))
+                if hasattr(w, "setCursorPosition"):
+                    w.setCursorPosition(0)
+        except Exception:
+            pass
+
+    def _format_acs_pressure_text(self, value: Optional[float]) -> str:
+        if value is None:
+            return "---"
+        try:
+            v = float(value)
+        except Exception:
+            return "---"
+
+        # 너무 긴 소수 문자열 방지
+        if v == 0.0:
+            return "0"
+        if abs(v) >= 1e-3:
+            return f"{v:.3e}"
+        return f"{v:.3e}"
+
+    def _render_acs_status(self) -> None:
+        """
+        ACS 연결 상태와 pressure를 HMI에 반영한다.
+
+        주의:
+        아래 widget_name 두 개는 실제 mainWindow.py의 ACS 표시용 위젯 이름으로 바꿔야 한다.
+        현재 업로드된 hmi_plc_binder.py 안에는 ACS 전용 위젯명이 없어서
+        binder 쪽 로직만 정확히 제시한다.
+        """
+        snap = dict(self._acs_last_snapshot or {})
+
+        connected = bool(snap.get("connected", self._acs_connected))
+        pressure = snap.get("pressure", self._acs_last_pressure)
+
+        conn_text = "CONNECTED" if connected else "DISCONNECTED"
+        pressure_text = self._format_acs_pressure_text(pressure)
+
+        # TODO: 아래 두 이름을 실제 ACS 위젯명으로 교체
+        self._set_acs_field("acsConnEdit", conn_text)
+        self._set_acs_field("acsPressureEdit", pressure_text)
 
     def _render_tmp_status(self) -> None:
         snap = dict(self._tmp_last_snapshot or {})
@@ -550,6 +659,63 @@ class HmiPlcBinder(QObject):
                 self._tmp_attach_prompt_open = False
 
         QTimer.singleShot(0, _run)
+
+    def _on_acs_connected(self, ok: bool) -> None:
+        prev = bool(self._acs_connected)
+        self._acs_connected = bool(ok)
+
+        self.set_external_connected("ACS", self._acs_connected)
+
+        if not self._acs_connected:
+            # 연결 끊기면 stale 값 즉시 제거
+            self._acs_last_pressure = None
+            self._acs_last_snapshot = {
+                "connected": False,
+                "pressure": None,
+            }
+
+        self._render_acs_status()
+
+        if prev != self._acs_connected:
+            self._set_hmi_log("ACS CONNECTED" if self._acs_connected else "ACS DISCONNECTED")
+
+    def _on_acs_snapshot(self, snap_obj: object) -> None:
+        snap = dict(snap_obj or {})
+        self._acs_last_snapshot = snap
+
+        if "connected" in snap:
+            self._acs_connected = bool(snap.get("connected", False))
+            self.set_external_connected("ACS", self._acs_connected)
+
+        # snapshot 기준 pressure 반영
+        if "pressure" in snap:
+            try:
+                p = snap.get("pressure", None)
+                self._acs_last_pressure = float(p) if p is not None else None
+            except Exception:
+                self._acs_last_pressure = None
+
+        self._render_acs_status()
+
+    def _on_acs_pressure(self, value: object) -> None:
+        try:
+            self._acs_last_pressure = float(value) if value is not None else None
+        except Exception:
+            self._acs_last_pressure = None
+
+        # pressure signal이 None이면 바로 숫자 지워야 stale 표시가 안 남음
+        if value is None:
+            self._acs_last_snapshot = {
+                **dict(self._acs_last_snapshot or {}),
+                "pressure": None,
+            }
+
+        self._render_acs_status()
+
+    def _on_acs_error(self, msg: str) -> None:
+        # error 자체는 로그만 남기고,
+        # 실제 값 클리어는 sig_connected(False) / sig_pressure(None) / snapshot(None)에 맡긴다.
+        self._set_hmi_log(str(msg))
 
     def _on_tmp_connected(self, ok: bool) -> None:
         prev = bool(self._tmp_connected)

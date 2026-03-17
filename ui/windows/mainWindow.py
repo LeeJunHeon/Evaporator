@@ -43,7 +43,7 @@ class Ui_Form(object):
         # =========================
         self.hmiFooter = QWidget(Form)
         self.hmiFooter.setObjectName("hmiFooter")
-        self.hmiFooter.setGeometry(QRect(10, 705, 1101, 145))
+        self.hmiFooter.setGeometry(QRect(10, 705, 1101, 152))
         self.hmiFooter.setAutoFillBackground(False)
 
         # =========================
@@ -146,12 +146,12 @@ class Ui_Form(object):
         # =========================
         self.tmpGroup = QGroupBox(self.hmiFooter)
         self.tmpGroup.setObjectName("tmpGroup")
-        self.tmpGroup.setGeometry(QRect(0, 0, 540, 140))
+        self.tmpGroup.setGeometry(QRect(0, 0, 540, 148))
         self.tmpGroup.setAutoFillBackground(True)
 
         self.tmpGroupLayout = QVBoxLayout(self.tmpGroup)
-        self.tmpGroupLayout.setContentsMargins(10, 18, 10, 8)
-        self.tmpGroupLayout.setSpacing(4)
+        self.tmpGroupLayout.setContentsMargins(10, 16, 10, 10)
+        self.tmpGroupLayout.setSpacing(5)
 
         tmp_label_w = 48
         tmp_edit_h = 24
@@ -349,19 +349,19 @@ class Ui_Form(object):
         self.tmpButtonRow = QWidget(self.tmpGroup)
         self.tmpButtonRow.setObjectName("tmpButtonRow")
         self.tmpButtonRowLayout = QHBoxLayout(self.tmpButtonRow)
-        self.tmpButtonRowLayout.setContentsMargins(0, 0, 0, 0)
+        self.tmpButtonRowLayout.setContentsMargins(0, 2, 0, 0)
         self.tmpButtonRowLayout.setSpacing(8)
 
         self.tmpStartBtn = QPushButton(self.tmpButtonRow)
         self.tmpStartBtn.setObjectName("tmpStartBtn")
         self.tmpStartBtn.setAutoDefault(False)
-        self.tmpStartBtn.setFixedHeight(26)
+        self.tmpStartBtn.setFixedHeight(28)
         self.tmpButtonRowLayout.addWidget(self.tmpStartBtn, 1)
 
         self.tmpStopBtn = QPushButton(self.tmpButtonRow)
         self.tmpStopBtn.setObjectName("tmpStopBtn")
         self.tmpStopBtn.setAutoDefault(False)
-        self.tmpStopBtn.setFixedHeight(26)
+        self.tmpStopBtn.setFixedHeight(28)
         self.tmpButtonRowLayout.addWidget(self.tmpStopBtn, 1)
 
         self.tmpGroupLayout.addWidget(self.tmpButtonRow)
@@ -375,14 +375,14 @@ class Ui_Form(object):
         # =========================
         self.dacGroup = QGroupBox(self.hmiFooter)
         self.dacGroup.setObjectName("dacGroup")
-        self.dacGroup.setGeometry(QRect(551, 0, 540, 140))
+        self.dacGroup.setGeometry(QRect(551, 0, 540, 148))
         self.dacGroup.setAutoFillBackground(True)
 
         self.dacGroupLayout = QVBoxLayout(self.dacGroup)
-        self.dacGroupLayout.setContentsMargins(12, 18, 12, 8)
-        self.dacGroupLayout.setSpacing(5)
+        self.dacGroupLayout.setContentsMargins(16, 18, 16, 12)
+        self.dacGroupLayout.setSpacing(8)
 
-        control_h = 24
+        control_h = 26
         ch_w = 62
         set_w = 84
         step_btn_w = 46
@@ -396,7 +396,7 @@ class Ui_Form(object):
         self.dacHeaderRow.setObjectName("dacHeaderRow")
         self.dacHeaderRowLayout = QHBoxLayout(self.dacHeaderRow)
         self.dacHeaderRowLayout.setContentsMargins(0, 0, 0, 0)
-        self.dacHeaderRowLayout.setSpacing(6)
+        self.dacHeaderRowLayout.setSpacing(8)
 
         self.dacChannelHeader = QLabel(self.dacHeaderRow)
         self.dacChannelHeader.setObjectName("dacChannelHeader")
@@ -439,7 +439,7 @@ class Ui_Form(object):
         self.dacRow1.setObjectName("dacRow1")
         self.dacRow1Layout = QHBoxLayout(self.dacRow1)
         self.dacRow1Layout.setContentsMargins(0, 0, 0, 0)
-        self.dacRow1Layout.setSpacing(6)
+        self.dacRow1Layout.setSpacing(8)
 
         self.dac1Label = QLabel(self.dacRow1)
         self.dac1Label.setObjectName("dac1Label")
@@ -462,7 +462,7 @@ class Ui_Form(object):
         self.dac1StepBox.setObjectName("dac1StepBox")
         self.dac1StepBoxLayout = QHBoxLayout(self.dac1StepBox)
         self.dac1StepBoxLayout.setContentsMargins(0, 0, 0, 0)
-        self.dac1StepBoxLayout.setSpacing(4)
+        self.dac1StepBoxLayout.setSpacing(6)
 
         self.dac1Down100Btn = QPushButton(self.dac1StepBox)
         self.dac1Down100Btn.setObjectName("dac1Down100Btn")
@@ -480,7 +480,7 @@ class Ui_Form(object):
         self.dac1ActionBox.setObjectName("dac1ActionBox")
         self.dac1ActionBoxLayout = QHBoxLayout(self.dac1ActionBox)
         self.dac1ActionBoxLayout.setContentsMargins(0, 0, 0, 0)
-        self.dac1ActionBoxLayout.setSpacing(4)
+        self.dac1ActionBoxLayout.setSpacing(6)
 
         self.dac1SetBtn = QPushButton(self.dac1ActionBox)
         self.dac1SetBtn.setObjectName("dac1SetBtn")
@@ -513,7 +513,7 @@ class Ui_Form(object):
         self.dacRow2.setObjectName("dacRow2")
         self.dacRow2Layout = QHBoxLayout(self.dacRow2)
         self.dacRow2Layout.setContentsMargins(0, 0, 0, 0)
-        self.dacRow2Layout.setSpacing(6)
+        self.dacRow2Layout.setSpacing(8)
 
         self.dac2Label = QLabel(self.dacRow2)
         self.dac2Label.setObjectName("dac2Label")
@@ -536,7 +536,7 @@ class Ui_Form(object):
         self.dac2StepBox.setObjectName("dac2StepBox")
         self.dac2StepBoxLayout = QHBoxLayout(self.dac2StepBox)
         self.dac2StepBoxLayout.setContentsMargins(0, 0, 0, 0)
-        self.dac2StepBoxLayout.setSpacing(4)
+        self.dac2StepBoxLayout.setSpacing(6)
 
         self.dac2Down100Btn = QPushButton(self.dac2StepBox)
         self.dac2Down100Btn.setObjectName("dac2Down100Btn")
@@ -554,7 +554,7 @@ class Ui_Form(object):
         self.dac2ActionBox.setObjectName("dac2ActionBox")
         self.dac2ActionBoxLayout = QHBoxLayout(self.dac2ActionBox)
         self.dac2ActionBoxLayout.setContentsMargins(0, 0, 0, 0)
-        self.dac2ActionBoxLayout.setSpacing(4)
+        self.dac2ActionBoxLayout.setSpacing(6)
 
         self.dac2SetBtn = QPushButton(self.dac2ActionBox)
         self.dac2SetBtn.setObjectName("dac2SetBtn")
@@ -579,7 +579,6 @@ class Ui_Form(object):
         self.dacRow2Layout.addWidget(self.dacActual2Edit)
 
         self.dacGroupLayout.addWidget(self.dacRow2)
-        self.dacGroupLayout.addStretch(1)
 
         # ---- PIPES (frames) ----
         self.frame_17 = QFrame(self.page)
@@ -781,6 +780,7 @@ class Ui_Form(object):
         self.processMonitor_HMI.setTextFormat(Qt.TextFormat.PlainText)
         self.processMonitor_HMI.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.processMonitor_HMI.setMargin(10)
+        self.processMonitor_HMI.setAutoFillBackground(True)
 
         self.stackedWidget.addWidget(self.page)
 
@@ -1136,6 +1136,22 @@ class Ui_Form(object):
         vac_font.setPointSize(12)
         self.vacuumOnBtn.setFont(vac_font)
 
+        # 상단 상태창(HMI) - QLabel로 바뀌었으므로 별도 박스 스타일 복구
+        self.processMonitor_HMI.setStyleSheet("""
+            QLabel {
+                background: white;
+                border: 1px solid #d0d0d0;
+                border-radius: 2px;
+                color: #111111;
+                padding: 6px 10px;
+            }
+        """)
+
+        status_font = QFont("Consolas")
+        status_font.setPointSize(12)
+        status_font.setBold(True)
+        self.processMonitor_HMI.setFont(status_font)
+
         # ---- frames (pipes) ----
         pipe_frames = [
             self.frame_17, self.frame_18,
@@ -1397,24 +1413,28 @@ class Ui_Form(object):
         ):
             hdr.setStyleSheet("color: #6b7280; background: transparent; font-weight: bold;")
 
+        # Process 페이지 표시 전용 edit만 기본 흰색 처리
         readonly_display = [
-            self.currentRateEdit, self.currentThicknessEdit,
+            self.currentRateEdit,
+            self.currentThicknessEdit,
+        ]
+
+        for le in readonly_display:
+            le.setStyleSheet("")
+            pal = le.palette()
+            pal.setColor(QPalette.ColorRole.Base, Qt.GlobalColor.white)
+            le.setPalette(pal)
+            le.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            le.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
+
+        # Footer 표시 전용 위젯은 커스텀 스타일 유지, UX만 잠금
+        for le in (
             self.tmpConnEdit, self.tmpStateEdit,
             self.tmpFreqEdit, self.tmpCurrentEdit,
             self.tmpTempEdit, self.tmpDetailEdit,
             self.tmpAlarmEdit,
             self.dacActual1Edit, self.dacActual2Edit,
-        ]
-
-        for le in readonly_display:
-            # 혹시 이전에 스타일을 먹인 적이 있으면 제거(기본 디자인으로 복귀)
-            le.setStyleSheet("")
-
-            pal = le.palette()
-            pal.setColor(QPalette.ColorRole.Base, Qt.GlobalColor.white)
-            le.setPalette(pal)
-
-            # 표시 전용 UX
+        ):
             le.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             le.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
 

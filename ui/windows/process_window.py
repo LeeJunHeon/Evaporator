@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Optional, Any, TYPE_CHECKING
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 
-from PySide6.QtWidgets import QWidget, QMessageBox, QVBoxLayout
+from PySide6.QtWidgets import QWidget, QMessageBox, QVBoxLayout, QApplication
 from PySide6.QtCore import QTimer
 
 from ui.windows.mainWindow import Ui_Form
@@ -361,6 +361,52 @@ class ProcessWindow(QWidget):
             _append_text(getattr(self.ui, "logWindow", None), f"[PRECHECK] STM OK: {snap!r}")
 
         return True
+    
+    def _check_plc_ready_before_start(self) -> bool:
+        """
+        Start 버튼 눌렀을 때 PLC 연결 상태를 먼저 확인한다.
+        PLC가 끊긴 상태면 STM 연결/공정 시작으로 넘어가지 않게 막는다.
+        """
+        def _abort(msg: str) -> bool:
+            _append_text(getattr(self.ui, "logWindow", None), f"[PRECHECK][BLOCK] PLC: {msg}")
+            QMessageBox.warning(self, "PLC Pre-check", msg)
+            return False
+
+        if self.hmi_window is None:
+            return _abort("HMI window가 없습니다. PLC 상태를 확인할 수 없습니다.")
+
+        binder = getattr(self.hmi_window, "_plc_binder", None)
+        if binder is None:
+            return _abort("plc_binder가 없습니다. PLC 연결 상태를 확인할 수 없습니다.")
+
+        try:
+            plc = binder.get_plc_service()
+        except Exception as e:
+            return _abort(f"PLC 서비스 조회 실패: {e!r}")
+
+        if plc is None:
+            return _abort("PLC 서비스가 없습니다.")
+
+        try:
+            connected = False
+
+            # 1순위: plc_service.is_connected()가 있으면 사용
+            is_connected_fn = getattr(plc, "is_connected", None)
+            if callable(is_connected_fn):
+                connected = bool(is_connected_fn())
+            else:
+                # 2순위: latest snapshot의 connected 값 사용
+                snap = plc.get_last_snapshot() if hasattr(plc, "get_last_snapshot") else None
+                connected = bool(getattr(snap, "connected", False))
+
+            if not connected:
+                return _abort("PLC가 연결되지 않았습니다.\nPLC 연결 후 다시 시작하세요.")
+
+        except Exception as e:
+            return _abort(f"PLC 연결 상태 확인 실패: {e!r}")
+
+        _append_text(getattr(self.ui, "logWindow", None), "[PRECHECK] PLC OK: connected")
+        return True
 
     def _ensure_sensors_connected_fresh(self) -> bool:
         if self.hmi_window is None:
@@ -472,7 +518,13 @@ class ProcessWindow(QWidget):
         # 현재 main.py에서는 recipe_name을 파일 open 용도로 직접 쓰지 않음
         self._active_recipe_name = pname if pname else (f"EVAP_{mat}" if mat else "EVAP")
 
-        # ✅ 2) 그 다음 FTM ON → STM 연결
+        # ✅ 2) PLC 연결 상태 먼저 확인
+        if not self._check_plc_ready_before_start():
+            self._active_run_id = None
+            self._active_recipe_name = ""
+            return
+
+        # ✅ 3) 그 다음 FTM ON → STM 연결
         if not self._ensure_sensors_connected_fresh():
             QMessageBox.warning(self, "Device Connect Failed", "STM 연결 실패")
 
@@ -679,6 +731,35 @@ class ProcessWindow(QWidget):
             with contextlib.suppress(Exception):
                 self._reset_process_ui()
 
+    def _wait_process_stop(self, timeout_s: float = 3.0) -> bool:
+        """
+        closeEvent에서 stop 요청 후 공정 worker가 실제로 멈췄는지
+        짧게 기다린다.
+        """
+        pc = self._process_controller
+        if pc is None:
+            return True
+
+        is_running_fn = getattr(pc, "is_running", None)
+        if not callable(is_running_fn):
+            return True
+
+        deadline = time.monotonic() + max(0.1, float(timeout_s))
+
+        while time.monotonic() < deadline:
+            try:
+                if not bool(is_running_fn()):
+                    return True
+            except Exception:
+                return True
+
+            with contextlib.suppress(Exception):
+                QApplication.processEvents()
+
+            time.sleep(0.05)
+
+        return False
+
     def closeEvent(self, event):
         # ✅ Process 창 닫기(X) = Stop 버튼과 동일하게 동작
         if not getattr(self, "_close_stop_guard", False):
@@ -688,7 +769,31 @@ class ProcessWindow(QWidget):
             except Exception:
                 pass
 
-        _append_text(getattr(self.ui, "logWindow", None), "[UI] Process window closed -> SAFE STOP (same as Stop button)")
+        stopped = True
+        try:
+            stopped = self._wait_process_stop(timeout_s=3.0)
+        except Exception:
+            stopped = True
+
+        if not stopped:
+            _append_text(
+                getattr(self.ui, "logWindow", None),
+                "[UI][WARN] Process stop wait timeout -> close canceled"
+            )
+            QMessageBox.warning(
+                self,
+                "Process",
+                "공정 정지 완료를 아직 확인하지 못했습니다.\n"
+                "잠시 후 다시 닫아주세요."
+            )
+            self._close_stop_guard = False
+            event.ignore()
+            return
+
+        _append_text(
+            getattr(self.ui, "logWindow", None),
+            "[UI] Process window closed -> SAFE STOP confirmed"
+        )
 
         if self.hmi_window is not None:
             self.hmi_window.process_window = None

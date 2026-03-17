@@ -149,122 +149,222 @@ class Ui_Form(object):
         self.tmpGroup.setGeometry(QRect(0, 0, 540, 140))
         self.tmpGroup.setAutoFillBackground(True)
 
-        self.tmpGroupLayout = QGridLayout(self.tmpGroup)
+        self.tmpGroupLayout = QVBoxLayout(self.tmpGroup)
         self.tmpGroupLayout.setContentsMargins(10, 18, 10, 8)
-        self.tmpGroupLayout.setHorizontalSpacing(8)
-        self.tmpGroupLayout.setVerticalSpacing(4)
-        self.tmpGroupLayout.setColumnStretch(1, 1)
-        self.tmpGroupLayout.setColumnStretch(3, 1)
+        self.tmpGroupLayout.setSpacing(4)
 
+        tmp_label_w = 48
+        tmp_edit_h = 24
+
+        # =========================
         # Row 0 : Conn / State
-        self.tmpConnLabel = QLabel(self.tmpGroup)
-        self.tmpConnLabel.setObjectName("tmpConnLabel")
-        self.tmpConnLabel.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.tmpGroupLayout.addWidget(self.tmpConnLabel, 0, 0)
+        # =========================
+        self.tmpTopRow = QWidget(self.tmpGroup)
+        self.tmpTopRow.setObjectName("tmpTopRow")
+        self.tmpTopRowLayout = QHBoxLayout(self.tmpTopRow)
+        self.tmpTopRowLayout.setContentsMargins(0, 0, 0, 0)
+        self.tmpTopRowLayout.setSpacing(8)
 
-        self.tmpConnEdit = QLineEdit(self.tmpGroup)
+        self.tmpConnBlock = QWidget(self.tmpTopRow)
+        self.tmpConnBlock.setObjectName("tmpConnBlock")
+        self.tmpConnBlockLayout = QHBoxLayout(self.tmpConnBlock)
+        self.tmpConnBlockLayout.setContentsMargins(0, 0, 0, 0)
+        self.tmpConnBlockLayout.setSpacing(6)
+
+        self.tmpConnLabel = QLabel(self.tmpConnBlock)
+        self.tmpConnLabel.setObjectName("tmpConnLabel")
+        self.tmpConnLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.tmpConnLabel.setFixedWidth(tmp_label_w)
+        self.tmpConnBlockLayout.addWidget(self.tmpConnLabel)
+
+        self.tmpConnEdit = QLineEdit(self.tmpConnBlock)
         self.tmpConnEdit.setObjectName("tmpConnEdit")
         self.tmpConnEdit.setReadOnly(True)
         self.tmpConnEdit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.tmpConnEdit.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
-        self.tmpConnEdit.setMinimumWidth(150)
-        self.tmpGroupLayout.addWidget(self.tmpConnEdit, 0, 1)
+        self.tmpConnEdit.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.tmpConnEdit.setFixedHeight(tmp_edit_h)
+        self.tmpConnBlockLayout.addWidget(self.tmpConnEdit)
 
-        self.tmpStateLabel = QLabel(self.tmpGroup)
+        self.tmpStateBlock = QWidget(self.tmpTopRow)
+        self.tmpStateBlock.setObjectName("tmpStateBlock")
+        self.tmpStateBlockLayout = QHBoxLayout(self.tmpStateBlock)
+        self.tmpStateBlockLayout.setContentsMargins(0, 0, 0, 0)
+        self.tmpStateBlockLayout.setSpacing(6)
+
+        self.tmpStateLabel = QLabel(self.tmpStateBlock)
         self.tmpStateLabel.setObjectName("tmpStateLabel")
-        self.tmpStateLabel.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.tmpGroupLayout.addWidget(self.tmpStateLabel, 0, 2)
+        self.tmpStateLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.tmpStateLabel.setFixedWidth(tmp_label_w)
+        self.tmpStateBlockLayout.addWidget(self.tmpStateLabel)
 
-        self.tmpStateEdit = QLineEdit(self.tmpGroup)
+        self.tmpStateEdit = QLineEdit(self.tmpStateBlock)
         self.tmpStateEdit.setObjectName("tmpStateEdit")
         self.tmpStateEdit.setReadOnly(True)
         self.tmpStateEdit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.tmpStateEdit.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
-        self.tmpStateEdit.setMinimumWidth(150)
-        self.tmpGroupLayout.addWidget(self.tmpStateEdit, 0, 3)
+        self.tmpStateEdit.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.tmpStateEdit.setFixedHeight(tmp_edit_h)
+        self.tmpStateBlockLayout.addWidget(self.tmpStateEdit)
 
-        # Row 1 : Freq / Current
-        self.tmpFreqLabel = QLabel(self.tmpGroup)
+        self.tmpTopRowLayout.addWidget(self.tmpConnBlock, 1)
+        self.tmpTopRowLayout.addWidget(self.tmpStateBlock, 1)
+        self.tmpGroupLayout.addWidget(self.tmpTopRow)
+
+        # =========================
+        # Row 1 : Freq / Current / Temp
+        # =========================
+        self.tmpMidRow = QWidget(self.tmpGroup)
+        self.tmpMidRow.setObjectName("tmpMidRow")
+        self.tmpMidRowLayout = QHBoxLayout(self.tmpMidRow)
+        self.tmpMidRowLayout.setContentsMargins(0, 0, 0, 0)
+        self.tmpMidRowLayout.setSpacing(8)
+
+        self.tmpFreqBlock = QWidget(self.tmpMidRow)
+        self.tmpFreqBlock.setObjectName("tmpFreqBlock")
+        self.tmpFreqBlockLayout = QHBoxLayout(self.tmpFreqBlock)
+        self.tmpFreqBlockLayout.setContentsMargins(0, 0, 0, 0)
+        self.tmpFreqBlockLayout.setSpacing(6)
+
+        self.tmpFreqLabel = QLabel(self.tmpFreqBlock)
         self.tmpFreqLabel.setObjectName("tmpFreqLabel")
-        self.tmpFreqLabel.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.tmpGroupLayout.addWidget(self.tmpFreqLabel, 1, 0)
+        self.tmpFreqLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.tmpFreqLabel.setFixedWidth(tmp_label_w)
+        self.tmpFreqBlockLayout.addWidget(self.tmpFreqLabel)
 
-        self.tmpFreqEdit = QLineEdit(self.tmpGroup)
+        self.tmpFreqEdit = QLineEdit(self.tmpFreqBlock)
         self.tmpFreqEdit.setObjectName("tmpFreqEdit")
         self.tmpFreqEdit.setReadOnly(True)
         self.tmpFreqEdit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.tmpFreqEdit.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
-        self.tmpFreqEdit.setMinimumWidth(150)
-        self.tmpGroupLayout.addWidget(self.tmpFreqEdit, 1, 1)
+        self.tmpFreqEdit.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.tmpFreqEdit.setFixedHeight(tmp_edit_h)
+        self.tmpFreqBlockLayout.addWidget(self.tmpFreqEdit)
 
-        self.tmpCurrentLabel = QLabel(self.tmpGroup)
+        self.tmpCurrentBlock = QWidget(self.tmpMidRow)
+        self.tmpCurrentBlock.setObjectName("tmpCurrentBlock")
+        self.tmpCurrentBlockLayout = QHBoxLayout(self.tmpCurrentBlock)
+        self.tmpCurrentBlockLayout.setContentsMargins(0, 0, 0, 0)
+        self.tmpCurrentBlockLayout.setSpacing(6)
+
+        self.tmpCurrentLabel = QLabel(self.tmpCurrentBlock)
         self.tmpCurrentLabel.setObjectName("tmpCurrentLabel")
-        self.tmpCurrentLabel.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.tmpGroupLayout.addWidget(self.tmpCurrentLabel, 1, 2)
+        self.tmpCurrentLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.tmpCurrentLabel.setFixedWidth(tmp_label_w)
+        self.tmpCurrentBlockLayout.addWidget(self.tmpCurrentLabel)
 
-        self.tmpCurrentEdit = QLineEdit(self.tmpGroup)
+        self.tmpCurrentEdit = QLineEdit(self.tmpCurrentBlock)
         self.tmpCurrentEdit.setObjectName("tmpCurrentEdit")
         self.tmpCurrentEdit.setReadOnly(True)
         self.tmpCurrentEdit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.tmpCurrentEdit.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
-        self.tmpCurrentEdit.setMinimumWidth(150)
-        self.tmpGroupLayout.addWidget(self.tmpCurrentEdit, 1, 3)
+        self.tmpCurrentEdit.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.tmpCurrentEdit.setFixedHeight(tmp_edit_h)
+        self.tmpCurrentBlockLayout.addWidget(self.tmpCurrentEdit)
 
-        # Row 2 : Temp / Detail
-        self.tmpTempLabel = QLabel(self.tmpGroup)
+        self.tmpTempBlock = QWidget(self.tmpMidRow)
+        self.tmpTempBlock.setObjectName("tmpTempBlock")
+        self.tmpTempBlockLayout = QHBoxLayout(self.tmpTempBlock)
+        self.tmpTempBlockLayout.setContentsMargins(0, 0, 0, 0)
+        self.tmpTempBlockLayout.setSpacing(6)
+
+        self.tmpTempLabel = QLabel(self.tmpTempBlock)
         self.tmpTempLabel.setObjectName("tmpTempLabel")
-        self.tmpTempLabel.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.tmpGroupLayout.addWidget(self.tmpTempLabel, 2, 0)
+        self.tmpTempLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.tmpTempLabel.setFixedWidth(tmp_label_w)
+        self.tmpTempBlockLayout.addWidget(self.tmpTempLabel)
 
-        self.tmpTempEdit = QLineEdit(self.tmpGroup)
+        self.tmpTempEdit = QLineEdit(self.tmpTempBlock)
         self.tmpTempEdit.setObjectName("tmpTempEdit")
         self.tmpTempEdit.setReadOnly(True)
         self.tmpTempEdit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.tmpTempEdit.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
-        self.tmpTempEdit.setMinimumWidth(150)
-        self.tmpGroupLayout.addWidget(self.tmpTempEdit, 2, 1)
+        self.tmpTempEdit.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.tmpTempEdit.setFixedHeight(tmp_edit_h)
+        self.tmpTempBlockLayout.addWidget(self.tmpTempEdit)
 
-        self.tmpDetailLabel = QLabel(self.tmpGroup)
+        self.tmpMidRowLayout.addWidget(self.tmpFreqBlock, 1)
+        self.tmpMidRowLayout.addWidget(self.tmpCurrentBlock, 1)
+        self.tmpMidRowLayout.addWidget(self.tmpTempBlock, 1)
+        self.tmpGroupLayout.addWidget(self.tmpMidRow)
+
+        # =========================
+        # Row 2 : Detail / Alarm
+        # =========================
+        self.tmpInfoRow = QWidget(self.tmpGroup)
+        self.tmpInfoRow.setObjectName("tmpInfoRow")
+        self.tmpInfoRowLayout = QHBoxLayout(self.tmpInfoRow)
+        self.tmpInfoRowLayout.setContentsMargins(0, 0, 0, 0)
+        self.tmpInfoRowLayout.setSpacing(8)
+
+        self.tmpDetailBlock = QWidget(self.tmpInfoRow)
+        self.tmpDetailBlock.setObjectName("tmpDetailBlock")
+        self.tmpDetailBlockLayout = QHBoxLayout(self.tmpDetailBlock)
+        self.tmpDetailBlockLayout.setContentsMargins(0, 0, 0, 0)
+        self.tmpDetailBlockLayout.setSpacing(6)
+
+        self.tmpDetailLabel = QLabel(self.tmpDetailBlock)
         self.tmpDetailLabel.setObjectName("tmpDetailLabel")
-        self.tmpDetailLabel.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.tmpGroupLayout.addWidget(self.tmpDetailLabel, 2, 2)
+        self.tmpDetailLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.tmpDetailLabel.setFixedWidth(tmp_label_w)
+        self.tmpDetailBlockLayout.addWidget(self.tmpDetailLabel)
 
-        self.tmpDetailEdit = QLineEdit(self.tmpGroup)
+        self.tmpDetailEdit = QLineEdit(self.tmpDetailBlock)
         self.tmpDetailEdit.setObjectName("tmpDetailEdit")
         self.tmpDetailEdit.setReadOnly(True)
         self.tmpDetailEdit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.tmpDetailEdit.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
-        self.tmpDetailEdit.setMinimumWidth(150)
-        self.tmpGroupLayout.addWidget(self.tmpDetailEdit, 2, 3)
+        self.tmpDetailEdit.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.tmpDetailEdit.setFixedHeight(tmp_edit_h)
+        self.tmpDetailBlockLayout.addWidget(self.tmpDetailEdit)
 
-        # Row 3 : Alarm full width
-        self.tmpAlarmLabel = QLabel(self.tmpGroup)
+        self.tmpAlarmBlock = QWidget(self.tmpInfoRow)
+        self.tmpAlarmBlock.setObjectName("tmpAlarmBlock")
+        self.tmpAlarmBlockLayout = QHBoxLayout(self.tmpAlarmBlock)
+        self.tmpAlarmBlockLayout.setContentsMargins(0, 0, 0, 0)
+        self.tmpAlarmBlockLayout.setSpacing(6)
+
+        self.tmpAlarmLabel = QLabel(self.tmpAlarmBlock)
         self.tmpAlarmLabel.setObjectName("tmpAlarmLabel")
-        self.tmpAlarmLabel.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.tmpGroupLayout.addWidget(self.tmpAlarmLabel, 3, 0)
+        self.tmpAlarmLabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.tmpAlarmLabel.setFixedWidth(tmp_label_w)
+        self.tmpAlarmBlockLayout.addWidget(self.tmpAlarmLabel)
 
-        self.tmpAlarmEdit = QLineEdit(self.tmpGroup)
+        self.tmpAlarmEdit = QLineEdit(self.tmpAlarmBlock)
         self.tmpAlarmEdit.setObjectName("tmpAlarmEdit")
         self.tmpAlarmEdit.setReadOnly(True)
         self.tmpAlarmEdit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.tmpAlarmEdit.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
-        self.tmpAlarmEdit.setMinimumWidth(360)
-        self.tmpGroupLayout.addWidget(self.tmpAlarmEdit, 3, 1, 1, 3)
+        self.tmpAlarmEdit.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.tmpAlarmEdit.setFixedHeight(tmp_edit_h)
+        self.tmpAlarmBlockLayout.addWidget(self.tmpAlarmEdit)
 
-        # Row 4 : TMP command buttons
-        tmp_btn_h = self.tmpConnEdit.sizeHint().height()
+        self.tmpInfoRowLayout.addWidget(self.tmpDetailBlock, 1)
+        self.tmpInfoRowLayout.addWidget(self.tmpAlarmBlock, 2)
+        self.tmpGroupLayout.addWidget(self.tmpInfoRow)
 
-        self.tmpStartBtn = QPushButton(self.tmpGroup)
+        # =========================
+        # Row 3 : Start / Stop
+        # =========================
+        self.tmpButtonRow = QWidget(self.tmpGroup)
+        self.tmpButtonRow.setObjectName("tmpButtonRow")
+        self.tmpButtonRowLayout = QHBoxLayout(self.tmpButtonRow)
+        self.tmpButtonRowLayout.setContentsMargins(0, 0, 0, 0)
+        self.tmpButtonRowLayout.setSpacing(8)
+
+        self.tmpStartBtn = QPushButton(self.tmpButtonRow)
         self.tmpStartBtn.setObjectName("tmpStartBtn")
         self.tmpStartBtn.setAutoDefault(False)
-        self.tmpStartBtn.setFixedHeight(tmp_btn_h)
-        self.tmpGroupLayout.addWidget(self.tmpStartBtn, 4, 0, 1, 2)
+        self.tmpStartBtn.setFixedHeight(26)
+        self.tmpButtonRowLayout.addWidget(self.tmpStartBtn, 1)
 
-        self.tmpStopBtn = QPushButton(self.tmpGroup)
+        self.tmpStopBtn = QPushButton(self.tmpButtonRow)
         self.tmpStopBtn.setObjectName("tmpStopBtn")
         self.tmpStopBtn.setAutoDefault(False)
-        self.tmpStopBtn.setFixedHeight(tmp_btn_h)
-        self.tmpGroupLayout.addWidget(self.tmpStopBtn, 4, 2, 1, 2)
+        self.tmpStopBtn.setFixedHeight(26)
+        self.tmpButtonRowLayout.addWidget(self.tmpStopBtn, 1)
+
+        self.tmpGroupLayout.addWidget(self.tmpButtonRow)
 
         # =========================
         # DAC manual set (Power1/Power2)
@@ -279,54 +379,72 @@ class Ui_Form(object):
         self.dacGroup.setAutoFillBackground(True)
 
         self.dacGroupLayout = QVBoxLayout(self.dacGroup)
-        self.dacGroupLayout.setContentsMargins(10, 18, 10, 8)
-        self.dacGroupLayout.setSpacing(6)
+        self.dacGroupLayout.setContentsMargins(12, 18, 12, 8)
+        self.dacGroupLayout.setSpacing(5)
 
-        control_h = self.tmpConnEdit.sizeHint().height()
-        label_w = 58
-        input_field_w = 72
-        step_btn_w = 44
-        action_btn_w = 52
-        read_field_w = 90
+        control_h = 24
+        ch_w = 62
+        set_w = 84
+        step_btn_w = 46
+        act_btn_w = 56
+        read_w = 92
 
+        # =========================
         # Header row
+        # =========================
         self.dacHeaderRow = QWidget(self.dacGroup)
         self.dacHeaderRow.setObjectName("dacHeaderRow")
         self.dacHeaderRowLayout = QHBoxLayout(self.dacHeaderRow)
         self.dacHeaderRowLayout.setContentsMargins(0, 0, 0, 0)
-        self.dacHeaderRowLayout.setSpacing(4)
+        self.dacHeaderRowLayout.setSpacing(6)
 
-        self.dacHeaderSpacerLeft = QLabel(self.dacHeaderRow)
-        self.dacHeaderSpacerLeft.setFixedWidth(label_w)
-        self.dacHeaderRowLayout.addWidget(self.dacHeaderSpacerLeft)
+        self.dacChannelHeader = QLabel(self.dacHeaderRow)
+        self.dacChannelHeader.setObjectName("dacChannelHeader")
+        self.dacChannelHeader.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.dacChannelHeader.setFixedWidth(ch_w)
+        self.dacHeaderRowLayout.addWidget(self.dacChannelHeader)
 
         self.dacSetHeader = QLabel(self.dacHeaderRow)
         self.dacSetHeader.setObjectName("dacSetHeader")
         self.dacSetHeader.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.dacSetHeader.setFixedWidth(242)
+        self.dacSetHeader.setFixedWidth(set_w)
         self.dacHeaderRowLayout.addWidget(self.dacSetHeader)
+
+        self.dacStepHeader = QLabel(self.dacHeaderRow)
+        self.dacStepHeader.setObjectName("dacStepHeader")
+        self.dacStepHeader.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.dacStepHeader.setFixedWidth(step_btn_w * 2 + 4)
+        self.dacHeaderRowLayout.addWidget(self.dacStepHeader)
+
+        self.dacActionHeader = QLabel(self.dacHeaderRow)
+        self.dacActionHeader.setObjectName("dacActionHeader")
+        self.dacActionHeader.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.dacActionHeader.setFixedWidth(act_btn_w * 2 + 4)
+        self.dacHeaderRowLayout.addWidget(self.dacActionHeader)
 
         self.dacHeaderRowLayout.addStretch(1)
 
         self.dacReadHeader = QLabel(self.dacHeaderRow)
         self.dacReadHeader.setObjectName("dacReadHeader")
         self.dacReadHeader.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.dacReadHeader.setFixedWidth(read_field_w)
+        self.dacReadHeader.setFixedWidth(read_w)
         self.dacHeaderRowLayout.addWidget(self.dacReadHeader)
 
         self.dacGroupLayout.addWidget(self.dacHeaderRow)
 
+        # =========================
         # Row 1 : Power 1
+        # =========================
         self.dacRow1 = QWidget(self.dacGroup)
         self.dacRow1.setObjectName("dacRow1")
         self.dacRow1Layout = QHBoxLayout(self.dacRow1)
         self.dacRow1Layout.setContentsMargins(0, 0, 0, 0)
-        self.dacRow1Layout.setSpacing(4)
+        self.dacRow1Layout.setSpacing(6)
 
         self.dac1Label = QLabel(self.dacRow1)
         self.dac1Label.setObjectName("dac1Label")
-        self.dac1Label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.dac1Label.setFixedWidth(label_w)
+        self.dac1Label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.dac1Label.setFixedWidth(ch_w)
         self.dacRow1Layout.addWidget(self.dac1Label)
 
         self.dac1Spin = QSpinBox(self.dacRow1)
@@ -337,29 +455,44 @@ class Ui_Form(object):
         self.dac1Spin.setKeyboardTracking(False)
         self.dac1Spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         self.dac1Spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.dac1Spin.setFixedSize(input_field_w, control_h)
+        self.dac1Spin.setFixedSize(set_w, control_h)
         self.dacRow1Layout.addWidget(self.dac1Spin)
 
-        self.dac1Down100Btn = QPushButton(self.dacRow1)
+        self.dac1StepBox = QWidget(self.dacRow1)
+        self.dac1StepBox.setObjectName("dac1StepBox")
+        self.dac1StepBoxLayout = QHBoxLayout(self.dac1StepBox)
+        self.dac1StepBoxLayout.setContentsMargins(0, 0, 0, 0)
+        self.dac1StepBoxLayout.setSpacing(4)
+
+        self.dac1Down100Btn = QPushButton(self.dac1StepBox)
         self.dac1Down100Btn.setObjectName("dac1Down100Btn")
         self.dac1Down100Btn.setFixedSize(step_btn_w, control_h)
-        self.dacRow1Layout.addWidget(self.dac1Down100Btn)
+        self.dac1StepBoxLayout.addWidget(self.dac1Down100Btn)
 
-        self.dac1Up100Btn = QPushButton(self.dacRow1)
+        self.dac1Up100Btn = QPushButton(self.dac1StepBox)
         self.dac1Up100Btn.setObjectName("dac1Up100Btn")
         self.dac1Up100Btn.setFixedSize(step_btn_w, control_h)
-        self.dacRow1Layout.addWidget(self.dac1Up100Btn)
+        self.dac1StepBoxLayout.addWidget(self.dac1Up100Btn)
 
-        self.dac1SetBtn = QPushButton(self.dacRow1)
+        self.dacRow1Layout.addWidget(self.dac1StepBox)
+
+        self.dac1ActionBox = QWidget(self.dacRow1)
+        self.dac1ActionBox.setObjectName("dac1ActionBox")
+        self.dac1ActionBoxLayout = QHBoxLayout(self.dac1ActionBox)
+        self.dac1ActionBoxLayout.setContentsMargins(0, 0, 0, 0)
+        self.dac1ActionBoxLayout.setSpacing(4)
+
+        self.dac1SetBtn = QPushButton(self.dac1ActionBox)
         self.dac1SetBtn.setObjectName("dac1SetBtn")
-        self.dac1SetBtn.setFixedSize(action_btn_w, control_h)
-        self.dacRow1Layout.addWidget(self.dac1SetBtn)
+        self.dac1SetBtn.setFixedSize(act_btn_w, control_h)
+        self.dac1ActionBoxLayout.addWidget(self.dac1SetBtn)
 
-        self.dac1ResetBtn = QPushButton(self.dacRow1)
+        self.dac1ResetBtn = QPushButton(self.dac1ActionBox)
         self.dac1ResetBtn.setObjectName("dac1ResetBtn")
-        self.dac1ResetBtn.setFixedSize(action_btn_w, control_h)
-        self.dacRow1Layout.addWidget(self.dac1ResetBtn)
+        self.dac1ResetBtn.setFixedSize(act_btn_w, control_h)
+        self.dac1ActionBoxLayout.addWidget(self.dac1ResetBtn)
 
+        self.dacRow1Layout.addWidget(self.dac1ActionBox)
         self.dacRow1Layout.addStretch(1)
 
         self.dacActual1Edit = QLineEdit(self.dacRow1)
@@ -368,22 +501,24 @@ class Ui_Form(object):
         self.dacActual1Edit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.dacActual1Edit.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
         self.dacActual1Edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.dacActual1Edit.setFixedSize(read_field_w, control_h)
+        self.dacActual1Edit.setFixedSize(read_w, control_h)
         self.dacRow1Layout.addWidget(self.dacActual1Edit)
 
         self.dacGroupLayout.addWidget(self.dacRow1)
 
+        # =========================
         # Row 2 : Power 2
+        # =========================
         self.dacRow2 = QWidget(self.dacGroup)
         self.dacRow2.setObjectName("dacRow2")
         self.dacRow2Layout = QHBoxLayout(self.dacRow2)
         self.dacRow2Layout.setContentsMargins(0, 0, 0, 0)
-        self.dacRow2Layout.setSpacing(4)
+        self.dacRow2Layout.setSpacing(6)
 
         self.dac2Label = QLabel(self.dacRow2)
         self.dac2Label.setObjectName("dac2Label")
-        self.dac2Label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        self.dac2Label.setFixedWidth(label_w)
+        self.dac2Label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.dac2Label.setFixedWidth(ch_w)
         self.dacRow2Layout.addWidget(self.dac2Label)
 
         self.dac2Spin = QSpinBox(self.dacRow2)
@@ -394,29 +529,44 @@ class Ui_Form(object):
         self.dac2Spin.setKeyboardTracking(False)
         self.dac2Spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
         self.dac2Spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.dac2Spin.setFixedSize(input_field_w, control_h)
+        self.dac2Spin.setFixedSize(set_w, control_h)
         self.dacRow2Layout.addWidget(self.dac2Spin)
 
-        self.dac2Down100Btn = QPushButton(self.dacRow2)
+        self.dac2StepBox = QWidget(self.dacRow2)
+        self.dac2StepBox.setObjectName("dac2StepBox")
+        self.dac2StepBoxLayout = QHBoxLayout(self.dac2StepBox)
+        self.dac2StepBoxLayout.setContentsMargins(0, 0, 0, 0)
+        self.dac2StepBoxLayout.setSpacing(4)
+
+        self.dac2Down100Btn = QPushButton(self.dac2StepBox)
         self.dac2Down100Btn.setObjectName("dac2Down100Btn")
         self.dac2Down100Btn.setFixedSize(step_btn_w, control_h)
-        self.dacRow2Layout.addWidget(self.dac2Down100Btn)
+        self.dac2StepBoxLayout.addWidget(self.dac2Down100Btn)
 
-        self.dac2Up100Btn = QPushButton(self.dacRow2)
+        self.dac2Up100Btn = QPushButton(self.dac2StepBox)
         self.dac2Up100Btn.setObjectName("dac2Up100Btn")
         self.dac2Up100Btn.setFixedSize(step_btn_w, control_h)
-        self.dacRow2Layout.addWidget(self.dac2Up100Btn)
+        self.dac2StepBoxLayout.addWidget(self.dac2Up100Btn)
 
-        self.dac2SetBtn = QPushButton(self.dacRow2)
+        self.dacRow2Layout.addWidget(self.dac2StepBox)
+
+        self.dac2ActionBox = QWidget(self.dacRow2)
+        self.dac2ActionBox.setObjectName("dac2ActionBox")
+        self.dac2ActionBoxLayout = QHBoxLayout(self.dac2ActionBox)
+        self.dac2ActionBoxLayout.setContentsMargins(0, 0, 0, 0)
+        self.dac2ActionBoxLayout.setSpacing(4)
+
+        self.dac2SetBtn = QPushButton(self.dac2ActionBox)
         self.dac2SetBtn.setObjectName("dac2SetBtn")
-        self.dac2SetBtn.setFixedSize(action_btn_w, control_h)
-        self.dacRow2Layout.addWidget(self.dac2SetBtn)
+        self.dac2SetBtn.setFixedSize(act_btn_w, control_h)
+        self.dac2ActionBoxLayout.addWidget(self.dac2SetBtn)
 
-        self.dac2ResetBtn = QPushButton(self.dacRow2)
+        self.dac2ResetBtn = QPushButton(self.dac2ActionBox)
         self.dac2ResetBtn.setObjectName("dac2ResetBtn")
-        self.dac2ResetBtn.setFixedSize(action_btn_w, control_h)
-        self.dacRow2Layout.addWidget(self.dac2ResetBtn)
+        self.dac2ResetBtn.setFixedSize(act_btn_w, control_h)
+        self.dac2ActionBoxLayout.addWidget(self.dac2ResetBtn)
 
+        self.dacRow2Layout.addWidget(self.dac2ActionBox)
         self.dacRow2Layout.addStretch(1)
 
         self.dacActual2Edit = QLineEdit(self.dacRow2)
@@ -425,7 +575,7 @@ class Ui_Form(object):
         self.dacActual2Edit.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.dacActual2Edit.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
         self.dacActual2Edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.dacActual2Edit.setFixedSize(read_field_w, control_h)
+        self.dacActual2Edit.setFixedSize(read_w, control_h)
         self.dacRow2Layout.addWidget(self.dacActual2Edit)
 
         self.dacGroupLayout.addWidget(self.dacRow2)
@@ -855,8 +1005,11 @@ class Ui_Form(object):
         self.dac1Label.setText(QCoreApplication.translate("Form", "Power 1", None))
         self.dac2Label.setText(QCoreApplication.translate("Form", "Power 2", None))
 
-        self.dacSetHeader.setText(QCoreApplication.translate("Form", "Set Value", None))
-        self.dacReadHeader.setText(QCoreApplication.translate("Form", "Readback", None))
+        self.dacChannelHeader.setText(QCoreApplication.translate("Form", "CH", None))
+        self.dacSetHeader.setText(QCoreApplication.translate("Form", "SET", None))
+        self.dacStepHeader.setText(QCoreApplication.translate("Form", "STEP", None))
+        self.dacActionHeader.setText(QCoreApplication.translate("Form", "ACTION", None))
+        self.dacReadHeader.setText(QCoreApplication.translate("Form", "READ", None))
 
         self.dac1Down100Btn.setText(QCoreApplication.translate("Form", "-100", None))
         self.dac1Up100Btn.setText(QCoreApplication.translate("Form", "+100", None))
@@ -1038,62 +1191,198 @@ class Ui_Form(object):
             QGroupBox {
                 font-weight: bold;
                 font-size: 10pt;
-                border: 1px solid #c8c8c8;
-                border-radius: 6px;
-                margin-top: 6px;
-                background: #f7f7f7;
+                border: 1px solid #cfd4da;
+                border-radius: 8px;
+                margin-top: 8px;
+                background: #f8f9fb;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
-                left: 8px;
-                padding: 0 3px 0 3px;
+                left: 10px;
+                padding: 0 4px 0 4px;
+                color: #202428;
             }
             QLabel {
                 background: transparent;
-                color: black;
-                font-size: 10pt;
+                color: #444444;
+                font-size: 9pt;
+                font-weight: bold;
             }
-            QLineEdit, QSpinBox {
+            QSpinBox {
                 background: white;
-                border: 1px solid #d0d0d0;
-                padding: 0 4px 0 4px;
+                border: 1px solid #d4d8de;
+                border-radius: 4px;
+                padding: 0 6px 0 6px;
                 font-size: 10pt;
                 color: black;
             }
         """
 
-        footer_action_btn_qss = """
+        footer_step_btn_qss = """
             QPushButton {
-                background: #efefef;
-                border: 1px solid #c8c8c8;
+                background: #f0f2f5;
+                border: 1px solid #cfd4da;
                 border-radius: 4px;
-                padding: 0px;
-                font-size: 10pt;
-                color: black;
+                color: #222222;
+                font-size: 9pt;
+                font-weight: bold;
             }
             QPushButton:pressed {
-                background: #e0e0e0;
+                background: #e3e7ec;
+            }
+        """
+
+        footer_apply_btn_qss = """
+            QPushButton {
+                background: #e8f1ff;
+                border: 1px solid #aac3ee;
+                border-radius: 4px;
+                color: #174a9c;
+                font-size: 9pt;
+                font-weight: bold;
+            }
+            QPushButton:pressed {
+                background: #d8e7ff;
+            }
+        """
+
+        footer_reset_btn_qss = """
+            QPushButton {
+                background: #f5f5f5;
+                border: 1px solid #d0d0d0;
+                border-radius: 4px;
+                color: #444444;
+                font-size: 9pt;
+                font-weight: bold;
+            }
+            QPushButton:pressed {
+                background: #e7e7e7;
+            }
+        """
+
+        footer_start_btn_qss = """
+            QPushButton {
+                background: #eaf8ea;
+                border: 1px solid #a8d5a8;
+                border-radius: 5px;
+                color: #1e6b1e;
+                font-size: 10pt;
+                font-weight: bold;
+            }
+            QPushButton:pressed {
+                background: #dff1df;
+            }
+        """
+
+        footer_stop_btn_qss = """
+            QPushButton {
+                background: #fff0f0;
+                border: 1px solid #e0b4b4;
+                border-radius: 5px;
+                color: #a12626;
+                font-size: 10pt;
+                font-weight: bold;
+            }
+            QPushButton:pressed {
+                background: #ffe3e3;
+            }
+        """
+
+        footer_status_qss = """
+            QLineEdit {
+                background: white;
+                border: 1px solid #d5dae0;
+                border-radius: 4px;
+                padding: 0 8px 0 8px;
+                color: #1e1e1e;
+            }
+        """
+
+        footer_metric_qss = """
+            QLineEdit {
+                background: #fbfcfe;
+                border: 1px solid #cfd8e3;
+                border-radius: 4px;
+                padding: 0 8px 0 8px;
+                color: #0f2940;
+                font-weight: bold;
+            }
+        """
+
+        footer_alarm_qss = """
+            QLineEdit {
+                background: #fff8f8;
+                border: 1px solid #e1b6b6;
+                border-radius: 4px;
+                padding: 0 8px 0 8px;
+                color: #8d2020;
+                font-weight: bold;
+            }
+        """
+
+        footer_readback_qss = """
+            QLineEdit {
+                background: #f4f7fb;
+                border: 1px solid #c5d2e3;
+                border-radius: 4px;
+                padding: 0 8px 0 8px;
+                color: #17324d;
+                font-weight: bold;
             }
         """
 
         self.tmpGroup.setStyleSheet(footer_group_qss)
         self.dacGroup.setStyleSheet(footer_group_qss)
 
+        # Turbo buttons
+        self.tmpStartBtn.setStyleSheet(footer_start_btn_qss)
+        self.tmpStopBtn.setStyleSheet(footer_stop_btn_qss)
+
+        # Power buttons
         for b in (
             self.dac1Down100Btn, self.dac1Up100Btn,
-            self.dac1SetBtn, self.dac1ResetBtn, 
             self.dac2Down100Btn, self.dac2Up100Btn,
-            self.dac2SetBtn, self.dac2ResetBtn,
-            self.tmpStartBtn, self.tmpStopBtn,
         ):
-            b.setStyleSheet(footer_action_btn_qss)
+            b.setStyleSheet(footer_step_btn_qss)
+
+        for b in (self.dac1SetBtn, self.dac2SetBtn):
+            b.setStyleSheet(footer_apply_btn_qss)
+
+        for b in (self.dac1ResetBtn, self.dac2ResetBtn):
+            b.setStyleSheet(footer_reset_btn_qss)
+
+        # Turbo displays
+        for le in (self.tmpConnEdit, self.tmpStateEdit, self.tmpDetailEdit):
+            le.setStyleSheet(footer_status_qss)
+
+        for le in (self.tmpFreqEdit, self.tmpCurrentEdit, self.tmpTempEdit):
+            le.setStyleSheet(footer_metric_qss)
+
+        self.tmpAlarmEdit.setStyleSheet(footer_alarm_qss)
+
+        # Power readback
+        self.dacActual1Edit.setStyleSheet(footer_readback_qss)
+        self.dacActual2Edit.setStyleSheet(footer_readback_qss)
+
+        # Footer fonts
+        mono_font = QFont("Consolas")
+        mono_font.setPointSize(10)
+        mono_font.setBold(True)
+
+        for w in (
+            self.tmpConnEdit, self.tmpStateEdit,
+            self.tmpFreqEdit, self.tmpCurrentEdit, self.tmpTempEdit,
+            self.tmpDetailEdit, self.tmpAlarmEdit,
+            self.dacActual1Edit, self.dacActual2Edit,
+        ):
+            w.setFont(mono_font)
 
         footer_font = self.tmpConnEdit.font()
         for w in (
+            self.dacChannelHeader, self.dacSetHeader, self.dacStepHeader,
+            self.dacActionHeader, self.dacReadHeader,
             self.dac1Label, self.dac2Label,
-            self.dacSetHeader, self.dacReadHeader,
             self.dac1Spin, self.dac2Spin,
-            self.dacActual1Edit, self.dacActual2Edit,
             self.dac1Down100Btn, self.dac1Up100Btn,
             self.dac1SetBtn, self.dac1ResetBtn,
             self.dac2Down100Btn, self.dac2Up100Btn,
@@ -1102,41 +1391,11 @@ class Ui_Form(object):
         ):
             w.setFont(footer_font)
 
-        for hdr in (self.dacSetHeader, self.dacReadHeader):
-            hdr.setStyleSheet("color: #666666; background: transparent; font-weight: bold;")
-
-        # ---- log windows (optional: 살짝 깔끔하게) ----
-        self.hmiLogWindow.setStyleSheet("background: white; border: 1px solid #d0d0d0;")
-        self.logWindow.setStyleSheet("background: white; border: 1px solid #d0d0d0;")
-
-        self.processMonitor_HMI.setStyleSheet(
-            "background: white; border: 1px solid #d0d0d0; padding: 6px 10px;"
-        )
-        self.processMonitor_HMI.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        self.processMonitor_HMI.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
-
-        # ✅ Process 페이지 상태 표시만 QLineEdit 유지
-        self.processMonitor_Process.setStyleSheet(
-            "background: white; border: 1px solid #d0d0d0; padding-left: 10px;"
-        )
-        self.processMonitor_Process.setReadOnly(True)
-        self.processMonitor_Process.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.processMonitor_Process.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
-        self.processMonitor_Process.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-
-        # ✅ Process State(공정 상태) 폰트 크게
-        if hasattr(self, "processMonitor_Process"):
-            f = QFont("Consolas")
-            f.setPointSize(16)   # 필요하면 17~18로 올려도 됨
-            f.setBold(True)
-            self.processMonitor_Process.setFont(f)
-
-        # ✅ HMI State(장비 상태)도 조금 키우기(원하면 동일하게 16으로)
-        if hasattr(self, "processMonitor_HMI"):
-            f2 = QFont("Consolas")
-            f2.setPointSize(12)
-            f2.setBold(True)
-            self.processMonitor_HMI.setFont(f2)
+        for hdr in (
+            self.dacChannelHeader, self.dacSetHeader,
+            self.dacStepHeader, self.dacActionHeader, self.dacReadHeader
+        ):
+            hdr.setStyleSheet("color: #6b7280; background: transparent; font-weight: bold;")
 
         readonly_display = [
             self.currentRateEdit, self.currentThicknessEdit,

@@ -43,7 +43,7 @@ class Ui_Form(object):
         # =========================
         self.hmiFooter = QWidget(Form)
         self.hmiFooter.setObjectName("hmiFooter")
-        self.hmiFooter.setGeometry(QRect(10, 705, 1101, 152))
+        self.hmiFooter.setGeometry(QRect(10, 705, 1101, 156))
         self.hmiFooter.setAutoFillBackground(False)
 
         # =========================
@@ -146,7 +146,7 @@ class Ui_Form(object):
         # =========================
         self.tmpGroup = QGroupBox(self.hmiFooter)
         self.tmpGroup.setObjectName("tmpGroup")
-        self.tmpGroup.setGeometry(QRect(0, 0, 540, 148))
+        self.tmpGroup.setGeometry(QRect(0, 0, 540, 152))
         self.tmpGroup.setAutoFillBackground(True)
 
         self.tmpGroupLayout = QVBoxLayout(self.tmpGroup)
@@ -348,20 +348,21 @@ class Ui_Form(object):
         # =========================
         self.tmpButtonRow = QWidget(self.tmpGroup)
         self.tmpButtonRow.setObjectName("tmpButtonRow")
+        self.tmpButtonRow.setFixedHeight(32)
         self.tmpButtonRowLayout = QHBoxLayout(self.tmpButtonRow)
-        self.tmpButtonRowLayout.setContentsMargins(0, 2, 0, 0)
+        self.tmpButtonRowLayout.setContentsMargins(0, 0, 0, 0)
         self.tmpButtonRowLayout.setSpacing(8)
 
         self.tmpStartBtn = QPushButton(self.tmpButtonRow)
         self.tmpStartBtn.setObjectName("tmpStartBtn")
         self.tmpStartBtn.setAutoDefault(False)
-        self.tmpStartBtn.setFixedHeight(28)
+        self.tmpStartBtn.setFixedHeight(27)
         self.tmpButtonRowLayout.addWidget(self.tmpStartBtn, 1)
 
         self.tmpStopBtn = QPushButton(self.tmpButtonRow)
         self.tmpStopBtn.setObjectName("tmpStopBtn")
         self.tmpStopBtn.setAutoDefault(False)
-        self.tmpStopBtn.setFixedHeight(28)
+        self.tmpStopBtn.setFixedHeight(27)
         self.tmpButtonRowLayout.addWidget(self.tmpStopBtn, 1)
 
         self.tmpGroupLayout.addWidget(self.tmpButtonRow)
@@ -989,13 +990,13 @@ class Ui_Form(object):
         self.tmpAlarmLabel.setText(QCoreApplication.translate("Form", "Alarm", None))
 
         self.tmpConnEdit.setText(QCoreApplication.translate("Form", "Disconnected", None))
-        self.tmpStateEdit.setText(QCoreApplication.translate("Form", "-", None))
-        self.tmpFreqEdit.setText(QCoreApplication.translate("Form", "- Hz", None))
-        self.tmpCurrentEdit.setText(QCoreApplication.translate("Form", "- A", None))
-        self.tmpTempEdit.setText(QCoreApplication.translate("Form", "- °C", None))
-        self.tmpAlarmEdit.setText(QCoreApplication.translate("Form", "-", None))
+        self.tmpStateEdit.setText(QCoreApplication.translate("Form", "---", None))
+        self.tmpFreqEdit.setText(QCoreApplication.translate("Form", "--- Hz", None))
+        self.tmpCurrentEdit.setText(QCoreApplication.translate("Form", "--- A", None))
+        self.tmpTempEdit.setText(QCoreApplication.translate("Form", "--- °C", None))
+        self.tmpAlarmEdit.setText(QCoreApplication.translate("Form", "---", None))
         self.tmpDetailLabel.setText(QCoreApplication.translate("Form", "Detail", None))
-        self.tmpDetailEdit.setText(QCoreApplication.translate("Form", "-", None))
+        self.tmpDetailEdit.setText(QCoreApplication.translate("Form", "---", None))
 
         self.tmpStartBtn.setText(QCoreApplication.translate("Form", "Start", None))
         self.tmpStopBtn.setText(QCoreApplication.translate("Form", "Stop", None))
@@ -1368,13 +1369,11 @@ class Ui_Form(object):
             b.setStyleSheet(footer_reset_btn_qss)
 
         # Turbo displays
-        for le in (self.tmpConnEdit, self.tmpStateEdit, self.tmpDetailEdit):
+        for le in (self.tmpConnEdit, self.tmpStateEdit, self.tmpDetailEdit, self.tmpAlarmEdit):
             le.setStyleSheet(footer_status_qss)
 
         for le in (self.tmpFreqEdit, self.tmpCurrentEdit, self.tmpTempEdit):
             le.setStyleSheet(footer_metric_qss)
-
-        self.tmpAlarmEdit.setStyleSheet(footer_alarm_qss)
 
         # Power readback
         self.dacActual1Edit.setStyleSheet(footer_readback_qss)

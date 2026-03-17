@@ -106,138 +106,14 @@ def main():
             stream_interval_a=1,        # ✅ 1초
         )
 
-        # ✅ ACS 연결 상태도 상단 상태라인에 항상 보이도록 기본값 세팅
-        plc_binder.set_external_connected("ACS", False)
-
-        # UI 표시: HMI 페이지 pressureValue 업데이트(없으면 무시)
-        def _update_pressure(v: object) -> None:
-            try:
-                w = getattr(hmi.ui, "pressureValue", None)
-                if w is None or not hasattr(w, "setText"):
-                    return
-
-                # 연결 끊김/값 없음
-                if v is None:
-                    w.setText("--- Torr")
-                    return
-
-                # 숫자 타입이면 그대로 포맷
-                if isinstance(v, (int, float)):
-                    w.setText(f"{float(v):.3e} Torr")
-                    return
-
-                # 문자열/기타 타입이면 숫자 파싱 시도
-                s = str(v).strip()
-                if not s:
-                    w.setText("--- Torr")
-                    return
-
-                # "1.2e-6", "1.2e-6 Torr" 같은 케이스 처리
-                token = s.split()[0]
-                try:
-                    w.setText(f"{float(token):.3e} Torr")
-                except Exception:
-                    # "OR", "OVR", "ERR..." 같은 비정상/상태 문자열은 그대로 표시
-                    w.setText(s)
-
-            except Exception:
-                pass
-
-        # ✅ ACS UI 표시용 상태: 링크(link)와 압력 수신 성공(healthy) 분리
-        _acs_ui = {
-            "link": False,
-            "healthy": False,
-            "last_rx_mono": 0.0,   # 마지막 pressure 수신 시간(monotonic)
-        }
-
-        def _set_acs_ui_connected(is_ok: bool, *, clear_pressure: bool = False) -> None:
-            # 상단 상태라인(PLC CONNECTED | ACS CONNECTED/...) 반영
-            try:
-                plc_binder.set_external_connected("ACS", bool(is_ok))
-            except Exception:
-                pass
-
-            # 압력 라벨 지우기(-----)
-            if clear_pressure:
-                _update_pressure(None)
-
-        def _acs_connected(ok: bool) -> None:
-            # 링크 상태만 반영
-            _acs_ui["link"] = bool(ok)
-
-            # 링크가 끊기면 즉시 ----- 로
-            if not ok:
-                _acs_ui["healthy"] = False
-                _set_acs_ui_connected(False, clear_pressure=True)
-                return
-
-            # 링크는 살아있어도, 최근 pressure를 못 받았으면 UI는 DISCONNECTED 유지
-            _set_acs_ui_connected(bool(_acs_ui["link"] and _acs_ui["healthy"]))
-
-        def _on_acs_pressure(v: object) -> None:
-            # ✅ pressure 이벤트가 와도 값이 None/빈문자면 "1회라도 못 받은 것"으로 간주
-            if v is None:
-                _acs_ui["healthy"] = False
-                _set_acs_ui_connected(False, clear_pressure=True)  # -> _update_pressure(None) -> "-----"
-                return
-
-            s = str(v).strip()
-            if not s:
-                _acs_ui["healthy"] = False
-                _set_acs_ui_connected(False, clear_pressure=True)
-                return
-
-            # ✅ 정상 값이면 그때만 CONNECTED로 복구
-            _acs_ui["last_rx_mono"] = time.monotonic()
-            _acs_ui["healthy"] = True
-            _set_acs_ui_connected(True)
-            _update_pressure(v)
-
-        def _on_acs_error(msg: object) -> None:
-            # ✅ “압력 1회라도 못 받음(통신 실패)”이면 즉시 DISCONNECTED + ----- 표시
-            _hmi_log(msg)
-            _acs_ui["healthy"] = False
-            _set_acs_ui_connected(False, clear_pressure=True)
-
-        acs_service.sig_pressure.connect(_on_acs_pressure)
-        acs_service.sig_connected.connect(_acs_connected)
-        acs_service.sig_error.connect(_on_acs_error)
-
-        # ✅ “누락(1초 동안 pressure 이벤트가 안 옴)”도 실패로 간주해서 ----- 표시
-        _acs_stale_timer = QTimer(hmi)
-        _acs_stale_timer.setInterval(200)  # 0.2초마다 체크(가벼움)
-        def _acs_stale_tick() -> None:
-
-            # 링크가 살아있는데도 최근 값이 안 들어오면(=1회라도 누락) 바로 ----- 로 내림
-            if not _acs_ui["link"]:
-                return
-            
-            if not _acs_ui["healthy"]:
-                return
-            
-            last = float(_acs_ui["last_rx_mono"] or 0.0)
-
-            if last <= 0:
-                # 아직 한 번도 받은 적 없다면 표시 ----- 유지
-                _acs_ui["healthy"] = False
-                _set_acs_ui_connected(False, clear_pressure=True)
-                return
-            
-            if (time.monotonic() - last) > 1.6:  # ✅ 1초(스트림) + 여유(오탐 방지), 누락은 DISCONNECTED 처리
-                _acs_ui["healthy"] = False
-                _set_acs_ui_connected(False, clear_pressure=True)
-
-        _acs_stale_timer.timeout.connect(_acs_stale_tick)
-        _acs_stale_timer.start()
-
-        # 시작 시 기본은 ----- 표시
-        _update_pressure(None)
-
+        # ✅ ACS UI/상태 관리는 binder가 전담
+        plc_binder.set_acs_service(acs_service)
         acs_service.start()
+        
     except Exception as e:
         acs_service = None
         try:
-            plc_binder.set_external_connected("ACS", False)
+            plc_binder.set_acs_service(None)
         except Exception:
             pass
         _hmi_log(f"[BOOT][WARN] ACSService init failed: {e!r}")

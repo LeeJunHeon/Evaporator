@@ -119,6 +119,27 @@ class PlcServiceWorker(QThread):
 
         # 마지막 스냅샷(서비스가 조회할 수 있게)
         self._last_snapshot: Optional[PLCSnapshot] = None
+        self._connected: bool = False
+
+    def _publish_disconnected_snapshot(self) -> None:
+        """
+        연결 해제 상태를 last_snapshot에도 반영해서
+        get_last_snapshot()이 stale connected 상태를 반환하지 않게 한다.
+        """
+        snap = PLCSnapshot(
+            ts=time.time(),
+            connected=False,
+            coils={},
+            regs={},
+        )
+        self._last_snapshot = snap
+        try:
+            self.sig_snapshot.emit(snap)
+        except Exception:
+            pass
+
+    def is_connected(self) -> bool:
+        return bool(self._connected)
 
     # -------------------------------
     # Public API (다른 스레드에서 호출)
@@ -170,10 +191,18 @@ class PlcServiceWorker(QThread):
     # Thread entry
     # -------------------------------
     def run(self) -> None:
+        # ✅ 재시작 가능하도록 stop flag / 내부 상태 초기화
+        self._stop_evt.clear()
+        self._retry_cmd = None
+        self._connected = False
+
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         self._loop = loop
         self._cmd_q = asyncio.Queue()
+
+        # 이전 실행의 stale snapshot 제거
+        self._publish_disconnected_snapshot()
 
         try:
             loop.run_until_complete(self._main())
@@ -188,6 +217,10 @@ class PlcServiceWorker(QThread):
                 loop.close()
             except Exception:
                 pass
+
+            # ✅ 종료 후 stale loop/queue 참조 제거
+            self._loop = None
+            self._cmd_q = None
 
     # -------------------------------
     # Internal async logic
@@ -210,14 +243,16 @@ class PlcServiceWorker(QThread):
             dac_offset_code=self._settings.dac_offset_code,
         )
 
-        connected_flag = False
-
         def _emit_connected(v: bool) -> None:
-            nonlocal connected_flag
             v = bool(v)
-            if connected_flag != v:
-                connected_flag = v
-                self.sig_connected.emit(v)
+            if self._connected == v:
+                return
+
+            self._connected = v
+            self.sig_connected.emit(v)
+
+            if not v:
+                self._publish_disconnected_snapshot()
 
         async def connect_until_ok() -> None:
             base = float(getattr(self._settings, "reconnect_backoff_base_s", getattr(self._settings, "reconnect_interval_s", 0.6)) or 0.6)
@@ -678,6 +713,9 @@ class PlcServiceWorker(QThread):
     # -------------------------------
     def get_last_snapshot(self) -> Optional[PLCSnapshot]:
         return self._last_snapshot
+    
+    def is_connected(self) -> bool:
+        return bool(self._connected)
 
 
 # ============================================================
@@ -719,18 +757,41 @@ class PLCService(QObject):
         if not self._worker.isRunning():
             self._worker.start()
 
-    def stop(self, wait_ms: int = 3000) -> None:
+    def stop(self, wait_ms: int = 3000) -> bool:
+        if not self._worker.isRunning():
+            return True
+
         try:
             self._worker.stop()
-        except Exception:
-            pass
+        except Exception as e:
+            try:
+                self.sig_error.emit(f"[PLCService] stop request failed: {e!r}")
+            except Exception:
+                pass
+            return False
+
         try:
-            self._worker.wait(int(wait_ms))
-        except Exception:
-            pass
+            ok = bool(self._worker.wait(int(wait_ms)))
+        except Exception as e:
+            try:
+                self.sig_error.emit(f"[PLCService] stop wait failed: {e!r}")
+            except Exception:
+                pass
+            return False
+
+        if not ok:
+            try:
+                self.sig_error.emit(f"[PLCService] stop timeout after {int(wait_ms)} ms")
+            except Exception:
+                pass
+
+        return ok
 
     def is_running(self) -> bool:
         return bool(self._worker.isRunning())
+    
+    def is_connected(self) -> bool:
+        return self._worker.is_connected()
 
     def get_last_snapshot(self) -> Optional[PLCSnapshot]:
         return self._worker.get_last_snapshot()

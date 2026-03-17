@@ -473,11 +473,15 @@ class HmiPlcBinder(QObject):
             pass
 
         out: Dict[str, Any] = {}
-        for name in ("ts", "connected", "pressure", "meta",
-                    "state_text", "freq_hz", "current_a",
-                    "motor_temp_c", "alarm_text",
-                    "normal_operation", "accelerating",
-                    "decelerating", "pump_turning"):
+        for name in (
+            "ts", "connected", "pressure", "meta",
+            "state_text", "freq_hz", "current_a",
+            "motor_temp_c", "converter_temp_c", "bearing_temp_c", "dc_bus_v",
+            "warning_bits", "last_error_code", "last_error_freq_hz", "last_error_hours",
+            "alarm_text", "detail_text",
+            "normal_operation", "accelerating",
+            "decelerating", "pump_turning"
+        ):
             try:
                 if hasattr(snap_obj, name):
                     out[name] = getattr(snap_obj, name)
@@ -499,6 +503,56 @@ class HmiPlcBinder(QObject):
         if abs(v) >= 1e-3:
             return f"{v:.3e}"
         return f"{v:.3e}"
+    
+    def _format_tmp_detail_text(self, snap: Dict[str, Any]) -> str:
+        detail_text = str(snap.get("detail_text", "") or "").strip()
+        if detail_text not in ("", "-"):
+            return detail_text
+
+        parts: list[str] = []
+
+        conv = snap.get("converter_temp_c", None)
+        bear = snap.get("bearing_temp_c", None)
+        dc = snap.get("dc_bus_v", None)
+
+        try:
+            if conv is not None:
+                parts.append(f"CV {float(conv):.1f}C")
+        except Exception:
+            pass
+
+        try:
+            if bear is not None:
+                parts.append(f"BR {float(bear):.1f}C")
+        except Exception:
+            pass
+
+        try:
+            if dc is not None:
+                parts.append(f"DC {float(dc):.0f}V")
+        except Exception:
+            pass
+
+        if parts:
+            return " | ".join(parts)
+
+        try:
+            warn_bits = int(snap.get("warning_bits", 0) or 0)
+        except Exception:
+            warn_bits = 0
+
+        if warn_bits:
+            return f"WARN 0x{warn_bits:04X}"
+
+        try:
+            last_error_code = int(snap.get("last_error_code", 0) or 0)
+        except Exception:
+            last_error_code = 0
+
+        if last_error_code:
+            return f"LAST ERR {last_error_code}"
+
+        return "---"
 
     def _render_acs_status(self) -> None:
         snap = dict(self._acs_last_snapshot or {})
@@ -532,6 +586,7 @@ class HmiPlcBinder(QObject):
         current_a = snap.get("current_a", None)
         motor_temp_c = snap.get("motor_temp_c", None)
         alarm_text = str(snap.get("alarm_text", "") or "").strip()
+        detail_text = self._format_tmp_detail_text(snap)
 
         if not state_text:
             if not connected:
@@ -551,13 +606,14 @@ class HmiPlcBinder(QObject):
         freq_text = "---" if freq_hz is None else str(int(freq_hz))
         curr_text = "---" if current_a is None else f"{float(current_a):.2f}"
         temp_text = "---" if motor_temp_c is None else f"{float(motor_temp_c):.1f}"
-        alarm_disp = alarm_text if alarm_text else "-"
+        alarm_disp = "---" if alarm_text in ("", "-") else alarm_text
 
         self._set_tmp_field("tmpConnEdit", conn_text)
         self._set_tmp_field("tmpStateEdit", state_text)
         self._set_tmp_field("tmpFreqEdit", freq_text)
         self._set_tmp_field("tmpCurrentEdit", curr_text)
         self._set_tmp_field("tmpTempEdit", temp_text)
+        self._set_tmp_field("tmpDetailEdit", detail_text)
         self._set_tmp_field("tmpAlarmEdit", alarm_disp)
 
     def _call_tmp_helper(self, helper_name: str) -> tuple[bool, str]:

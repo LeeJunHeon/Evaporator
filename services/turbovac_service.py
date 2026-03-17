@@ -245,7 +245,7 @@ class TurbovacService(QObject):
     def get_alarm_text(self) -> str:
         snap = self._last_snapshot or {}
         text = str(snap.get("alarm_text", "") or "").strip()
-        return text or "-"
+        return text if text not in ("", "-") else "---"
 
     def check_tmp_ready_for_power(self) -> tuple[bool, str]:
         if not self.is_tmp_connected():
@@ -569,10 +569,12 @@ class TurbovacService(QObject):
         if self._last_snapshot:
             prev_alarm = str(self._last_snapshot.get("alarm_text", "-") or "-")
 
+        linklost_alarm = f"{prev_alarm} / LinkLost" if prev_alarm not in ("", "-", "---") else "LinkLost"
+
         disconnected = {
             "ts": time.time(),
             "connected": False,
-            "state_text": "-",
+            "state_text": "",
             "freq_hz": 0,
             "current_a": 0.0,
             "motor_temp_c": None,
@@ -583,7 +585,8 @@ class TurbovacService(QObject):
             "last_error_code": 0,
             "last_error_freq_hz": None,
             "last_error_hours": None,
-            "alarm_text": f"{prev_alarm} / LinkLost" if prev_alarm != "-" else "LinkLost",
+            "alarm_text": linklost_alarm,
+            "detail_text": "---",
             "status_word": 0,
             "control_word": 0,
             "ready": False,
@@ -599,11 +602,12 @@ class TurbovacService(QObject):
             "meta": {},
             "ui": {
                 "conn": "Disconnected",
-                "state": "-",
-                "freq": "- Hz",
-                "current": "- A",
-                "temp": "- °C",
-                "alarm": f"{prev_alarm} / LinkLost" if prev_alarm != "-" else "LinkLost",
+                "state": "DISCONNECTED",
+                "freq": "---",
+                "current": "---",
+                "temp": "---",
+                "alarm": linklost_alarm,
+                "detail": "---",
             },
         }
         self._last_snapshot = disconnected
@@ -626,28 +630,83 @@ class TurbovacService(QObject):
         self._connected = connected
         self.sig_connected.emit(connected)
 
+    def _make_tmp_detail_text(self, d: Dict[str, Any]) -> str:
+        parts: list[str] = []
+
+        conv = d.get("converter_temp_c", None)
+        bear = d.get("bearing_temp_c", None)
+        dc = d.get("dc_bus_v", None)
+
+        try:
+            if conv is not None:
+                parts.append(f"CV {float(conv):.1f}C")
+        except Exception:
+            pass
+
+        try:
+            if bear is not None:
+                parts.append(f"BR {float(bear):.1f}C")
+        except Exception:
+            pass
+
+        try:
+            if dc is not None:
+                parts.append(f"DC {float(dc):.0f}V")
+        except Exception:
+            pass
+
+        if parts:
+            return " | ".join(parts)
+
+        try:
+            warn_bits = int(d.get("warning_bits", 0) or 0)
+        except Exception:
+            warn_bits = 0
+
+        if warn_bits:
+            return f"WARN 0x{warn_bits:04X}"
+
+        try:
+            last_error_code = int(d.get("last_error_code", 0) or 0)
+        except Exception:
+            last_error_code = 0
+
+        if last_error_code:
+            return f"LAST ERR {last_error_code}"
+
+        return "---"
+
     def _snapshot_to_dict(self, snap: TurbovacSnapshot | Dict[str, Any]) -> Dict[str, Any]:
         if is_dataclass(snap):
             d = asdict(snap)
         else:
             d = dict(snap)
 
+        alarm_text = str(d.get("alarm_text", "") or "").strip()
+        if alarm_text in ("", "-"):
+            alarm_text = "---"
+
+        detail_text = self._make_tmp_detail_text(d)
+
         ui = {
             "conn": "Connected" if d.get("connected", True) else "Disconnected",
             "state": str(d.get("state_text", "-")),
-            "freq": f"{int(d.get('freq_hz', 0))} Hz" if d.get("connected", True) else "- Hz",
+            "freq": f"{int(d.get('freq_hz', 0))} Hz" if d.get("connected", True) else "---",
             "current": (
                 f"{float(d.get('current_a', 0.0)):.1f} A"
                 if d.get("connected", True)
-                else "- A"
+                else "---"
             ),
             "temp": (
                 f"{int(d['motor_temp_c'])} °C"
                 if d.get("connected", True) and d.get("motor_temp_c") is not None
-                else "- °C"
+                else "---"
             ),
-            "alarm": str(d.get("alarm_text", "-") or "-"),
+            "alarm": alarm_text,
+            "detail": detail_text,
         }
+
+        d["detail_text"] = detail_text
         d["ui"] = ui
         return d
     
@@ -686,7 +745,7 @@ class TurbovacService(QObject):
         d.setdefault("last_error_code", 0)
         d.setdefault("last_error_freq_hz", None)
         d.setdefault("last_error_hours", None)
-        d.setdefault("alarm_text", "-")
+        d.setdefault("alarm_text", "---")
 
         d.setdefault("ready", False)
         d.setdefault("operation_enabled", False)

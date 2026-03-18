@@ -5,8 +5,9 @@ DepositionPlotWidget
 - 단일 그래프
   - X: time(s)
   - Y(left): Dep.rate (Å/s)
-  - Y(right): Power (DAC)  # 고정 범위(기본 0~4000)
+  - Y(right): ADC
 - main.py에서는 append(rate=..., power=...)만 호출
+  ※ 여기서 power 인자는 DAC가 아니라 ADC 값으로 사용
 """
 
 from __future__ import annotations
@@ -122,8 +123,8 @@ class DepositionPlotWidget(QWidget):
         *,
         max_points: int = 600,
         window_seconds: float = 150.0,
-        power_title: str = "Power (DAC)",
-        power_default_range: tuple[float, float] = (0.0, 4000.0),
+        power_title: str = "ADC",
+        power_default_range: tuple[float, float] = (0.0, 1.0),
     ):
         super().__init__(parent)
         self._max_points = int(max_points)
@@ -138,6 +139,7 @@ class DepositionPlotWidget(QWidget):
         self._follow_live: bool = True
 
         self._rate_buf: Deque[Tuple[float, float]] = deque(maxlen=self._max_points)
+        self._power_buf: Deque[Tuple[float, float]] = deque(maxlen=self._max_points)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -154,7 +156,7 @@ class DepositionPlotWidget(QWidget):
         # legend는 숨기고(축 라벨 색으로 구분)
         self._chart.legend().hide()
 
-        self._chart.setTitle("Dep. Rate / Power")
+        self._chart.setTitle("Dep. Rate / ADC")
         self._chart.setAnimationOptions(QChart.NoAnimation)
         self._chart.addSeries(self._rate_series)
         self._chart.addSeries(self._power_series)
@@ -209,6 +211,7 @@ class DepositionPlotWidget(QWidget):
         self._follow_live = True
 
         self._rate_buf.clear()
+        self._power_buf.clear()
         self._rate_series.clear()
         self._power_series.clear()
         self._reset_axes()
@@ -240,6 +243,7 @@ class DepositionPlotWidget(QWidget):
             if p < 0:
                 p = 0.0
 
+            self._power_buf.append((t, p))
             self._power_series.append(t, p)
             if self._power_series.count() > self._max_points:
                 self._power_series.removePoints(0, self._power_series.count() - self._max_points)
@@ -350,6 +354,32 @@ class DepositionPlotWidget(QWidget):
         except Exception:
             pass
 
+
+    def _update_power_axis_for_range(self, x1: float, x2: float) -> None:
+        if not self._power_buf:
+            self._ax_power.setRange(self._p_def_min, self._p_def_max)
+            return
+
+        ys = [v for tt, v in self._power_buf if float(x1) <= tt <= float(x2)]
+        if not ys:
+            ys = [v for _, v in self._power_buf]  # fallback
+
+        y_max = max(ys)
+        y_upper = max(1.0, y_max * 1.10)
+        self._ax_power.setRange(0.0, y_upper)
+
+        try:
+            if y_upper < 2.0:
+                self._ax_power.setLabelFormat("%.3f")
+            elif y_upper < 10.0:
+                self._ax_power.setLabelFormat("%.2f")
+            elif y_upper < 100.0:
+                self._ax_power.setLabelFormat("%.1f")
+            else:
+                self._ax_power.setLabelFormat("%.0f")
+        except Exception:
+            pass
+
     def _reset_axes(self) -> None:
         x2 = max(10.0, self._window_s)
 
@@ -363,10 +393,11 @@ class DepositionPlotWidget(QWidget):
         self._ax_power.setRange(self._p_def_min, self._p_def_max)
 
     def _update_axes(self, t_now: float) -> None:
-        # ✅ 라이브 팔로우: 기존 로직 그대로
+        # ✅ 라이브 팔로우
         x1, x2 = self._compute_live_range(float(t_now))
         self._set_x_range(x1, x2)
         self._update_rate_axis_for_range(x1, x2)
+        self._update_power_axis_for_range(x1, x2)
 
     def _update_axes_manual(self, t_now: float) -> None:
         # ✅ 과거 조회 중:
@@ -378,6 +409,7 @@ class DepositionPlotWidget(QWidget):
         x1, x2 = self._clamp_manual_range(x1, x2, float(live_x2))
         self._set_x_range(x1, x2)
         self._update_rate_axis_for_range(x1, x2)
+        self._update_power_axis_for_range(x1, x2)
 
         # ✅ 사용자가 다시 오른쪽 끝으로 이동하면 자동 라이브 복귀
         self._maybe_resume_live(current_x2=x2, live_x2=float(live_x2))

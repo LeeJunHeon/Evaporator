@@ -50,7 +50,8 @@ class ProcessConfigDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Process Config")
         self.setModal(True)
-        self.resize(760, 560)
+        self.resize(900, 760)
+        self.setMinimumSize(900, 760)
 
         self._initial_config = self._normalize_config(initial_config or self._default_config())
 
@@ -179,6 +180,7 @@ class ProcessConfigDialog(QDialog):
         # Step Count
         # -------------------------
         top_box = QGroupBox("Step Settings")
+        top_box.setMinimumHeight(320)
         top_layout = QVBoxLayout(top_box)
 
         step_count_row = QHBoxLayout()
@@ -211,6 +213,17 @@ class ProcessConfigDialog(QDialog):
         hh = self.stepTable.horizontalHeader()
         hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         hh.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+
+        # Step 5까지는 기본으로 보이도록 최소 높이 확보
+        self.stepTable.verticalHeader().setDefaultSectionSize(34)
+        visible_rows = 5
+        table_min_h = (
+            self.stepTable.horizontalHeader().sizeHint().height()
+            + self.stepTable.verticalHeader().defaultSectionSize() * visible_rows
+            + self.stepTable.frameWidth() * 2
+            + 8
+        )
+        self.stepTable.setMinimumHeight(table_min_h)
 
         for row in range(self.MAX_STEPS):
             self.stepTable.setVerticalHeaderItem(row, self._make_row_header_item(row))

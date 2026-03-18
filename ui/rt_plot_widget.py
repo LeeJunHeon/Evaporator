@@ -124,7 +124,7 @@ class DepositionPlotWidget(QWidget):
         max_points: int = 600,
         window_seconds: float = 150.0,
         power_title: str = "ADC",
-        power_default_range: tuple[float, float] = (0.0, 1.0),
+        power_default_range: tuple[float, float] = (0.0, 300.0),
     ):
         super().__init__(parent)
         self._max_points = int(max_points)
@@ -175,7 +175,6 @@ class DepositionPlotWidget(QWidget):
 
         # Right Y axis (power)
         self._ax_power = QValueAxis()
-        self._ax_power.setLabelFormat("%.0f")
         self._ax_power.setTitleText(self._power_title)
         self._chart.addAxis(self._ax_power, Qt.AlignRight)
 
@@ -358,6 +357,7 @@ class DepositionPlotWidget(QWidget):
     def _update_power_axis_for_range(self, x1: float, x2: float) -> None:
         if not self._power_buf:
             self._ax_power.setRange(self._p_def_min, self._p_def_max)
+            self._apply_power_label_format(self._p_def_max)
             return
 
         ys = [v for tt, v in self._power_buf if float(x1) <= tt <= float(x2)]
@@ -368,17 +368,7 @@ class DepositionPlotWidget(QWidget):
         y_upper = max(1.0, y_max * 1.10)
         self._ax_power.setRange(0.0, y_upper)
 
-        try:
-            if y_upper < 2.0:
-                self._ax_power.setLabelFormat("%.3f")
-            elif y_upper < 10.0:
-                self._ax_power.setLabelFormat("%.2f")
-            elif y_upper < 100.0:
-                self._ax_power.setLabelFormat("%.1f")
-            else:
-                self._ax_power.setLabelFormat("%.0f")
-        except Exception:
-            pass
+        self._apply_power_label_format(y_upper)
 
     def _reset_axes(self) -> None:
         x2 = max(10.0, self._window_s)
@@ -390,7 +380,10 @@ class DepositionPlotWidget(QWidget):
         self._set_x_range(0.0, x2)
 
         self._ax_rate.setRange(0.0, 1.0)
+        self._ax_rate.setLabelFormat("%.3f")
+
         self._ax_power.setRange(self._p_def_min, self._p_def_max)
+        self._apply_power_label_format(self._p_def_max)
 
     def _update_axes(self, t_now: float) -> None:
         # ✅ 라이브 팔로우
@@ -520,3 +513,38 @@ class DepositionPlotWidget(QWidget):
             self._ax_x.setTickCount(ticks)
         except Exception:
             pass
+
+    def _apply_power_label_format(self, y_upper: float) -> None:
+        try:
+            y_upper = float(y_upper)
+        except Exception:
+            y_upper = float(self._p_def_max)
+
+        try:
+            if y_upper < 2.0:
+                self._ax_power.setLabelFormat("%.3f")
+            elif y_upper < 10.0:
+                self._ax_power.setLabelFormat("%.2f")
+            elif y_upper < 100.0:
+                self._ax_power.setLabelFormat("%.1f")
+            else:
+                self._ax_power.setLabelFormat("%.0f")
+        except Exception:
+            pass
+
+    def set_power_default_range(self, y_min: float, y_max: float) -> None:
+        try:
+            y_min = float(y_min)
+            y_max = float(y_max)
+        except Exception:
+            return
+
+        if y_max <= y_min:
+            y_max = y_min + 1.0
+
+        self._p_def_min = max(0.0, y_min)
+        self._p_def_max = y_max
+
+        if not self._power_buf:
+            self._ax_power.setRange(self._p_def_min, self._p_def_max)
+            self._apply_power_label_format(self._p_def_max)

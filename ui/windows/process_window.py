@@ -691,6 +691,32 @@ class ProcessWindow(QWidget):
         except Exception:
             pass
 
+    def _get_plot_adc_default_range(self) -> tuple[float, float]:
+        cfg = self._normalize_process_config(self._process_cfg)
+
+        candidates: list[float] = []
+
+        for step in cfg.get("ramp_steps") or []:
+            try:
+                v = float((step or {}).get("target_adc", 0.0) or 0.0)
+                if v > 0:
+                    candidates.append(v)
+            except Exception:
+                pass
+
+        extra = dict(cfg.get("extra_ramp") or {})
+        if bool(extra.get("enabled", False)):
+            try:
+                v = float(extra.get("max_adc", 0.0) or 0.0)
+                if v > 0:
+                    candidates.append(v)
+            except Exception:
+                pass
+
+        y_max = max(candidates, default=300.0)
+        y_max = max(100.0, y_max * 1.10)
+        return (0.0, y_max)
+
     def _try_update_last_power(self, st: Any) -> None:
         """
         그래프용 power는 이제 ADC total 우선.
@@ -1011,6 +1037,13 @@ class ProcessWindow(QWidget):
             for idx, s in enumerate(steps)
         )
 
+        if self._plot is not None and hasattr(self._plot, "set_power_default_range"):
+            try:
+                adc_range = self._get_plot_adc_default_range()
+                self._plot.set_power_default_range(*adc_range)
+            except Exception:
+                pass
+
         _append_text(
             getattr(self.ui, "logWindow", None),
             "[CFG] Process config updated | "
@@ -1040,7 +1073,12 @@ class ProcessWindow(QWidget):
             if w is not None:
                 w.setParent(None)
 
-        self._plot = DepositionPlotWidget(parent=host)
+        adc_range = self._get_plot_adc_default_range()
+        self._plot = DepositionPlotWidget(
+            parent=host,
+            power_title="ADC",
+            power_default_range=adc_range,
+        )
         lay.addWidget(self._plot)
 
     def _rt_start(self) -> None:

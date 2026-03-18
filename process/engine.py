@@ -158,6 +158,10 @@ class ProcessEngine:
         self._last_dac_power_1: int = 0
         self._last_dac_power_2: int = 0
 
+        # ✅ ADC readback 캐시
+        self._last_adc_power_1: Optional[float] = None
+        self._last_adc_power_2: Optional[float] = None
+
         # ✅ UI 표시용: 마지막 메시지 캐시 (tick emit이 message=""로 덮는 문제 방지)
         self._ui_last_message: str = ""
 
@@ -198,6 +202,8 @@ class ProcessEngine:
         # ✅ 이전 run의 잔상 제거
         self._last_dac_power_1 = 0
         self._last_dac_power_2 = 0
+        self._last_adc_power_1 = None
+        self._last_adc_power_2 = None
         self._ui_last_message = ""
 
         # run open
@@ -883,6 +889,44 @@ class ProcessEngine:
         if not getattr(s, "connected", False):
             return None
         return getattr(s, "rate_angstrom_per_s", None)
+    
+    def _get_power_read_pair(self) -> tuple[Optional[float], Optional[float]]:
+        """
+        PLC snapshot.regs 에서 ADC readback(POWER_READ_1/2)을 읽는다.
+        """
+        snap = self._get_plc_snapshot()
+        if snap is None:
+            return None, None
+        if not getattr(snap, "connected", False):
+            return None, None
+
+        regs = getattr(snap, "regs", None)
+        if not isinstance(regs, dict):
+            return None, None
+
+        def _to_float(v: Any) -> Optional[float]:
+            if v is None:
+                return None
+            try:
+                return float(v)
+            except Exception:
+                return None
+
+        return _to_float(regs.get("POWER_READ_1")), _to_float(regs.get("POWER_READ_2"))
+    
+    def _get_power_read_pair_cached(self) -> tuple[Optional[float], Optional[float]]:
+        """
+        현재 snapshot 값이 있으면 캐시를 갱신하고,
+        없으면 마지막 정상 ADC 값을 유지한다.
+        """
+        adc1, adc2 = self._get_power_read_pair()
+
+        if adc1 is not None:
+            self._last_adc_power_1 = float(adc1)
+        if adc2 is not None:
+            self._last_adc_power_2 = float(adc2)
+
+        return self._last_adc_power_1, self._last_adc_power_2
 
     def _get_coil(self, coil: str) -> Optional[bool]:
         snap = self._get_plc_snapshot()
@@ -996,13 +1040,14 @@ class ProcessEngine:
         now = time.monotonic()
         if not force and (now - self._last_status_emit_ts) < self._status_emit_interval_s:
             return
-        self._last_status_emit_ts = now  # ✅ 여기서 갱신
+        self._last_status_emit_ts = now
 
-        # ✅ message가 비어있으면 마지막 메시지 유지
         if message:
             self._ui_last_message = message
         else:
             message = self._ui_last_message
+
+        adc1, adc2 = self._get_power_read_pair_cached()
 
         st = ProcessStatus(
             phase=self._phase,
@@ -1016,9 +1061,12 @@ class ProcessEngine:
             thickness_a=self._get_thickness(),
             rate_a_s=self._get_rate(),
 
-            # ✅ models.py에 dac1/dac2를 추가했다면 여기서 값도 채워줘야 UI/그래프에서 사용 가능
             dac1=int(getattr(self, "_last_dac_power_1", 0) or 0),
             dac2=int(getattr(self, "_last_dac_power_2", 0) or 0),
+
+            # ✅ ADC readback 추가
+            adc1=adc1,
+            adc2=adc2,
         )
 
         cb = self.callbacks.on_status
@@ -1050,17 +1098,7 @@ class ProcessEngine:
         LogService.telemetry()로 run별 CSV에 저장.
         """
         try:
-            acs = self._get_acs_snapshot()
-            acs_meta = getattr(acs, "meta", None) if acs is not None else None
-            pressure_status = None
-            pressure_status_text = None
-            pressure_ok = None
-            pressure_raw = None
-            if isinstance(acs_meta, dict):
-                pressure_status = acs_meta.get("status")
-                pressure_status_text = acs_meta.get("status_text")
-                pressure_ok = acs_meta.get("ok")
-                pressure_raw = acs_meta.get("raw")
+            adc1, adc2 = self._get_power_read_pair_cached()
 
             self.log.telemetry({
                 "step": (self._ui_last_message or self._current_step_name),
@@ -1069,6 +1107,11 @@ class ProcessEngine:
                 "pressure_torr": self._get_pressure(),
                 "dac1": int(getattr(self, "_last_dac_power_1", 0) or 0),
                 "dac2": int(getattr(self, "_last_dac_power_2", 0) or 0),
+
+                # ✅ ADC readback 추가
+                "adc1": adc1,
+                "adc2": adc2,
+
                 "dep.rate": self._get_rate(),
                 "thickness_A": self._get_thickness(),
             })
@@ -1145,6 +1188,8 @@ class ProcessEngine:
             if detail:
                 line += f" | {str(detail)}"
 
+            adc1, adc2 = self._get_power_read_pair_cached()
+
             self.log.telemetry({
                 "step": (self._ui_last_message or self._current_step_name),
                 "detail": line,
@@ -1152,6 +1197,11 @@ class ProcessEngine:
                 "pressure_torr": self._get_pressure(),
                 "dac1": int(getattr(self, "_last_dac_power_1", 0) or 0),
                 "dac2": int(getattr(self, "_last_dac_power_2", 0) or 0),
+
+                # ✅ ADC readback 추가
+                "adc1": adc1,
+                "adc2": adc2,
+
                 "dep.rate": self._get_rate(),
                 "thickness_A": self._get_thickness(),
             })

@@ -682,7 +682,11 @@ class ProcessWindow(QWidget):
             # fallback: message가 없으면 기존처럼 phase/step
             phase = getattr(st, "phase", None)
             step = getattr(st, "step_name", None) or getattr(st, "step", None)
-            w.setText(f"{phase} | {step}" if (phase or step) else str(st))
+
+            if phase or step:
+                w.setText(f"{phase} | {step}")
+            else:
+                w.setText("---")
 
         except Exception:
             pass
@@ -1062,22 +1066,23 @@ class ProcessWindow(QWidget):
 
         # ✅ 그래프는 이제 ADC 기준
         graph_power = self._sum_selected_pair(adc1, adc2)
+        graph_power = self._clamp_nonneg(graph_power)
+
         if graph_power is not None:
-            graph_power = self._clamp_nonneg(graph_power)
             self._last_power = graph_power
         else:
-            graph_power = self._clamp_nonneg(self._last_power)
+            self._last_power = None
 
         show_th = self._is_main_deposition()
         th = self._clamp_nonneg(self._last_thickness) if show_th else None
 
         try:
-            self.ui.currentRateEdit.setText(f"{rate:.3f}" if rate is not None else "")
+            self.ui.currentRateEdit.setText(f"{rate:.3f}" if rate is not None else "---")
         except Exception:
             pass
 
         try:
-            self.ui.currentThicknessEdit.setText(f"{th:.2f}" if th is not None else "")
+            self.ui.currentThicknessEdit.setText(f"{th:.2f}" if th is not None else "---")
         except Exception:
             pass
 
@@ -1169,6 +1174,9 @@ class ProcessWindow(QWidget):
             if snap is None:
                 return None, None
 
+            if not bool(getattr(snap, "connected", False)):
+                return None, None
+
             regs = getattr(snap, "regs", None) or {}
             p1 = self._clamp_nonneg(regs.get("DAC_POWER_1", None))
             p2 = self._clamp_nonneg(regs.get("DAC_POWER_2", None))
@@ -1239,6 +1247,9 @@ class ProcessWindow(QWidget):
             if snap is None:
                 return None, None
 
+            if not bool(getattr(snap, "connected", False)):
+                return None, None
+
             regs = getattr(snap, "regs", None) or {}
             raw1 = regs.get("POWER_READ_1", None)
             raw2 = regs.get("POWER_READ_2", None)
@@ -1301,7 +1312,7 @@ class ProcessWindow(QWidget):
             w = getattr(self.ui, wname, None)
             if w is not None and hasattr(w, "setText"):
                 with contextlib.suppress(Exception):
-                    w.setText("")
+                    w.setText("---")
 
         for wname in ("currentDac1Edit", "currentDac2Edit", "actualPower1Edit", "actualPower2Edit"):
             w = getattr(self.ui, wname, None)
@@ -1312,7 +1323,7 @@ class ProcessWindow(QWidget):
         w = getattr(self.ui, "processMonitor_Process", None)
         if w is not None and hasattr(w, "setText"):
             with contextlib.suppress(Exception):
-                w.setText("")
+                w.setText("---")
 
         if self._plot is not None:
             with contextlib.suppress(Exception):

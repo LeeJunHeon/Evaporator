@@ -811,6 +811,7 @@ class Ui_Form(object):
         self.currentRateEdit.setObjectName("currentRateEdit")
         self.currentRateEdit.setGeometry(QRect(0, 376, 191, 26))
         self.currentRateEdit.setReadOnly(True)
+        self.currentRateEdit.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         # ✅ Cur Thick (Edit 끝 +4 = 다음 라벨)
         self.currentThicknessLabel = QLabel(self.page_2)
@@ -821,6 +822,7 @@ class Ui_Form(object):
         self.currentThicknessEdit.setObjectName("currentThicknessEdit")
         self.currentThicknessEdit.setGeometry(QRect(0, 426, 191, 26))
         self.currentThicknessEdit.setReadOnly(True)
+        self.currentThicknessEdit.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         # =========================
         # DAC display row (신규)
@@ -985,6 +987,10 @@ class Ui_Form(object):
         self.processMonitor_Process = QLineEdit(self.page_2)
         self.processMonitor_Process.setObjectName("processMonitor_Process")
         self.processMonitor_Process.setGeometry(QRect(210, 5, 891, 41))
+        self.processMonitor_Process.setReadOnly(True)
+        self.processMonitor_Process.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.processMonitor_Process.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
+        self.processMonitor_Process.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
         self.stackedWidget.addWidget(self.page_2)
 
@@ -1016,6 +1022,8 @@ class Ui_Form(object):
         self.ms2shutterBtn.setText(QCoreApplication.translate("Form", "M.S 2\nShutter", None))
         self.ms1shutterBtn.setText(QCoreApplication.translate("Form", "M.S 1\nShutter", None))
         self.mainshutterBtn.setText(QCoreApplication.translate("Form", "Main\nShutter", None))
+
+        self.processMonitor_Process.setText(QCoreApplication.translate("Form", "---", None))
 
         # TMP 상태 표시
         self.tmpGroup.setTitle(QCoreApplication.translate("Form", "Turbo Status", None))
@@ -1114,6 +1122,9 @@ class Ui_Form(object):
 
         # Thick는 전체 1칸
         self.currentThicknessLabel.setText(QCoreApplication.translate("Form", "Cur Thick (Å)", None))
+
+        self.currentRateEdit.setText(QCoreApplication.translate("Form", "---", None))
+        self.currentThicknessEdit.setText(QCoreApplication.translate("Form", "---", None))
 
     # =========================
     # Style only

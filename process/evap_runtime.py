@@ -251,11 +251,16 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
     rate_tol_ratio = float(meta.get("rate_tol_ratio", 0.05) or 0.05)    # ±5%
     pre_tol_ratio = float(meta.get("pre_tol_ratio", 0.10) or 0.10)      # pre_rate는 조금 넓게
 
+    # ✅ pre_hold 중 dep.rate 급감 감지
+    # 예: pre_rate=0.4, pre_drop_ratio=0.5 이면 0.2 미만이 연속 발생할 때 중단
+    pre_drop_ratio = float(meta.get("pre_drop_ratio", 0.50) or 0.50)
+    pre_drop_count = int(meta.get("pre_drop_count", 3) or 3)
+
     ramp_step_dac = int(meta.get("ramp_step_dac", 100) or 100)
 
     # ✅ 사용자 요구: DAC 구간별 램프 템포
     ramp_seg1_max_dac = int(meta.get("ramp_seg1_max_dac", 700) or 700)
-    ramp_seg2_max_dac = int(meta.get("ramp_seg2_max_dac", 1500) or 1500)
+    ramp_seg2_max_dac = int(meta.get("ramp_seg2_max_dac", 2000) or 2000)
     ramp_interval_seg1_s = float(meta.get("ramp_interval_seg1_s", 10.0) or 10.0)
     ramp_interval_seg2_s = float(meta.get("ramp_interval_seg2_s", 30.0) or 30.0)
     ramp_interval_after_seg2_s = float(meta.get("ramp_interval_after_seg2_s", ramp_interval_seg2_s) or ramp_interval_seg2_s)
@@ -624,6 +629,11 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         engine._emit_status(message=f"EVAP pre_rate 유지: {pre_hold_s:.0f}s (mode={pre_hold_mode})")
         end_m = time.monotonic() + float(pre_hold_s)
         next_ui_m = time.monotonic()
+
+        # ✅ pre_hold 중 급감 연속 감지
+        pre_drop_hits = 0
+        pre_drop_threshold = float(pre_rate) * float(pre_drop_ratio)
+
         while True:
             now_m = time.monotonic()
             remain_s = end_m - now_m
@@ -631,6 +641,18 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
                 break
 
             rt = read_rate_or_abort(where="pre_hold")
+
+            # ✅ pre_hold 중 dep.rate 급감 감지
+            if rt < pre_drop_threshold:
+                pre_drop_hits += 1
+                if pre_drop_hits >= max(1, int(pre_drop_count)):
+                    _raise_engine_failed(
+                        step.name,
+                        f"EVAP: pre_hold 중 dep.rate 급감 감지 "
+                        f"(rt={rt:.3f} < {pre_drop_threshold:.3f}, hits={pre_drop_hits}/{pre_drop_count})"
+                    )
+            else:
+                pre_drop_hits = 0
 
             # control 모드만 pre_rate 근처 유지 제어 (단, DAC 변경 텀 적용)
             if pre_hold_mode == "control":
@@ -827,7 +849,7 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
 
     # 9) 증착 루프
     drop_hits = 0
-    baseline_rate: float | None = None
+    main_drop_threshold = float(target_rate) * float(rate_drop_ratio)
 
     while True:
         engine._check_stop_pause(recipe, step)
@@ -840,17 +862,14 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         if dep_th < 0:
             dep_th = 0.0
 
-        # 기준 rate는 셔터 열린 후 첫 유효값으로 고정
-        if baseline_rate is None:
-            baseline_rate = rt
-
-        # 급감 감지: baseline 대비 70% 이상 감소(= 30% 이하)
-        if baseline_rate > 0 and rt < baseline_rate * rate_drop_ratio:
+        # ✅ 급감 감지는 첫 샘플 baseline이 아니라 target_rate 기준으로 통일
+        if rt < main_drop_threshold:
             drop_hits += 1
-            if drop_hits >= rate_drop_count:
+            if drop_hits >= max(1, int(rate_drop_count)):
                 _raise_engine_failed(
                     step.name,
-                    f"EVAP: dep.rate 급감 감지 → 중단 (rt={rt:.3f}, base={baseline_rate:.3f})"
+                    f"EVAP: dep.rate 급감 감지 → 중단 "
+                    f"(rt={rt:.3f} < {main_drop_threshold:.3f}, hits={drop_hits}/{rate_drop_count})"
                 )
         else:
             drop_hits = 0

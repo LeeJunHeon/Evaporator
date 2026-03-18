@@ -822,36 +822,73 @@ class Ui_Form(object):
         self.currentThicknessEdit.setGeometry(QRect(0, 426, 191, 26))
         self.currentThicknessEdit.setReadOnly(True)
 
+        # =========================
+        # DAC display row (신규)
+        # =========================
+        self.currentDac1Label = QLabel(self.page_2)
+        self.currentDac1Label.setObjectName("currentDac1Label")
+        self.currentDac1Label.setGeometry(QRect(0, 454, 91, 18))
+        self.currentDac1Label.setAlignment(
+            Qt.AlignmentFlag.AlignLeading | Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
+
+        self.currentDac2Label = QLabel(self.page_2)
+        self.currentDac2Label.setObjectName("currentDac2Label")
+        self.currentDac2Label.setGeometry(QRect(100, 454, 91, 18))
+        self.currentDac2Label.setAlignment(
+            Qt.AlignmentFlag.AlignLeading | Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
+
+        self.currentDac1Edit = QLineEdit(self.page_2)
+        self.currentDac1Edit.setObjectName("currentDac1Edit")
+        self.currentDac1Edit.setGeometry(QRect(0, 472, 91, 24))
+        self.currentDac1Edit.setReadOnly(True)
+        self.currentDac1Edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.currentDac2Edit = QLineEdit(self.page_2)
+        self.currentDac2Edit.setObjectName("currentDac2Edit")
+        self.currentDac2Edit.setGeometry(QRect(100, 472, 91, 24))
+        self.currentDac2Edit.setReadOnly(True)
+        self.currentDac2Edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        # =========================
+        # ADC display row (기존 actualPower = ADC로 사용)
+        # =========================
         self.actualPower1Label = QLabel(self.page_2)
         self.actualPower1Label.setObjectName("actualPower1Label")
-        self.actualPower1Label.setGeometry(QRect(0, 456, 91, 20))
+        self.actualPower1Label.setGeometry(QRect(0, 500, 91, 18))
         self.actualPower1Label.setAlignment(
             Qt.AlignmentFlag.AlignLeading | Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
         )
 
         self.actualPower2Label = QLabel(self.page_2)
         self.actualPower2Label.setObjectName("actualPower2Label")
-        self.actualPower2Label.setGeometry(QRect(100, 456, 91, 20))
+        self.actualPower2Label.setGeometry(QRect(100, 500, 91, 18))
         self.actualPower2Label.setAlignment(
             Qt.AlignmentFlag.AlignLeading | Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
         )
 
         self.actualPower1Edit = QLineEdit(self.page_2)
         self.actualPower1Edit.setObjectName("actualPower1Edit")
-        self.actualPower1Edit.setGeometry(QRect(0, 476, 91, 26))
+        self.actualPower1Edit.setGeometry(QRect(0, 518, 91, 24))
         self.actualPower1Edit.setReadOnly(True)
         self.actualPower1Edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.actualPower2Edit = QLineEdit(self.page_2)
         self.actualPower2Edit.setObjectName("actualPower2Edit")
-        self.actualPower2Edit.setGeometry(QRect(100, 476, 91, 26))
+        self.actualPower2Edit.setGeometry(QRect(100, 518, 91, 24))
         self.actualPower2Edit.setReadOnly(True)
         self.actualPower2Edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        # ✅ Recipe (Edit 끝 +4)
+        self.processConfigBtn = QPushButton(self.page_2)
+        self.processConfigBtn.setObjectName("processConfigBtn")
+        self.processConfigBtn.setGeometry(QRect(0, 548, 191, 32))
+        self.processConfigBtn.setAutoDefault(False)
+
         self.recipeBtn = QPushButton(self.page_2)
         self.recipeBtn.setObjectName("recipeBtn")
-        self.recipeBtn.setGeometry(QRect(0, 556, 191, 41))
+        self.recipeBtn.setGeometry(QRect(0, 584, 191, 32))
+        self.recipeBtn.setAutoDefault(False)
 
         self.graphWidget = QWidget(self.page_2)
         self.graphWidget.setObjectName("graphWidget")
@@ -882,11 +919,11 @@ class Ui_Form(object):
         # ✅ Start/Stop (Recipe 끝 +4)
         self.stopProcess = QPushButton(self.page_2)
         self.stopProcess.setObjectName("stopProcess")
-        self.stopProcess.setGeometry(QRect(100, 601, 91, 71))
+        self.stopProcess.setGeometry(QRect(100, 620, 91, 71))
 
         self.startProcess = QPushButton(self.page_2)
         self.startProcess.setObjectName("startProcess")
-        self.startProcess.setGeometry(QRect(0, 601, 91, 71))
+        self.startProcess.setGeometry(QRect(0, 620, 91, 71))
 
         self.logWindow = QPlainTextEdit(self.page_2)
         self.logWindow.setObjectName("logWindow")
@@ -1059,10 +1096,18 @@ class Ui_Form(object):
         self.materialEdit.setText(QCoreApplication.translate("Form", "Select", None))
         self.materialEdit2.setText(QCoreApplication.translate("Form", "Select", None))
 
-        self.actualPower1Label.setText(QCoreApplication.translate("Form", "Power 1 (A)", None))
-        self.actualPower2Label.setText(QCoreApplication.translate("Form", "Power 2 (A)", None))
+        self.currentDac1Label.setText(QCoreApplication.translate("Form", "DAC 1", None))
+        self.currentDac2Label.setText(QCoreApplication.translate("Form", "DAC 2", None))
+        self.currentDac1Edit.setText(QCoreApplication.translate("Form", "---", None))
+        self.currentDac2Edit.setText(QCoreApplication.translate("Form", "---", None))
+
+        self.actualPower1Label.setText(QCoreApplication.translate("Form", "ADC 1 (A)", None))
+        self.actualPower2Label.setText(QCoreApplication.translate("Form", "ADC 2 (A)", None))
         self.actualPower1Edit.setText(QCoreApplication.translate("Form", "---", None))
         self.actualPower2Edit.setText(QCoreApplication.translate("Form", "---", None))
+
+        self.processConfigBtn.setText(QCoreApplication.translate("Form", "Config", None))
+        self.recipeBtn.setText(QCoreApplication.translate("Form", "Recipe", None))
 
         # Cur Rate는 표시값이므로 1칸만 사용
         self.currentRateLabel.setText(QCoreApplication.translate("Form", "Cur Rate (Å/s)", None))
@@ -1070,7 +1115,6 @@ class Ui_Form(object):
         # Thick는 전체 1칸
         self.currentThicknessLabel.setText(QCoreApplication.translate("Form", "Cur Thick (Å)", None))
 
-        self.recipeBtn.setText("Recipe")
     # =========================
     # Style only
     # =========================
@@ -1416,6 +1460,10 @@ class Ui_Form(object):
         readonly_display = [
             self.currentRateEdit,
             self.currentThicknessEdit,
+            self.currentDac1Edit,
+            self.currentDac2Edit,
+            self.actualPower1Edit,
+            self.actualPower2Edit,
         ]
 
         for le in readonly_display:

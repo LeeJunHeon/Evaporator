@@ -119,15 +119,26 @@ class ProcessWindow(QWidget):
         self.ui.materialEdit.clicked.connect(lambda: self._open_material_dialog(1))
         self.ui.materialEdit2.clicked.connect(lambda: self._open_material_dialog(2))
 
-        self.ui.startProcess.clicked.connect(self._on_start_clicked)   
-        self.ui.stopProcess.clicked.connect(self._on_stop_clicked)   
+        self.ui.startProcess.clicked.connect(self._on_start_clicked)
+        self.ui.stopProcess.clicked.connect(self._on_stop_clicked)
+
+        # ✅ Process Config 버튼 연결
+        cfg_btn = getattr(self.ui, "processConfigBtn", None)
+        if cfg_btn is not None and hasattr(cfg_btn, "clicked"):
+            cfg_btn.clicked.connect(self._open_process_config_dialog)
+
+        # ✅ 새 프로세스 설정(ADC step 기반) 보관
+        self._process_cfg: dict[str, Any] = self._default_process_config()
 
         # =========================
         # ✅ RT 표시(1초) + 그래프
         # =========================
         self._last_rate: Optional[float] = None
         self._last_thickness: Optional[float] = None
-        self._last_power: Optional[float] = None   # ✅ 추가
+
+        # ✅ 이제 _last_power 는 "그래프 오른쪽 축에 넣을 값"
+        #    현재 단계에서는 ADC total 우선값으로 사용
+        self._last_power: Optional[float] = None
 
         self._plot: Optional[DepositionPlotWidget] = None
         self._init_rt_plot()  # graphWidget 자리에 plot 삽입
@@ -514,6 +525,22 @@ class ProcessWindow(QWidget):
         run_cfg = self._collect_ui_run_cfg()
         if run_cfg is None:
             return
+        
+        proc_cfg = run_cfg.get("process_config") or {}
+        steps = proc_cfg.get("ramp_steps") or []
+        if steps:
+            step_desc = " | ".join(
+                f"S{idx+1}: ADC {float(s.get('target_adc', 0.0)):.1f}, Delay {float(s.get('delay_s', 0.0)):.1f}s"
+                for idx, s in enumerate(steps)
+            )
+            _append_text(getattr(self.ui, "logWindow", None), f"[CFG] {step_desc}")
+
+        _append_text(
+            getattr(self.ui, "logWindow", None),
+            "[CFG] "
+            f"after_last_step_policy={proc_cfg.get('after_last_step_policy')} | "
+            f"extra_ramp={proc_cfg.get('extra_ramp')}"
+        )
 
         # ✅ run_id만 생성해서 ProcessController로 전달
         #    실제 open_run()/close_run()는 ProcessController/Engine 쪽에서 담당
@@ -662,26 +689,55 @@ class ProcessWindow(QWidget):
 
     def _try_update_last_power(self, st: Any) -> None:
         """
-        ProcessController가 status에 power/dac 관련 값을 넣어줄 수도 있고,
-        dict로 올 수도 있어서 최대한 방어적으로 추출한다.
-        - 우선순위: total/combined -> (dac1+dac2) -> single
+        그래프용 power는 이제 ADC total 우선.
+        아직 engine.py 가 adc를 status에 안 넣는 동안은 DAC fallback 허용.
         """
+        def _set_pair(v1: Any, v2: Any) -> bool:
+            total = self._sum_selected_pair(
+                self._clamp_nonneg(v1),
+                self._clamp_nonneg(v2),
+            )
+            if total is None:
+                return False
+            self._last_power = float(total)
+            return True
+
         try:
             # dict 형태
             if isinstance(st, dict):
+                for k in ("adc_total", "power_actual", "actual_power", "power_read", "adc"):
+                    if k in st and st[k] is not None:
+                        self._last_power = float(st[k])
+                        return
+
+                if ("adc1" in st) or ("adc2" in st):
+                    if _set_pair(st.get("adc1"), st.get("adc2")):
+                        return
+
+                # fallback: 아직 adc 미구현이면 dac 사용
                 for k in ("power", "power_dac", "dac", "dac_power", "power_cmd", "dac_cmd"):
                     if k in st and st[k] is not None:
                         self._last_power = float(st[k])
                         return
-                # 2채널
+
                 if ("dac1" in st) or ("dac2" in st):
-                    d1 = float(st.get("dac1") or 0.0)
-                    d2 = float(st.get("dac2") or 0.0)
-                    self._last_power = d1 + d2
-                    return
+                    if _set_pair(st.get("dac1"), st.get("dac2")):
+                        return
                 return
 
             # 객체 형태
+            for name in ("adc_total", "power_actual", "actual_power", "power_read", "adc"):
+                if hasattr(st, name):
+                    v = getattr(st, name)
+                    if v is not None:
+                        self._last_power = float(v)
+                        return
+
+            if hasattr(st, "adc1") or hasattr(st, "adc2"):
+                if _set_pair(getattr(st, "adc1", None), getattr(st, "adc2", None)):
+                    return
+
+            # fallback
             for name in ("power", "power_dac", "dac", "dac_power", "power_cmd", "dac_cmd"):
                 if hasattr(st, name):
                     v = getattr(st, name)
@@ -689,14 +745,10 @@ class ProcessWindow(QWidget):
                         self._last_power = float(v)
                         return
 
-            # 2채널 객체 후보
             if hasattr(st, "dac1") or hasattr(st, "dac2"):
-                d1 = float(getattr(st, "dac1", 0.0) or 0.0)
-                d2 = float(getattr(st, "dac2", 0.0) or 0.0)
-                self._last_power = d1 + d2
-                return
+                _set_pair(getattr(st, "dac1", None), getattr(st, "dac2", None))
+
         except Exception:
-            # power는 없어도 공정은 돌 수 있으니 무시
             return
 
     def _on_error(self, err: Any) -> None:
@@ -835,6 +887,133 @@ class ProcessWindow(QWidget):
             self._material_2 = dict(data)
             self.ui.materialEdit2.setText(mat or "Select")
 
+    def _default_process_config(self) -> dict[str, Any]:
+        """
+        공정용 기본 설정.
+        - step은 최소 1개
+        - 지금은 ADC 기준 램프업 step 구조를 미리 보관만 한다.
+        """
+        return {
+            "step_count": 1,
+            "ramp_steps": [
+                {
+                    "target_adc": 100.0,
+                    "delay_s": 0.0,
+                }
+            ],
+            # step 중 dep.rate 도달 시 즉시 메인 공정 진입
+            "reach_main_on_rate": True,
+
+            # 모든 step 종료 후 dep.rate 미도달 시 정책
+            # "extra_ramp" | "stop"
+            "after_last_step_policy": "extra_ramp",
+
+            # 추가 ramp 정책
+            "extra_ramp": {
+                "enabled": True,
+                "max_adc": 300.0,
+                "step_max": 50.0,     # 동적 증가폭 상한(100 이하)
+                "interval_s": 5.0,
+            },
+        }
+
+
+    def _normalize_process_config(self, cfg: Any) -> dict[str, Any]:
+        """
+        dialog / json / 임시 dict 어떤 형태로 와도
+        최소한 engine/controller로 넘길 수 있는 표준 형태로 맞춘다.
+        """
+        default = self._default_process_config()
+        src = dict(cfg or {})
+
+        raw_steps = src.get("ramp_steps") or src.get("steps") or default["ramp_steps"]
+        steps: list[dict[str, float]] = []
+
+        for item in list(raw_steps)[:10]:
+            try:
+                target_adc = max(0.0, float((item or {}).get("target_adc", 0.0)))
+                delay_s = max(0.0, float((item or {}).get("delay_s", 0.0)))
+            except Exception:
+                continue
+            steps.append({
+                "target_adc": target_adc,
+                "delay_s": delay_s,
+            })
+
+        if not steps:
+            steps = list(default["ramp_steps"])
+
+        step_count = int(src.get("step_count", len(steps)) or len(steps))
+        step_count = max(1, min(10, step_count))
+        steps = steps[:step_count]
+
+        extra_ramp_src = dict(src.get("extra_ramp") or default["extra_ramp"])
+        extra_ramp = {
+            "enabled": bool(extra_ramp_src.get("enabled", True)),
+            "max_adc": max(0.0, float(extra_ramp_src.get("max_adc", 300.0) or 0.0)),
+            "step_max": min(100.0, max(1.0, float(extra_ramp_src.get("step_max", 50.0) or 50.0))),
+            "interval_s": max(0.1, float(extra_ramp_src.get("interval_s", 5.0) or 5.0)),
+        }
+
+        policy = str(src.get("after_last_step_policy", "extra_ramp") or "extra_ramp").strip().lower()
+        if policy not in {"extra_ramp", "stop"}:
+            policy = "extra_ramp"
+
+        return {
+            "step_count": len(steps),
+            "ramp_steps": steps,
+            "reach_main_on_rate": bool(src.get("reach_main_on_rate", True)),
+            "after_last_step_policy": policy,
+            "extra_ramp": extra_ramp,
+        }
+
+
+    def _open_process_config_dialog(self) -> None:
+        """
+        아직 ui/process_config_dialog.py 가 없더라도
+        프로그램이 바로 죽지 않게 lazy import 로 처리한다.
+        """
+        try:
+            from ui.process_config_dialog import ProcessConfigDialog
+        except Exception as e:
+            QMessageBox.information(
+                self,
+                "Process Config",
+                "process_config_dialog.py 가 아직 준비되지 않았습니다.\n"
+                "다음 단계에서 추가할 예정입니다."
+            )
+            _append_text(getattr(self.ui, "logWindow", None), f"[CFG][WARN] dialog import failed: {e!r}")
+            return
+
+        try:
+            dlg = ProcessConfigDialog(initial_config=dict(self._process_cfg), parent=self)
+        except TypeError:
+            dlg = ProcessConfigDialog(parent=self, initial_config=dict(self._process_cfg))
+
+        if not dlg.exec():
+            return
+
+        getter = getattr(dlg, "get_config", None)
+        if callable(getter):
+            new_cfg = getter()
+        else:
+            new_cfg = getattr(dlg, "config", None)
+
+        self._process_cfg = self._normalize_process_config(new_cfg)
+
+        steps = self._process_cfg.get("ramp_steps") or []
+        step_desc = ", ".join(
+            f"{idx+1}:{float(s.get('target_adc', 0.0)):.1f}/{float(s.get('delay_s', 0.0)):.1f}s"
+            for idx, s in enumerate(steps)
+        )
+
+        _append_text(
+            getattr(self.ui, "logWindow", None),
+            "[CFG] Process config updated | "
+            f"steps={len(steps)} | {step_desc} | "
+            f"policy={self._process_cfg.get('after_last_step_policy')}"
+        )
+
     # ================== 그래프 설정 ==================
     def _init_rt_plot(self) -> None:
         """ui.graphWidget 자리에 DepositionPlotWidget을 삽입"""
@@ -877,14 +1056,17 @@ class ProcessWindow(QWidget):
         """1초마다 lineedit + 그래프 갱신"""
         rate = self._clamp_nonneg(self._last_rate)
 
-        power_plc = self._read_plc_power_dac()
-        if power_plc is not None:
-            power = self._clamp_nonneg(power_plc)
-            self._last_power = power
-        else:
-            power = self._clamp_nonneg(self._last_power)
+        # ✅ DAC / ADC 둘 다 읽기
+        dac1, dac2 = self._read_plc_power_dac_pair()
+        adc1, adc2 = self._read_plc_power_actual_pair()
 
-        actual_p1, actual_p2 = self._read_plc_power_actual_pair()
+        # ✅ 그래프는 이제 ADC 기준
+        graph_power = self._sum_selected_pair(adc1, adc2)
+        if graph_power is not None:
+            graph_power = self._clamp_nonneg(graph_power)
+            self._last_power = graph_power
+        else:
+            graph_power = self._clamp_nonneg(self._last_power)
 
         show_th = self._is_main_deposition()
         th = self._clamp_nonneg(self._last_thickness) if show_th else None
@@ -899,11 +1081,16 @@ class ProcessWindow(QWidget):
         except Exception:
             pass
 
-        self._update_actual_power_ui(actual_p1, actual_p2)
+        # ✅ 신규 DAC 표시
+        self._update_dac_power_ui(dac1, dac2)
 
+        # ✅ 기존 actualPower = ADC 표시
+        self._update_actual_power_ui(adc1, adc2)
+
+        # ✅ 그래프는 ADC 기준으로 append
         if self._plot is not None:
             try:
-                self._plot.append(rate=rate, power=power)
+                self._plot.append(rate=rate, power=graph_power)
             except Exception:
                 pass
     # ================== 그래프 설정 ==================
@@ -938,35 +1125,87 @@ class ProcessWindow(QWidget):
             return bool(binder.read_coil("MAIN_SHUTTER_SW", default=False))
         except Exception:
             return False
+        
+    def _selected_power_flags(self) -> tuple[bool, bool]:
+        use1 = bool(getattr(getattr(self.ui, "sourcePower1", None), "isChecked", lambda: False)())
+        use2 = bool(getattr(getattr(self.ui, "sourcePower2", None), "isChecked", lambda: False)())
+        return use1, use2
 
-    def _read_plc_power_dac(self) -> Optional[float]:
-        """PLC 폴링(regs) 기준으로 현재 DAC 파워를 읽는다."""
-        if self.hmi_window is None:
+
+    def _sum_selected_pair(self, p1: Optional[float], p2: Optional[float]) -> Optional[float]:
+        """
+        선택된 power 기준으로 합산.
+        - 1개 선택: 해당 채널 값
+        - 2개 선택: 합계
+        """
+        use1, use2 = self._selected_power_flags()
+
+        vals: list[float] = []
+        if use1 and p1 is not None:
+            vals.append(float(p1))
+        if use2 and p2 is not None:
+            vals.append(float(p2))
+
+        if not vals:
             return None
+
+        return sum(vals)
+
+
+    def _read_plc_power_dac_pair(self) -> tuple[Optional[float], Optional[float]]:
+        """
+        PLC snapshot에서 DAC command 2채널을 각각 읽는다.
+        """
+        if self.hmi_window is None:
+            return None, None
+
         binder = getattr(self.hmi_window, "_plc_binder", None)
         if binder is None:
-            return None
+            return None, None
+
         try:
             plc = binder.get_plc_service()
             snap = plc.get_last_snapshot() if plc is not None else None
             if snap is None:
-                return None
-            regs = getattr(snap, "regs", None) or {}
-            p1 = float(regs.get("DAC_POWER_1", 0) or 0.0)
-            p2 = float(regs.get("DAC_POWER_2", 0) or 0.0)
+                return None, None
 
-            # UI 선택 기준 표시:
-            # - 1개 선택이면 해당 채널 DAC 표시
-            # - 2개 선택이면 DAC 합계 표시
-            use1 = bool(getattr(getattr(self.ui, "sourcePower1", None), "isChecked", lambda: False)())
-            use2 = bool(getattr(getattr(self.ui, "sourcePower2", None), "isChecked", lambda: False)())
-            if use1 and not use2:
-                return p1
-            if use2 and not use1:
-                return p2
-            return p1 + p2
+            regs = getattr(snap, "regs", None) or {}
+            p1 = self._clamp_nonneg(regs.get("DAC_POWER_1", None))
+            p2 = self._clamp_nonneg(regs.get("DAC_POWER_2", None))
+            return p1, p2
+
         except Exception:
-            return None
+            return None, None
+
+
+    def _update_dac_power_ui(self, p1: Optional[float], p2: Optional[float]) -> None:
+        """
+        DAC 표시칸(currentDac1Edit/currentDac2Edit)에 값 출력.
+        """
+        use1, use2 = self._selected_power_flags()
+
+        t1 = "---"
+        t2 = "---"
+
+        if use1:
+            t1 = f"{p1:.0f}" if p1 is not None else "---"
+        if use2:
+            t2 = f"{p2:.0f}" if p2 is not None else "---"
+
+        try:
+            self.ui.currentDac1Edit.setText(t1)
+        except Exception:
+            pass
+
+        try:
+            self.ui.currentDac2Edit.setText(t2)
+        except Exception:
+            pass
+
+    def _read_plc_power_dac(self) -> Optional[float]:
+        """선택된 power 기준 DAC 합계/단일값."""
+        p1, p2 = self._read_plc_power_dac_pair()
+        return self._sum_selected_pair(p1, p2)
         
     def _convert_power_read_to_amp(self, raw: Optional[float]) -> Optional[float]:
         """
@@ -1013,13 +1252,12 @@ class ProcessWindow(QWidget):
 
     def _update_actual_power_ui(self, p1: Optional[float], p2: Optional[float]) -> None:
         """
-        선택된 power만 actual power 칸에 표시.
+        기존 actualPower1/2 는 ADC 표시칸으로 사용.
         """
-        use1 = bool(getattr(getattr(self.ui, "sourcePower1", None), "isChecked", lambda: False)())
-        use2 = bool(getattr(getattr(self.ui, "sourcePower2", None), "isChecked", lambda: False)())
+        use1, use2 = self._selected_power_flags()
 
-        t1 = ""
-        t2 = ""
+        t1 = "---"
+        t2 = "---"
 
         if use1:
             t1 = f"{p1:.1f}" if p1 is not None else "---"
@@ -1059,11 +1297,17 @@ class ProcessWindow(QWidget):
             self.ui.materialEdit2.setText("Select")
 
         # ✅ 현재값 표시 초기화
-        for wname in ("currentRateEdit", "currentThicknessEdit", "actualPower1Edit", "actualPower2Edit"):
+        for wname in ("currentRateEdit", "currentThicknessEdit"):
             w = getattr(self.ui, wname, None)
             if w is not None and hasattr(w, "setText"):
                 with contextlib.suppress(Exception):
                     w.setText("")
+
+        for wname in ("currentDac1Edit", "currentDac2Edit", "actualPower1Edit", "actualPower2Edit"):
+            w = getattr(self.ui, wname, None)
+            if w is not None and hasattr(w, "setText"):
+                with contextlib.suppress(Exception):
+                    w.setText("---")
 
         w = getattr(self.ui, "processMonitor_Process", None)
         if w is not None and hasattr(w, "setText"):
@@ -1246,6 +1490,12 @@ class ProcessWindow(QWidget):
             QMessageBox.warning(self, "Input", "Process Name을 입력하세요.")
             return None
 
+        proc_cfg = self._normalize_process_config(getattr(self, "_process_cfg", None))
+        steps = proc_cfg.get("ramp_steps") or []
+        if not steps:
+            QMessageBox.warning(self, "Input", "Process Config의 step이 비어 있습니다.")
+            return None
+
         cfg: dict[str, Any] = {
             "process_name": pname,
 
@@ -1256,10 +1506,7 @@ class ProcessWindow(QWidget):
             "density": den,
             "z_factor": zf,
 
-            # ✅ (추가) material별 ramp 파라미터를 run_cfg로 전달
-            # - 사용자가 catalog에서 안 바꿔도 기본값이 들어온 상태라 그대로 전달됨
-            # - 구버전 catalog(키 없음)인 경우 ramp_cfg가 비어있을 수 있고,
-            #   그때는 controller/engine 쪽 기본값 로직이 사용되면 됨
+            # 기존 material catalog 기반 ramp 정보
             "ramp": ramp_cfg,
 
             "target_rate": float(target_rate),
@@ -1268,9 +1515,16 @@ class ProcessWindow(QWidget):
 
             "material_1": self._material_1,
             "material_2": self._material_2,
-        }
 
+            # ✅ 신규 process config
+            "adc_control_mode": "adc",
+            "process_config": proc_cfg,
+            "ramp_steps": list(steps),
+            "after_last_step_policy": proc_cfg.get("after_last_step_policy", "extra_ramp"),
+            "extra_ramp": dict(proc_cfg.get("extra_ramp") or {}),
+        }
         return cfg
+    
     # ================== UI 값 파싱 ==================
 
     # ================== 공정 종료 함수 ==================

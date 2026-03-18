@@ -442,14 +442,19 @@ class ProcessStatus:
     step_name: str = ""
     started_ts: Optional[float] = None
     message: str = ""
+
     # 최신 센서값(옵션)
     pressure: Optional[float] = None
     thickness_a: Optional[float] = None
     rate_a_s: Optional[float] = None
 
-    # ✅ 최신 DAC 출력값(옵션) - power ramp/표시/그래프에 사용
+    # 최신 DAC 출력값(옵션)
     dac1: Optional[int] = None
     dac2: Optional[int] = None
+
+    # 최신 ADC 읽기값(옵션)
+    adc1: Optional[float] = None
+    adc2: Optional[float] = None
 
 
 @dataclass(frozen=True)

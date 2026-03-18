@@ -174,12 +174,17 @@ class LogWriterWorker(QThread):
         self._run_recipe: str = ""
         self._run_open_ts: float = 0.0
 
+        # ProcessLog CSV 컬럼
+        # - DAC/ADC 둘 다 저장
+        # - 그래프는 ADC 기준이지만, 추적/디버깅을 위해 DAC도 함께 보관
         self._tele_fieldnames = [
             "time",
             "elapsed_sec",
             "pressure_torr",
             "dac1",
+            "adc1",
             "dac2",
+            "adc2",
             "dep.rate",
             "thickness_A",
             "step",
@@ -817,7 +822,9 @@ class LogWriterWorker(QThread):
 
         row2.setdefault("pressure_torr", "")
         row2.setdefault("dac1", "")
+        row2.setdefault("adc1", "")
         row2.setdefault("dac2", "")
+        row2.setdefault("adc2", "")
         row2.setdefault("dep.rate", None)
         row2.setdefault("thickness_A", None)
         row2.setdefault("step", "")

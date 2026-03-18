@@ -183,6 +183,80 @@ def _evap_adjust_dac(
         return int(max(0, dac - step))
 
 
+def _sum_selected_values(
+    use_p1: bool,
+    use_p2: bool,
+    v1: Optional[float],
+    v2: Optional[float],
+) -> Optional[float]:
+    vals: list[float] = []
+    if use_p1 and v1 is not None:
+        vals.append(float(v1))
+    if use_p2 and v2 is not None:
+        vals.append(float(v2))
+    if not vals:
+        return None
+    return sum(vals)
+
+
+def _read_plc_reg_pair(engine, reg1: str, reg2: str) -> tuple[Optional[float], Optional[float]]:
+    try:
+        plc = getattr(engine, "plc", None)
+        snap = plc.get_last_snapshot() if plc is not None else None
+        if snap is None:
+            return None, None
+
+        regs = getattr(snap, "regs", None) or {}
+
+        def _to_float(v):
+            if v is None:
+                return None
+            return float(v)
+
+        return _to_float(regs.get(reg1)), _to_float(regs.get(reg2))
+    except Exception:
+        return None, None
+
+
+def _read_selected_adc_total(engine, use_p1: bool, use_p2: bool) -> tuple[Optional[float], Optional[float], Optional[float]]:
+    a1, a2 = _read_plc_reg_pair(engine, "POWER_READ_1", "POWER_READ_2")
+    total = _sum_selected_values(use_p1, use_p2, a1, a2)
+    return total, a1, a2
+
+
+def _read_selected_dac_total(engine, use_p1: bool, use_p2: bool) -> tuple[Optional[float], Optional[float], Optional[float]]:
+    d1, d2 = _read_plc_reg_pair(engine, "DAC_POWER_1", "DAC_POWER_2")
+    total = _sum_selected_values(use_p1, use_p2, d1, d2)
+    return total, d1, d2
+
+
+def _dynamic_dac_step_from_adc_gap(
+    current_adc: float,
+    target_adc: float,
+    *,
+    step_cap: float,
+) -> int:
+    """
+    ADC gap 기준으로 DAC 증가폭을 동적으로 결정.
+    단, 증가폭은 항상 100 이하.
+    """
+    cap = int(min(100.0, max(1.0, float(step_cap))))
+    gap = max(0.0, float(target_adc) - float(current_adc))
+
+    if gap >= 100.0:
+        base = cap
+    elif gap >= 50.0:
+        base = min(cap, 50)
+    elif gap >= 20.0:
+        base = min(cap, 20)
+    elif gap >= 10.0:
+        base = min(cap, 10)
+    else:
+        base = min(cap, 5)
+
+    return max(1, int(base))
+
+
 # --------------------------------------------------------
 # EVAP deposition control
 # --------------------------------------------------------
@@ -232,6 +306,68 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         _raise_engine_failed(step.name, "EVAP: target_thickness must be > 0")
     if delay_min < 0:
         _raise_engine_failed(step.name, "EVAP: delay_min must be >= 0")
+
+    # -------------------------------------------------
+    # 신규 process config (ADC step 기반)
+    # -------------------------------------------------
+    adc_control_mode = str(meta.get("adc_control_mode", "adc") or "adc").strip().lower()
+
+    process_config = dict(meta.get("process_config") or {})
+    raw_ramp_steps = list(meta.get("ramp_steps") or process_config.get("ramp_steps") or [])
+
+    reach_main_on_rate = bool(
+        meta.get("reach_main_on_rate", process_config.get("reach_main_on_rate", True))
+    )
+
+    after_last_step_policy = str(
+        meta.get("after_last_step_policy", process_config.get("after_last_step_policy", "extra_ramp"))
+        or "extra_ramp"
+    ).strip().lower()
+    if after_last_step_policy not in {"extra_ramp", "stop"}:
+        after_last_step_policy = "extra_ramp"
+
+    extra_ramp_cfg = dict(meta.get("extra_ramp") or process_config.get("extra_ramp") or {})
+    extra_ramp_enabled = bool(extra_ramp_cfg.get("enabled", True))
+    extra_ramp_max_adc = float(
+        extra_ramp_cfg.get("max_adc", meta.get("last_step_target_adc", 0.0)) or 0.0
+    )
+    extra_ramp_step_cap = float(
+        extra_ramp_cfg.get("step_max", meta.get("adc_dynamic_step_cap", 50.0)) or 50.0
+    )
+    extra_ramp_step_cap = min(100.0, max(1.0, extra_ramp_step_cap))
+    extra_ramp_interval_s = max(0.1, float(extra_ramp_cfg.get("interval_s", 5.0) or 5.0))
+
+    adc_none_abort_s = max(0.1, float(meta.get("adc_none_abort_s", 5.0) or 5.0))
+
+    ramp_steps: list[dict[str, float]] = []
+    for idx, item in enumerate(raw_ramp_steps[:10], start=1):
+        if not isinstance(item, dict):
+            continue
+
+        try:
+            target_adc = float(item.get("target_adc", 0.0) or 0.0)
+            delay_s_step = float(item.get("delay_s", 0.0) or 0.0)
+        except Exception:
+            continue
+
+        if target_adc <= 0:
+            continue
+        if delay_s_step < 0:
+            delay_s_step = 0.0
+
+        ramp_steps.append(
+            {
+                "step_no": idx,
+                "target_adc": target_adc,
+                "delay_s": delay_s_step,
+            }
+        )
+
+    if adc_control_mode != "adc":
+        _raise_engine_failed(step.name, f"EVAP: unsupported adc_control_mode={adc_control_mode}")
+
+    if not ramp_steps:
+        _raise_engine_failed(step.name, "EVAP: process_config.ramp_steps is empty")
 
     # --- 공정 파라미터(기본값은 요구사항 기준) ---
     pre_rate = float(meta.get("pre_rate", 0.4) or 0.4)    # Å/s
@@ -492,6 +628,21 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
 
             time.sleep(0.1)
 
+    def read_adc_total_or_abort(*, where: str) -> tuple[float, Optional[float], Optional[float]]:
+        t0 = time.monotonic()
+        while True:
+            engine._check_stop_pause(recipe, step)
+            engine._tick_emit(recipe, step)
+
+            adc_total, adc1, adc2 = _read_selected_adc_total(engine, use_p1, use_p2)
+            if adc_total is not None:
+                return float(adc_total), adc1, adc2
+
+            if (time.monotonic() - t0) >= adc_none_abort_s:
+                _raise_engine_failed(step.name, f"EVAP: ADC readback None 지속 {adc_none_abort_s}s ({where})")
+
+            time.sleep(0.1)
+
     # ✅ material shortage guard helper
     def _material_shortage_guard(rt: float, start_ts: Optional[float], *, where: str) -> Optional[float]:
         """
@@ -553,199 +704,199 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         pending_dac = new_dac
         return False
 
-    # 3) pre_rate까지 ramp-up (구간별 템포)
-    #   - 0~700 : 10초에 +100
-    #   - 700~2000 : 30초에 +100
-    #   - 2000에서 rate=0이면 rate>=0.1 될 때까지 대기(최대 5분)
-    engine._emit_status(message=f"EVAP ramp-up 시작: pre_rate={pre_rate} Å/s")
+    # 3) 사용자 step 기반 ADC ramp-up
+    engine._emit_status(message=f"EVAP ADC step ramp 시작: steps={len(ramp_steps)}", force=True)
     apply_dac()
 
-    # ramp timeout(무한 루프 방지)
-    ramp_timeout_s = float(meta.get("ramp_timeout_s", 600.0) or 600.0)
-    t_ramp0 = time.monotonic()
+    step_rate_peak = 0.0
+    step_drop_hits = 0
+    step_reach_hits = 0
+    entered_main_from_step = False
 
-    stuck_start_ts_pre: Optional[float] = None
+    def _check_step_rate_state(rt: float, *, where: str) -> bool:
+        nonlocal step_rate_peak, step_drop_hits, step_reach_hits
 
-    # ✅ pre_rate는 "연속 N회" 확인 후 통과(기본 3회)
-    pre_ok_hits: int = 0
+        rtf = float(rt)
+        if rtf > step_rate_peak:
+            step_rate_peak = rtf
 
-    while True:
-        rt = read_rate_or_abort(where="pre_ramp")
-
-        if rt >= pre_rate:
-            pre_ok_hits += 1
-            engine._emit_status(
-                message=f"PRE RATE CHECK {pre_ok_hits}/{pre_stable_hits} | DAC={dac} | rate={rt:.3f}/{pre_rate:.3f} Å/s",
-                force=True,
-            )
-            if pre_ok_hits >= max(1, int(pre_stable_hits)):
-                break
-
-            # DAC는 올리지 말고, 다음 샘플(폴링)까지 기다렸다가 재확인
-            _sleep_with_checks(pre_stable_interval_s, where="pre_rate_confirm")
-            continue
-        else:
-            pre_ok_hits = 0
-
-        # ✅ [추가] ignite_dac(2000 기본)에서 rate=0이면 0.1 될 때까지 대기(최대 5분)
-        if _handle_ignite_wait(rt, where="pre_ramp"):
-            # ignite 대기 중에는 stuck 타이머도 리셋(요구사항 충돌 방지)
-            stuck_start_ts_pre = None
-            _sleep_with_checks(ignite_stable_interval_s, where="ignite_wait/pre_ramp")
-            continue
-
-        # ✅ stuck guard(ignite 대기 아닐 때만)
-        now = time.monotonic()
-        if dac >= stuck_dac_guard and rt < stuck_rate_abs:
-            if stuck_start_ts_pre is None:
-                stuck_start_ts_pre = now
-            elif (now - stuck_start_ts_pre) >= stuck_time_s:
-                _raise_engine_failed(
-                    step.name,
-                    f"EVAP: rate 상승 없음(stuck/pre) rt={rt:.3f} < {stuck_rate_abs:.3f} "
-                    f"@ dac={dac} (>= {stuck_dac_guard}) for {stuck_time_s:.0f}s"
-                )
-        else:
-            stuck_start_ts_pre = None
-
-        if (now - t_ramp0) > ramp_timeout_s:
-            _raise_engine_failed(step.name, f"EVAP: pre_rate ramp timeout {ramp_timeout_s}s (rt={rt:.3f})")
-
-        if dac >= dac_max:
-            _raise_engine_failed(step.name, f"EVAP: DAC_MAX({dac_max}) 도달했지만 pre_rate 미도달 (rt={rt:.3f})")
-
-        # ✅ 램프업(+100) 후 구간별 템포 sleep
-        dac = min(dac_max, dac + ramp_step_dac)
-        apply_dac()
-        engine._emit_status(
-            message=f"POWER RAMP UP (PRE) / DAC={dac} / rate={rt:.3f}/{pre_rate:.3f} Å/s",
-            force=True,
-        )
-        _ramp_sleep_by_dac(dac, where="pre_ramp_sleep")
-
-    # 4) pre_rate 유지(1~2분)
-    # - 요청사항: pre_rate(0.4) 도달 후 1~2분 "대기" → 그 다음 target로 ramp
-    if pre_hold_s > 0:
-        engine._emit_status(message=f"EVAP pre_rate 유지: {pre_hold_s:.0f}s (mode={pre_hold_mode})")
-        end_m = time.monotonic() + float(pre_hold_s)
-        next_ui_m = time.monotonic()
-
-        # ✅ pre_hold 중 급감 연속 감지
-        pre_drop_hits = 0
-        pre_drop_threshold = float(pre_rate) * float(pre_drop_ratio)
-
-        while True:
-            now_m = time.monotonic()
-            remain_s = end_m - now_m
-            if remain_s <= 0:
-                break
-
-            rt = read_rate_or_abort(where="pre_hold")
-
-            # ✅ pre_hold 중 dep.rate 급감 감지
-            if rt < pre_drop_threshold:
-                pre_drop_hits += 1
-                if pre_drop_hits >= max(1, int(pre_drop_count)):
+        # step 진행 중 dep.rate 급감 감시
+        # 일정 수준 이상 올라간 뒤 peak 대비 급감하면 중단
+        if step_rate_peak >= max(pre_rate, target_rate * 0.30):
+            if rtf < (step_rate_peak * rate_drop_ratio):
+                step_drop_hits += 1
+                if step_drop_hits >= max(1, int(rate_drop_count)):
                     _raise_engine_failed(
                         step.name,
-                        f"EVAP: pre_hold 중 dep.rate 급감 감지 "
-                        f"(rt={rt:.3f} < {pre_drop_threshold:.3f}, hits={pre_drop_hits}/{pre_drop_count})"
+                        f"EVAP: step 중 dep.rate 급감 감지({where}) "
+                        f"(rt={rtf:.3f}, peak={step_rate_peak:.3f}, "
+                        f"hits={step_drop_hits}/{rate_drop_count})"
                     )
             else:
-                pre_drop_hits = 0
+                step_drop_hits = 0
 
-            # control 모드만 pre_rate 근처 유지 제어 (단, DAC 변경 텀 적용)
-            if pre_hold_mode == "control":
-                new_dac = _evap_adjust_dac(
-                    dac=dac,
-                    rate=rt,
-                    target_rate=pre_rate,
-                    tol_ratio=pre_tol_ratio,
-                    step_up=max(1, fine_step_dac // 2),
-                    step_dn=max(1, fine_step_dac // 2),
-                    dac_max=dac_max,
+        # dep.rate 도달 시 다음 step 무시하고 메인 공정으로 진입
+        # 여기서는 target_rate의 하한선(1-tol) 기준으로 연속 확인
+        reach_threshold = float(target_rate) * (1.0 - float(rate_tol_ratio))
+        if reach_main_on_rate and rtf >= reach_threshold:
+            step_reach_hits += 1
+        else:
+            step_reach_hits = 0
+
+        return step_reach_hits >= max(1, int(target_ramp_stable_hits))
+
+    for step_cfg in ramp_steps:
+        step_no = int(step_cfg["step_no"])
+        step_target_adc = float(step_cfg["target_adc"])
+        step_delay_s = float(step_cfg["delay_s"])
+
+        engine._emit_status(
+            message=(
+                f"STEP {step_no}/{len(ramp_steps)} 시작 | "
+                f"target_adc={step_target_adc:.1f} | delay={step_delay_s:.1f}s"
+            ),
+            force=True,
+        )
+
+        # (A) target_adc까지 ramp
+        while True:
+            rt = read_rate_or_abort(where=f"step{step_no}_ramp")
+
+            if _check_step_rate_state(rt, where=f"step{step_no}_ramp"):
+                entered_main_from_step = True
+                break
+
+            adc_total, adc1, adc2 = read_adc_total_or_abort(where=f"step{step_no}_ramp")
+            if adc_total >= step_target_adc:
+                break
+
+            if dac >= dac_max:
+                _raise_engine_failed(
+                    step.name,
+                    f"EVAP: DAC_MAX({dac_max}) 도달했지만 STEP {step_no} target_adc 미도달 "
+                    f"(adc={adc_total:.1f}/{step_target_adc:.1f}, rate={rt:.3f})"
                 )
-                maybe_apply_dac(
-                    new_dac,
-                    min_interval_s=max(float(pre_hold_adjust_interval_s), _ramp_interval_by_dac(max(int(dac), int(new_dac))))
-                )
 
-            # 1초마다 표시
-            if now_m >= next_ui_m:
-                engine._emit_status(
-                    message=(
-                        f"EVAP PRE 안정화 대기({pre_hold_mode}) | 남은시간 {engine._fmt_hms(remain_s, ceil=True)} | "
-                        f"DAC={dac} | rate {rt:.3f}/{pre_rate:.3f} Å/s"
-                    ),
-                    force=True,
-                )
-                next_ui_m = now_m + 1.0
+            dac_inc = _dynamic_dac_step_from_adc_gap(
+                adc_total,
+                step_target_adc,
+                step_cap=meta.get("adc_dynamic_step_cap", 50.0),
+            )
 
-            _sleep_with_checks(min(0.5, max(0.0, remain_s)))
+            dac = min(dac_max, dac + int(dac_inc))
+            apply_dac()
 
-    # 5) target_rate까지 ramp-up (일단은 계속 +100)
-    engine._emit_status(message=f"EVAP target_rate ramp-up: target_rate={target_rate} Å/s")
-    t_ramp1 = time.monotonic()
-
-    stuck_start_ts_target: Optional[float] = None
-
-    # ✅ target_ramp 탈출도 "연속 N회" 확인 후 통과(기본 3회)
-    target_ramp_ok_hits: int = 0
-    target_ramp_threshold = float(target_rate) * (1.0 - float(rate_tol_ratio))
-
-    while True:
-        rt = read_rate_or_abort(where="target_ramp")
-
-        if rt >= target_ramp_threshold:
-            target_ramp_ok_hits += 1
             engine._emit_status(
                 message=(
-                    f"TARGET RAMP CHECK {target_ramp_ok_hits}/{target_ramp_stable_hits} | "
-                    f"DAC={dac} | rate={rt:.3f}/{target_rate:.3f} Å/s"
+                    f"STEP {step_no}/{len(ramp_steps)} RAMP | "
+                    f"ADC={adc_total:.1f}/{step_target_adc:.1f} | "
+                    f"DAC={dac} | rate={rt:.3f} Å/s | +{int(dac_inc)}"
                 ),
                 force=True,
             )
-            if target_ramp_ok_hits >= max(1, int(target_ramp_stable_hits)):
-                break
 
-            _sleep_with_checks(target_ramp_stable_interval_s, where="target_ramp_confirm")
-            continue
-        else:
-            target_ramp_ok_hits = 0
+            _ramp_sleep_by_dac(dac, where=f"step{step_no}_ramp_sleep")
 
-        # ✅ ignite 대기 적용(1500에서 rate=0이면 0.1까지)
-        if _handle_ignite_wait(rt, where="target_ramp"):
-            stuck_start_ts_target = None
-            _sleep_with_checks(ignite_stable_interval_s, where="ignite_wait/target_ramp")
-            continue
+        if entered_main_from_step:
+            break
 
-        # ✅ stuck guard(ignite 대기 아닐 때만)
-        now = time.monotonic()
-        if dac >= stuck_dac_guard and rt < stuck_rate_abs:
-            if stuck_start_ts_target is None:
-                stuck_start_ts_target = now
-            elif (now - stuck_start_ts_target) >= stuck_time_s:
-                _raise_engine_failed(
-                    step.name,
-                    f"EVAP: rate 상승 없음(stuck/target) rt={rt:.3f} < {stuck_rate_abs:.3f} "
-                    f"@ dac={dac} (>= {stuck_dac_guard}) for {stuck_time_s:.0f}s"
+        # (B) target_adc 도달 후 step delay
+        if step_delay_s > 0:
+            end_m = time.monotonic() + float(step_delay_s)
+            next_ui_m = time.monotonic()
+
+            while True:
+                rt = read_rate_or_abort(where=f"step{step_no}_delay")
+
+                if _check_step_rate_state(rt, where=f"step{step_no}_delay"):
+                    entered_main_from_step = True
+                    break
+
+                adc_total, adc1, adc2 = read_adc_total_or_abort(where=f"step{step_no}_delay")
+                remain_s = end_m - time.monotonic()
+                if remain_s <= 0:
+                    break
+
+                now_m = time.monotonic()
+                if now_m >= next_ui_m:
+                    engine._emit_status(
+                        message=(
+                            f"STEP {step_no}/{len(ramp_steps)} HOLD | "
+                            f"ADC={adc_total:.1f}/{step_target_adc:.1f} | "
+                            f"DAC={dac} | rate={rt:.3f} Å/s | "
+                            f"남은 {engine._fmt_hms(remain_s, ceil=True)}"
+                        ),
+                        force=True,
+                    )
+                    next_ui_m = now_m + 1.0
+
+                _sleep_with_checks(min(0.1, max(0.0, remain_s)), where=f"step{step_no}_delay_sleep")
+
+        if entered_main_from_step:
+            break
+
+    # 4) 모든 step 완료 후 dep.rate 미도달 시 정책 처리
+    if not entered_main_from_step:
+        if after_last_step_policy == "extra_ramp" and extra_ramp_enabled:
+            engine._emit_status(
+                message=(
+                    f"STEP 완료 후 extra ramp 진입 | "
+                    f"max_adc={extra_ramp_max_adc:.1f} | "
+                    f"step_cap={extra_ramp_step_cap:.1f} | "
+                    f"interval={extra_ramp_interval_s:.1f}s"
+                ),
+                force=True,
+            )
+
+            while True:
+                rt = read_rate_or_abort(where="extra_ramp")
+
+                if _check_step_rate_state(rt, where="extra_ramp"):
+                    entered_main_from_step = True
+                    break
+
+                adc_total, adc1, adc2 = read_adc_total_or_abort(where="extra_ramp")
+                if adc_total >= extra_ramp_max_adc:
+                    _raise_engine_failed(
+                        step.name,
+                        f"EVAP: extra ramp max_adc({extra_ramp_max_adc:.1f}) 도달했지만 "
+                        f"target_rate 미도달 (rate={rt:.3f})"
+                    )
+
+                if dac >= dac_max:
+                    _raise_engine_failed(
+                        step.name,
+                        f"EVAP: DAC_MAX({dac_max}) 도달했지만 extra ramp 중 target_rate 미도달"
+                    )
+
+                dac_inc = _dynamic_dac_step_from_adc_gap(
+                    adc_total,
+                    extra_ramp_max_adc,
+                    step_cap=extra_ramp_step_cap,
+                )
+
+                dac = min(dac_max, dac + int(dac_inc))
+                apply_dac()
+
+                engine._emit_status(
+                    message=(
+                        f"EXTRA RAMP | ADC={adc_total:.1f}/{extra_ramp_max_adc:.1f} | "
+                        f"DAC={dac} | rate={rt:.3f} Å/s | +{int(dac_inc)}"
+                    ),
+                    force=True,
+                )
+
+                _sleep_with_checks(
+                    max(float(extra_ramp_interval_s), _ramp_interval_by_dac(dac)),
+                    where="extra_ramp_sleep",
                 )
         else:
-            stuck_start_ts_target = None
+            _raise_engine_failed(
+                step.name,
+                "EVAP: 모든 step 완료 후에도 target_rate 미도달 (after_last_step_policy=stop)"
+            )
 
-        if (now - t_ramp1) > ramp_timeout_s:
-            _raise_engine_failed(step.name, f"EVAP: target_rate ramp timeout {ramp_timeout_s}s (rt={rt:.3f})")
-
-        if dac >= dac_max:
-            _raise_engine_failed(step.name, f"EVAP: DAC_MAX({dac_max}) 도달했지만 target_rate 미도달 (rt={rt:.3f})")
-
-        dac = min(dac_max, dac + ramp_step_dac)
-        apply_dac()
-        engine._emit_status(
-            message=f"POWER RAMP UP (TARGET) / DAC={dac} / rate={rt:.3f}/{target_rate:.3f} Å/s",
-            force=True,
-        )
-        _ramp_sleep_by_dac(dac, where="target_ramp_sleep")
+    engine._emit_status(message="STEP 기반 ADC ramp 완료 → fine tune 진입", force=True)
 
     # 6) target_rate ±5% band 안으로 fine tune
     engine._emit_status(message=f"EVAP fine tune: tol=±{rate_tol_ratio*100:.1f}% / stable_hits={target_stable_hits}")
@@ -824,8 +975,12 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
             if nowm >= next_ui:
                 elapsed_min = (nowm - t0m) / 60.0
                 remain_min = max(0.0, remain_s) / 60.0
+                adc_total, _, _ = read_adc_total_or_abort(where="shutter_delay")
                 engine._emit_status(
-                    message=f"SHUTTER DELAY / {elapsed_min:.2f}/{total_min:.2f} min (remain {remain_min:.2f}) / DAC={dac}",
+                    message=(
+                        f"SHUTTER DELAY / {elapsed_min:.2f}/{total_min:.2f} min "
+                        f"(remain {remain_min:.2f}) / ADC={adc_total:.1f} / DAC={dac}"
+                    ),
                     force=True,
                 )
                 next_ui = nowm + 1.0
@@ -887,8 +1042,12 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         maybe_apply_dac(new_dac, min_interval_s=_dac_min_interval_by_dac(max(int(dac), int(new_dac))))
 
         remain_th = max(0.0, float(target_th) - float(dep_th))
+        adc_total, _, _ = read_adc_total_or_abort(where="main_process_adc")
         engine._emit_status(
-            message=f"MAIN PROCESSING / remain {remain_th:.1f}Å ( {dep_th:.1f}/{target_th:.1f}Å ) / DAC={dac}",
+            message=(
+                f"MAIN PROCESSING / remain {remain_th:.1f}Å "
+                f"( {dep_th:.1f}/{target_th:.1f}Å ) / ADC={adc_total:.1f} / DAC={dac}"
+            ),
         )
 
         if dep_th >= target_th:

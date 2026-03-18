@@ -196,7 +196,7 @@ class ProcessController(QObject):
 
             steps.append(
                 {
-                    "step_no": float(idx),
+                    "step_no": idx,
                     "target_adc": float(target_adc),
                     "delay_s": float(delay_s),
                 }

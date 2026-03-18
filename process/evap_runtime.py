@@ -3,9 +3,12 @@
 process/evap_runtime.py
 
 EVAP 전용 증착 runtime 로직.
-- 기존 process/engine.py 안에 있던 EVAP 관련 함수들을 그대로 분리
-- engine 인스턴스를 받아서 engine의 공용 helper를 그대로 사용함
-- 즉, 로직 변경 없이 파일만 분리하는 목적
+
+현재 역할:
+- engine 인스턴스를 받아 engine의 공용 helper를 사용
+- EVAP 공정의 램프업 / fine tune / shutter delay / main processing 수행
+- 기존 단순 DAC ramp 방식이 아니라,
+  process_config 기반 ADC step ramp-up(1~10 step)을 지원
 
 포함 함수:
 - run_evap_deposition_control(engine, recipe, step)
@@ -14,6 +17,7 @@ EVAP 전용 증착 runtime 로직.
 - _stm_zero_thickness(engine, ...)
 - _evap_apply_dac(engine, ...)
 - _evap_adjust_dac(...)
+- ADC/DAC readback helper
 """
 
 from __future__ import annotations
@@ -262,21 +266,22 @@ def _dynamic_dac_step_from_adc_gap(
 # --------------------------------------------------------
 def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep) -> None:
     """
-    EVAP 증착 제어(사용자 요구 공정 순서 반영)
+    EVAP 증착 제어(ADC step 기반)
 
-    전제(레시피/상위 단계에서 완료되어야 함)
-    - POWER_1_SW / POWER_2_SW는 이미 ON/OFF 상태가 결정되어 있음
-    - MAIN_SHUTTER_SW는 닫혀 있는 상태에서 시작(필요 시 여기서 한 번 더 close)
-    - FTM_SW, SOURCE_SHUTTER 등은 상위 레시피 단계에서 켜는 것을 권장
+    전제
+    - POWER_1_SW / POWER_2_SW는 상위 레시피 단계에서 이미 결정되어 있음
+    - MAIN_SHUTTER_SW는 닫힌 상태에서 시작
+    - FTM_SW / SOURCE_SHUTTER는 상위 단계에서 ON 되는 구조를 권장
 
-    순서(요청 사양)
-    1) (옵션) STM film params(density/z) 적용
-    2) DAC를 1초마다 +100씩 ramp-up 하며 dep.rate가 pre_rate(기본 0.4 Å/s) 도달
-    3) pre_rate에서 pre_hold_s(기본 120s) 유지
-    4) target_rate까지 ramp-up 후 ±5% 이내 도달하면 delay(=delay_min) 시작
-    5) delay 종료 시 STM thickness zero + MAIN_SHUTTER open
-    6) 증착 중 target_rate 유지(미세 DAC 조정), dep.rate가 70% 이상 급감하면 중단
-    7) target_thickness 도달 시 MAIN_SHUTTER close + POWER off
+    실제 순서
+    1) STM 연결 확인 및 material params(density/z) 적용
+    2) process_config.ramp_steps(1~10)를 순차 수행하며 ADC 기준 ramp-up
+    3) 각 step의 target_adc 도달 후 delay_s 동안 DAC/ADC/dep.rate 계속 감시
+    4) step 중 dep.rate가 target_rate 근처에 도달하면 나머지 step을 건너뛰고 fine tune 진입
+    5) 마지막 step까지 dep.rate 미도달 시 extra_ramp 또는 stop
+    6) fine tune 후 shutter delay 수행
+    7) STM zero 후 MAIN_SHUTTER open
+    8) main processing 중 target thickness 도달 시 종료
     """
 
     meta = dict(step.meta or {})
@@ -708,9 +713,6 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
     engine._emit_status(message=f"EVAP ADC step ramp 시작: steps={len(ramp_steps)}", force=True)
     apply_dac()
 
-    step_rate_peak = 0.0
-    step_drop_hits = 0
-    step_reach_hits = 0
     entered_main_from_step = False
 
     def _check_step_rate_state(rt: float, *, where: str) -> bool:
@@ -746,6 +748,10 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         return step_reach_hits >= max(1, int(target_ramp_stable_hits))
 
     for step_cfg in ramp_steps:
+        step_rate_peak = 0.0
+        step_drop_hits = 0
+        step_reach_hits = 0
+
         step_no = int(step_cfg["step_no"])
         step_target_adc = float(step_cfg["target_adc"])
         step_delay_s = float(step_cfg["delay_s"])
@@ -837,6 +843,11 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
 
     # 4) 모든 step 완료 후 dep.rate 미도달 시 정책 처리
     if not entered_main_from_step:
+        # ✅ extra ramp는 별도 판정 구간으로 다시 시작
+        step_rate_peak = 0.0
+        step_drop_hits = 0
+        step_reach_hits = 0
+
         if after_last_step_policy == "extra_ramp" and extra_ramp_enabled:
             engine._emit_status(
                 message=(

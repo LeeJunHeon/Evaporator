@@ -34,15 +34,19 @@ class MaterialRow:
     ramp_seg1_max_dac: int = 700
     ramp_interval_seg1_s: float = 10.0
 
-    ramp_seg2_max_dac: int = 1500
+    ramp_seg2_max_dac: int = 2000
     ramp_interval_seg2_s: float = 30.0
+    ramp_interval_after_seg2_s: float = 30.0
 
-    ignite_dac: int = 1500
+    ignite_dac: int = 2000
     ignite_rate_min: float = 0.1
     ignite_timeout_s: float = 300.0  # (원래 엔진이 timeout 없으면, process_controller 수정 시 반영)
 
     pre_rate: float = 0.4
     pre_hold_s: float = 120.0
+    pre_hold_adjust_interval_s: float = 10.0
+    pre_drop_ratio: float = 0.50
+    pre_drop_count: int = 3
 
     dac_adjust_interval_s: float = 10.0
     fine_step_dac: int = 10
@@ -89,8 +93,9 @@ _COLS = [
     ("DAC 증가폭", "ramp_step_dac", "int>0", "Ramp에서 DAC를 한 번에 올리는 값"),
     ("구간1 끝(DAC)", "ramp_seg1_max_dac", "int>0", "예: 700"),
     ("구간1 간격(s)", "ramp_interval_seg1_s", "float>0", "예: 10초"),
-    ("구간2 끝(DAC)", "ramp_seg2_max_dac", "int>0", "예: 1500"),
+    ("구간2 끝(DAC)", "ramp_seg2_max_dac", "int>0", "예: 2000"),
     ("구간2 간격(s)", "ramp_interval_seg2_s", "float>0", "예: 30초"),
+    ("구간2 이후 간격(s)", "ramp_interval_after_seg2_s", "float>0", "예: 30초"),
 
     ("Ignite DAC", "ignite_dac", "int>=0", "Ignite 판단을 시작하는 DAC"),
     ("Ignite 최소 Rate(Å/s)", "ignite_rate_min", "float>=0", "0.1 등"),
@@ -98,6 +103,9 @@ _COLS = [
 
     ("Pre-rate(Å/s)", "pre_rate", "float>=0", "예: 0.4 도달 시 pre-hold 시작"),
     ("Pre-hold(s)", "pre_hold_s", "float>=0", "예: 120초 대기"),
+    ("Pre-hold 조정 텀(s)", "pre_hold_adjust_interval_s", "float>0", "control 모드일 때 DAC 변경 최소 간격"),
+    ("Pre-drop ratio", "pre_drop_ratio", "float>0", "예: 0.5"),
+    ("Pre-drop count", "pre_drop_count", "int>0", "연속 감지 횟수"),
 
     ("DAC 변경 텀(s)", "dac_adjust_interval_s", "float>0", "제어 중 DAC 변경 최소 간격"),
     ("Fine step(DAC)", "fine_step_dac", "int>0", "미세 조정용 DAC step"),
@@ -230,13 +238,17 @@ class MaterialCatalogDialog(QDialog):
                         ramp_step_dac=_to_int(it.get("ramp_step_dac"), 100),
                         ramp_seg1_max_dac=_to_int(it.get("ramp_seg1_max_dac"), 700),
                         ramp_interval_seg1_s=_to_float(it.get("ramp_interval_seg1_s"), 10.0),
-                        ramp_seg2_max_dac=_to_int(it.get("ramp_seg2_max_dac"), 1500),
+                        ramp_seg2_max_dac=_to_int(it.get("ramp_seg2_max_dac"), 2000),
                         ramp_interval_seg2_s=_to_float(it.get("ramp_interval_seg2_s"), 30.0),
-                        ignite_dac=_to_int(it.get("ignite_dac"), 1500),
+                        ramp_interval_after_seg2_s=_to_float(it.get("ramp_interval_after_seg2_s"), 30.0),
+                        ignite_dac=_to_int(it.get("ignite_dac"), 2000),
                         ignite_rate_min=_to_float(it.get("ignite_rate_min"), 0.1),
                         ignite_timeout_s=_to_float(it.get("ignite_timeout_s"), 300.0),
                         pre_rate=_to_float(it.get("pre_rate"), 0.4),
                         pre_hold_s=_to_float(it.get("pre_hold_s"), 120.0),
+                        pre_hold_adjust_interval_s=_to_float(it.get("pre_hold_adjust_interval_s"), 10.0),
+                        pre_drop_ratio=_to_float(it.get("pre_drop_ratio"), 0.50),
+                        pre_drop_count=_to_int(it.get("pre_drop_count"), 3),
                         dac_adjust_interval_s=_to_float(it.get("dac_adjust_interval_s"), 10.0),
                         fine_step_dac=_to_int(it.get("fine_step_dac"), 10),
                         material_shortage_dac=_to_int(it.get("material_shortage_dac"), 2000),
@@ -268,6 +280,7 @@ class MaterialCatalogDialog(QDialog):
                     "ramp_interval_seg1_s": float(m.ramp_interval_seg1_s),
                     "ramp_seg2_max_dac": int(m.ramp_seg2_max_dac),
                     "ramp_interval_seg2_s": float(m.ramp_interval_seg2_s),
+                    "ramp_interval_after_seg2_s": float(m.ramp_interval_after_seg2_s),
 
                     "ignite_dac": int(m.ignite_dac),
                     "ignite_rate_min": float(m.ignite_rate_min),
@@ -275,6 +288,9 @@ class MaterialCatalogDialog(QDialog):
 
                     "pre_rate": float(m.pre_rate),
                     "pre_hold_s": float(m.pre_hold_s),
+                    "pre_hold_adjust_interval_s": float(m.pre_hold_adjust_interval_s),
+                    "pre_drop_ratio": float(m.pre_drop_ratio),
+                    "pre_drop_count": int(m.pre_drop_count),
 
                     "dac_adjust_interval_s": float(m.dac_adjust_interval_s),
                     "fine_step_dac": int(m.fine_step_dac),
@@ -305,6 +321,7 @@ class MaterialCatalogDialog(QDialog):
                 f"{m.ramp_interval_seg1_s:g}",
                 str(int(m.ramp_seg2_max_dac)),
                 f"{m.ramp_interval_seg2_s:g}",
+                f"{m.ramp_interval_after_seg2_s:g}",
 
                 str(int(m.ignite_dac)),
                 f"{m.ignite_rate_min:g}",
@@ -312,6 +329,9 @@ class MaterialCatalogDialog(QDialog):
 
                 f"{m.pre_rate:g}",
                 f"{m.pre_hold_s:g}",
+                f"{m.pre_hold_adjust_interval_s:g}",
+                f"{m.pre_drop_ratio:g}",
+                str(int(m.pre_drop_count)),
 
                 f"{m.dac_adjust_interval_s:g}",
                 str(int(m.fine_step_dac)),
@@ -411,20 +431,24 @@ class MaterialCatalogDialog(QDialog):
                 seg1_int = _parse_float_cell(r, 5, "seg1_interval_s", _DEF.ramp_interval_seg1_s, allow_blank_default=True)
                 seg2_max = _parse_int_cell(r, 6, "seg2_max_dac", _DEF.ramp_seg2_max_dac, allow_blank_default=True)
                 seg2_int = _parse_float_cell(r, 7, "seg2_interval_s", _DEF.ramp_interval_seg2_s, allow_blank_default=True)
+                seg2_after_int = _parse_float_cell(r, 8, "ramp_interval_after_seg2_s", _DEF.ramp_interval_after_seg2_s, allow_blank_default=True)
 
-                ignite_dac = _parse_int_cell(r, 8, "ignite_dac", _DEF.ignite_dac, allow_blank_default=True)
-                ignite_rate_min = _parse_float_cell(r, 9, "ignite_rate_min", _DEF.ignite_rate_min, allow_blank_default=True)
-                ignite_timeout_s = _parse_float_cell(r, 10, "ignite_timeout_s", _DEF.ignite_timeout_s, allow_blank_default=True)
+                ignite_dac = _parse_int_cell(r, 9, "ignite_dac", _DEF.ignite_dac, allow_blank_default=True)
+                ignite_rate_min = _parse_float_cell(r, 10, "ignite_rate_min", _DEF.ignite_rate_min, allow_blank_default=True)
+                ignite_timeout_s = _parse_float_cell(r, 11, "ignite_timeout_s", _DEF.ignite_timeout_s, allow_blank_default=True)
 
-                pre_rate = _parse_float_cell(r, 11, "pre_rate", _DEF.pre_rate, allow_blank_default=True)
-                pre_hold_s = _parse_float_cell(r, 12, "pre_hold_s", _DEF.pre_hold_s, allow_blank_default=True)
+                pre_rate = _parse_float_cell(r, 12, "pre_rate", _DEF.pre_rate, allow_blank_default=True)
+                pre_hold_s = _parse_float_cell(r, 13, "pre_hold_s", _DEF.pre_hold_s, allow_blank_default=True)
+                pre_hold_adjust_interval_s = _parse_float_cell(r, 14, "pre_hold_adjust_interval_s", _DEF.pre_hold_adjust_interval_s, allow_blank_default=True)
+                pre_drop_ratio = _parse_float_cell(r, 15, "pre_drop_ratio", _DEF.pre_drop_ratio, allow_blank_default=True)
+                pre_drop_count = _parse_int_cell(r, 16, "pre_drop_count", _DEF.pre_drop_count, allow_blank_default=True)
 
-                dac_adjust_interval_s = _parse_float_cell(r, 13, "dac_adjust_interval_s", _DEF.dac_adjust_interval_s, allow_blank_default=True)
-                fine_step_dac = _parse_int_cell(r, 14, "fine_step_dac", _DEF.fine_step_dac, allow_blank_default=True)
+                dac_adjust_interval_s = _parse_float_cell(r, 17, "dac_adjust_interval_s", _DEF.dac_adjust_interval_s, allow_blank_default=True)
+                fine_step_dac = _parse_int_cell(r, 18, "fine_step_dac", _DEF.fine_step_dac, allow_blank_default=True)
 
-                shortage_dac = _parse_int_cell(r, 15, "material_shortage_dac", _DEF.material_shortage_dac, allow_blank_default=True)
-                shortage_rate_max = _parse_float_cell(r, 16, "material_shortage_rate_max", _DEF.material_shortage_rate_max, allow_blank_default=True)
-                shortage_time_s = _parse_float_cell(r, 17, "material_shortage_time_s", _DEF.material_shortage_time_s, allow_blank_default=True)
+                shortage_dac = _parse_int_cell(r, 19, "material_shortage_dac", _DEF.material_shortage_dac, allow_blank_default=True)
+                shortage_rate_max = _parse_float_cell(r, 20, "material_shortage_rate_max", _DEF.material_shortage_rate_max, allow_blank_default=True)
+                shortage_time_s = _parse_float_cell(r, 21, "material_shortage_time_s", _DEF.material_shortage_time_s, allow_blank_default=True)
 
             except ValueError:
                 # _fail()에서 메시지/포커싱까지 했으므로 조용히 중단
@@ -470,29 +494,44 @@ class MaterialCatalogDialog(QDialog):
                 _fail(r, 7, f"{r+1}행(seg2_interval_s): 0보다 커야 합니다.")
                 return None
 
+            if seg2_after_int <= 0:
+                _fail(r, 8, f"{r+1}행(ramp_interval_after_seg2_s): 0보다 커야 합니다.")
+                return None
+
             if ignite_timeout_s <= 0:
-                _fail(r, 10, f"{r+1}행(ignite_timeout_s): 0보다 커야 합니다.")
+                _fail(r, 11, f"{r+1}행(ignite_timeout_s): 0보다 커야 합니다.")
+                return None
+
+            if pre_hold_adjust_interval_s <= 0:
+                _fail(r, 14, f"{r+1}행(pre_hold_adjust_interval_s): 0보다 커야 합니다.")
+                return None
+
+            if pre_drop_ratio <= 0:
+                _fail(r, 15, f"{r+1}행(pre_drop_ratio): 0보다 커야 합니다.")
+                return None
+
+            if pre_drop_count <= 0:
+                _fail(r, 16, f"{r+1}행(pre_drop_count): 1 이상이어야 합니다.")
                 return None
 
             if dac_adjust_interval_s <= 0:
-                _fail(r, 13, f"{r+1}행(dac_adjust_interval_s): 0보다 커야 합니다.")
+                _fail(r, 17, f"{r+1}행(dac_adjust_interval_s): 0보다 커야 합니다.")
                 return None
 
             if fine_step_dac <= 0:
-                _fail(r, 14, f"{r+1}행(fine_step_dac): 1 이상이어야 합니다.")
+                _fail(r, 18, f"{r+1}행(fine_step_dac): 1 이상이어야 합니다.")
                 return None
 
-            # shortage는 어떤 값이 문제인지 분리해서 정확한 셀로 이동
             if shortage_dac < 0:
-                _fail(r, 15, f"{r+1}행(material_shortage_dac): 0 이상이어야 합니다.")
+                _fail(r, 19, f"{r+1}행(material_shortage_dac): 0 이상이어야 합니다.")
                 return None
 
             if shortage_rate_max < 0:
-                _fail(r, 16, f"{r+1}행(material_shortage_rate_max): 0 이상이어야 합니다.")
+                _fail(r, 20, f"{r+1}행(material_shortage_rate_max): 0 이상이어야 합니다.")
                 return None
 
             if shortage_time_s < 0:
-                _fail(r, 17, f"{r+1}행(material_shortage_time_s): 0 이상이어야 합니다.")
+                _fail(r, 21, f"{r+1}행(material_shortage_time_s): 0 이상이어야 합니다.")
                 return None
 
             mats.append(
@@ -505,11 +544,15 @@ class MaterialCatalogDialog(QDialog):
                     ramp_interval_seg1_s=seg1_int,
                     ramp_seg2_max_dac=seg2_max,
                     ramp_interval_seg2_s=seg2_int,
+                    ramp_interval_after_seg2_s=seg2_after_int,
                     ignite_dac=ignite_dac,
                     ignite_rate_min=ignite_rate_min,
                     ignite_timeout_s=ignite_timeout_s,
                     pre_rate=pre_rate,
                     pre_hold_s=pre_hold_s,
+                    pre_hold_adjust_interval_s=pre_hold_adjust_interval_s,
+                    pre_drop_ratio=pre_drop_ratio,
+                    pre_drop_count=pre_drop_count,
                     dac_adjust_interval_s=dac_adjust_interval_s,
                     fine_step_dac=fine_step_dac,
                     material_shortage_dac=shortage_dac,

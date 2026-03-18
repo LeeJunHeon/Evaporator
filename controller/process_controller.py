@@ -210,11 +210,11 @@ class ProcessController(QObject):
 
             # --- 램프업 파라미터(사용자 요구) ---
             #  - DAC 0~700 : 10초에 +100
-            #  - DAC 700~1500 : 30초에 +100
-            #  - DAC 1500인데 dep.rate==0이면, dep.rate>=0.1 될 때까지 대기(최대 5분)
+            #  - DAC 700~2000 : 30초에 +100
+            #  - DAC 2000인데 dep.rate==0이면, dep.rate>=0.1 될 때까지 대기(최대 5분)
             "ramp_step_dac": 100,
             "ramp_seg1_max_dac": 700,
-            "ramp_seg2_max_dac": 1500,
+            "ramp_seg2_max_dac": 2000,
             "ramp_interval_seg1_s": 10.0,
             "ramp_interval_seg2_s": 30.0,
             "ramp_interval_after_seg2_s": 30.0,
@@ -222,8 +222,8 @@ class ProcessController(QObject):
             # 미세 조정(목표 근접 시): 기본 10 step 이내에서 동적 보정
             "fine_step_dac": 10,
 
-            # ignition(=1500에서 0이면 대기) 파라미터
-            "ignite_dac": 1500,
+            # ignition(=2000에서 0이면 대기) 파라미터
+            "ignite_dac": 2000,
             "ignite_trigger_rate_max": 0.0,
             "ignite_rate_min": 0.1,
             "ignite_timeout_s": 300.0,
@@ -250,7 +250,7 @@ class ProcessController(QObject):
             "dac_adjust_interval_s": 10.0,         # fine tune / shutter delay / main loop
 
             # --- stuck 가드 ---
-            "stuck_dac_guard": 1500,
+            "stuck_dac_guard": 2000,
             "stuck_rate_abs": 0.05,
             "stuck_time_s": 60.0,
 
@@ -305,6 +305,9 @@ class ProcessController(QObject):
             _apply("ignite_timeout_s", float)
             _apply("pre_rate", float)
             _apply("pre_hold_s", float)
+            _apply("pre_hold_adjust_interval_s", float)
+            _apply("pre_drop_ratio", float)
+            _apply("pre_drop_count", lambda x: int(float(x)))
             _apply("dac_adjust_interval_s", float)
             _apply("material_shortage_rate_max", float)
             _apply("material_shortage_time_s", float)

@@ -155,8 +155,8 @@ class ProcessEngine:
         self._last_status_emit_ts: float = 0.0
         self._last_telemetry_ts: float = 0.0
 
-        self._last_dac_power_1: int = 0
-        self._last_dac_power_2: int = 0
+        self._last_dac_power_1: Optional[int] = None
+        self._last_dac_power_2: Optional[int] = None
 
         # ✅ ADC readback 캐시
         self._last_adc_power_1: Optional[float] = None
@@ -200,8 +200,8 @@ class ProcessEngine:
         self._last_telemetry_ts = 0.0
 
         # ✅ 이전 run의 잔상 제거
-        self._last_dac_power_1 = 0
-        self._last_dac_power_2 = 0
+        self._last_dac_power_1 = None
+        self._last_dac_power_2 = None
         self._last_adc_power_1 = None
         self._last_adc_power_2 = None
         self._ui_last_message = ""
@@ -1047,7 +1047,7 @@ class ProcessEngine:
         else:
             message = self._ui_last_message
 
-        adc1, adc2 = self._get_power_read_pair_cached()
+        adc1, adc2 = self._get_power_read_pair()
 
         st = ProcessStatus(
             phase=self._phase,
@@ -1061,8 +1061,8 @@ class ProcessEngine:
             thickness_a=self._get_thickness(),
             rate_a_s=self._get_rate(),
 
-            dac1=int(getattr(self, "_last_dac_power_1", 0) or 0),
-            dac2=int(getattr(self, "_last_dac_power_2", 0) or 0),
+            dac1=(self._last_dac_power_1 if self._is_plc_ready() else None),
+            dac2=(self._last_dac_power_2 if self._is_plc_ready() else None),
 
             # ✅ ADC readback 추가
             adc1=adc1,
@@ -1098,15 +1098,15 @@ class ProcessEngine:
         LogService.telemetry()로 run별 CSV에 저장.
         """
         try:
-            adc1, adc2 = self._get_power_read_pair_cached()
+            adc1, adc2 = self._get_power_read_pair()
 
             self.log.telemetry({
                 "step": (self._ui_last_message or self._current_step_name),
                 "detail": "",
 
                 "pressure_torr": self._get_pressure(),
-                "dac1": int(getattr(self, "_last_dac_power_1", 0) or 0),
-                "dac2": int(getattr(self, "_last_dac_power_2", 0) or 0),
+                "dac1": (self._last_dac_power_1 if self._is_plc_ready() else None),
+                "dac2": (self._last_dac_power_2 if self._is_plc_ready() else None),
 
                 # ✅ ADC readback 추가
                 "adc1": adc1,
@@ -1188,15 +1188,15 @@ class ProcessEngine:
             if detail:
                 line += f" | {str(detail)}"
 
-            adc1, adc2 = self._get_power_read_pair_cached()
+            adc1, adc2 = self._get_power_read_pair()
 
             self.log.telemetry({
                 "step": (self._ui_last_message or self._current_step_name),
                 "detail": line,
 
                 "pressure_torr": self._get_pressure(),
-                "dac1": int(getattr(self, "_last_dac_power_1", 0) or 0),
-                "dac2": int(getattr(self, "_last_dac_power_2", 0) or 0),
+                "dac1": (self._last_dac_power_1 if self._is_plc_ready() else None),
+                "dac2": (self._last_dac_power_2 if self._is_plc_ready() else None),
 
                 # ✅ ADC readback 추가
                 "adc1": adc1,

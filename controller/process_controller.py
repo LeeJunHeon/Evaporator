@@ -145,17 +145,151 @@ class ProcessController(QObject):
     def get_recipe(self) -> Optional[ProcessRecipe]:
         return self._recipe
     
+    def _normalize_ramp_steps(self, run_cfg: dict[str, Any]) -> list[dict[str, float]]:
+        """
+        process_window.py 에서 넘어온 ramp step 설정을
+        runtime 이 바로 사용할 수 있는 표준 형태로 정규화한다.
+
+        기대 입력:
+        - run_cfg["ramp_steps"] 또는
+        - run_cfg["process_config"]["ramp_steps"]
+
+        반환 형식:
+        [
+            {"step_no": 1, "target_adc": 100.0, "delay_s": 0.0},
+            ...
+        ]
+        """
+        raw_steps = (
+            run_cfg.get("ramp_steps")
+            or (run_cfg.get("process_config") or {}).get("ramp_steps")
+            or []
+        )
+
+        if not isinstance(raw_steps, list) or not raw_steps:
+            raise ValueError("Process Config의 ramp_steps가 비어 있습니다.")
+
+        steps: list[dict[str, float]] = []
+        last_adc = -1.0
+
+        for idx, item in enumerate(raw_steps[:10], start=1):
+            if not isinstance(item, dict):
+                raise ValueError(f"Process Config step {idx} 형식이 올바르지 않습니다.")
+
+            try:
+                target_adc = float(item.get("target_adc", 0.0) or 0.0)
+                delay_s = float(item.get("delay_s", 0.0) or 0.0)
+            except Exception:
+                raise ValueError(f"Process Config step {idx} 값 변환에 실패했습니다.")
+
+            if target_adc <= 0:
+                raise ValueError(f"Process Config step {idx}의 target_adc는 0보다 커야 합니다.")
+            if delay_s < 0:
+                raise ValueError(f"Process Config step {idx}의 delay_s는 0 이상이어야 합니다.")
+
+            # 안전상 오름차순 권장 / dialog에서도 검사하지만 controller에서 한 번 더 방어
+            if last_adc >= 0 and target_adc < last_adc:
+                raise ValueError(
+                    f"Process Config step {idx}의 target_adc가 이전 step보다 작습니다. "
+                    "step target_adc는 일반적으로 오름차순이어야 합니다."
+                )
+
+            steps.append(
+                {
+                    "step_no": float(idx),
+                    "target_adc": float(target_adc),
+                    "delay_s": float(delay_s),
+                }
+            )
+            last_adc = target_adc
+
+        if not steps:
+            raise ValueError("최소 1개의 process step이 필요합니다.")
+
+        return steps
+    
+    def _normalize_process_policy(
+        self,
+        run_cfg: dict[str, Any],
+        *,
+        last_step_adc: float,
+    ) -> dict[str, Any]:
+        """
+        마지막 step 이후 정책 / extra ramp 설정을 표준화한다.
+        """
+        proc_cfg = run_cfg.get("process_config") or {}
+
+        policy = str(
+            run_cfg.get("after_last_step_policy")
+            or proc_cfg.get("after_last_step_policy")
+            or "extra_ramp"
+        ).strip().lower()
+
+        if policy not in {"extra_ramp", "stop"}:
+            policy = "extra_ramp"
+
+        extra_src = (
+            run_cfg.get("extra_ramp")
+            or proc_cfg.get("extra_ramp")
+            or {}
+        )
+        if not isinstance(extra_src, dict):
+            extra_src = {}
+
+        enabled = bool(extra_src.get("enabled", True))
+
+        try:
+            max_adc = float(extra_src.get("max_adc", last_step_adc) or last_step_adc)
+        except Exception:
+            max_adc = last_step_adc
+
+        try:
+            step_max = float(extra_src.get("step_max", 50.0) or 50.0)
+        except Exception:
+            step_max = 50.0
+
+        try:
+            interval_s = float(extra_src.get("interval_s", 5.0) or 5.0)
+        except Exception:
+            interval_s = 5.0
+
+        # 방어
+        if max_adc < last_step_adc:
+            max_adc = last_step_adc
+
+        step_max = min(100.0, max(1.0, step_max))
+        interval_s = max(0.1, interval_s)
+
+        reach_main_on_rate = bool(
+            proc_cfg.get("reach_main_on_rate", run_cfg.get("reach_main_on_rate", True))
+        )
+
+        return {
+            "reach_main_on_rate": reach_main_on_rate,
+            "after_last_step_policy": policy,
+            "extra_ramp": {
+                "enabled": enabled,
+                "max_adc": max_adc,
+                "step_max": step_max,
+                "interval_s": interval_s,
+            },
+        }
+    
     def build_recipe_from_ui(self, run_cfg: dict[str, Any]) -> ProcessRecipe:
         """
         UI 입력(run_cfg)을 ProcessRecipe로 변환.
 
-        ✅ 2파워 동시 사용 지원(동일 물질 가정)
-        - Power는 1개 또는 2개 허용(둘 다 해제 금지)
-        - Target Dep.rate는 1개(target_rate)만 사용
-        - Power1/Power2는 1개 또는 2개 선택 가능
-        - 두 파워는 동일 DAC로 같이 제어됨
-        - 선택된 채널 source shutter open + FTM ON 이후 1.5초 대기
-        - 실제 램프/dep.rate 제어는 engine.py의 _evap_deposition_control()에서 수행(엔진 수정 필요)
+        현재 구조의 핵심:
+        - recipe step 자체는 단순하게 유지
+        - 실제 증착 전 램프업(step 1~10, ADC 기준), dep.rate 도달 판정,
+        마지막 step 이후 정책(extra_ramp / stop)은
+        모두 EVAP_DEPOSITION_CONTROL(meta) 내부에서 runtime이 수행
+
+        지원 사항:
+        - Power1 / Power2 단일 또는 동시 사용
+        - 동일 물질 기준 dual power 운용
+        - process_window.py 에서 수집한 process_config / ramp_steps / extra_ramp 전달
+        - 기존 material catalog 기반 ramp meta도 하위호환으로 같이 전달
         """
         use_p1 = bool(run_cfg.get("use_power1", False))
         use_p2 = bool(run_cfg.get("use_power2", False))
@@ -183,6 +317,19 @@ class ProcessController(QObject):
             raise ValueError("target_thickness는 0보다 커야 합니다.")
         if delay_min < 0:
             raise ValueError("delay_min은 0 이상이어야 합니다.")
+        
+        # ✅ 신규 process config(step 기반 ADC 램프업) 검증
+        ramp_steps = self._normalize_ramp_steps(run_cfg)
+        last_step_adc = float(ramp_steps[-1]["target_adc"])
+        proc_policy = self._normalize_process_policy(run_cfg, last_step_adc=last_step_adc)
+
+        process_config = {
+            "step_count": len(ramp_steps),
+            "ramp_steps": ramp_steps,
+            "reach_main_on_rate": bool(proc_policy["reach_main_on_rate"]),
+            "after_last_step_policy": str(proc_policy["after_last_step_policy"]),
+            "extra_ramp": dict(proc_policy["extra_ramp"]),
+        }
 
         # ✅ 호환 제거: 단일 coil 키 제거하고 리스트만 사용
         source_shutter_coils: list[str] = []
@@ -267,10 +414,32 @@ class ProcessController(QObject):
 
             # ✅ 셔터 리스트만
             "source_shutter_coils": source_shutter_coils,
+
+            # -------------------------------------------------
+            # ✅ 신규 process config (ADC step 기반 램프업)
+            # -------------------------------------------------
+            "adc_control_mode": str(run_cfg.get("adc_control_mode", "adc") or "adc"),
+            "process_config": process_config,
+            "ramp_steps": ramp_steps,
+            "step_count": len(ramp_steps),
+
+            # step 도중 dep.rate 도달 시 메인 공정 진입
+            "reach_main_on_rate": bool(process_config["reach_main_on_rate"]),
+
+            # 마지막 step 종료 후 정책
+            "after_last_step_policy": str(process_config["after_last_step_policy"]),
+            "extra_ramp": dict(process_config["extra_ramp"]),
+
+            # ADC 기반 제어 힌트값
+            "last_step_target_adc": float(last_step_adc),
+            "adc_dynamic_step_cap": float(process_config["extra_ramp"].get("step_max", 50.0)),
         }
 
-        # ✅ (추가) main.py에서 전달된 material별 ramp 파라미터를 meta에 반영
-        # - ramp_cfg가 없으면(구버전/미선택) 기존 meta 기본값 그대로 사용
+        # ✅ material catalog 기반 보조 램프 파라미터 반영
+        # - 새 process_config(step 기반 ADC 램프업)과 별개로,
+        #   pre_rate / ignite / shortage / fine tune 등의 보조 파라미터는
+        #   계속 meta에 함께 실어 runtime이 참고할 수 있게 유지한다.
+        # - ramp_cfg가 없으면 기존 기본값 유지
         ramp_cfg = run_cfg.get("ramp")
         if isinstance(ramp_cfg, dict) and ramp_cfg:
             def _apply(k: str, cast):
@@ -364,19 +533,25 @@ class ProcessController(QObject):
             process_name = f"EVAP_{material}"
 
         recipe = ProcessRecipe(
-            recipe_name=process_name,   # ✅ 변경
+            recipe_name=process_name,
             steps=steps,
             telemetry_interval_s=1.0,
             meta={
-                "process_name": process_name,  # ✅ 추적용으로 meta에도 남김(선택이지만 추천)
+                "process_name": process_name,
                 "material_name": material,
                 "use_power1": use_p1,
                 "use_power2": use_p2,
 
                 "target_rate": target_rate,
-
                 "target_thickness": target_th,
                 "delay_min": delay_min,
+
+                # ✅ 신규 process config trace
+                "adc_control_mode": str(run_cfg.get("adc_control_mode", "adc") or "adc"),
+                "step_count": len(ramp_steps),
+                "ramp_steps": ramp_steps,
+                "after_last_step_policy": process_config["after_last_step_policy"],
+                "extra_ramp": dict(process_config["extra_ramp"]),
             },
         )
 

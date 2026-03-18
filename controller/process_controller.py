@@ -296,6 +296,18 @@ class ProcessController(QObject):
 
         if not (use_p1 or use_p2):
             raise ValueError("Power1/Power2 중 최소 1개는 선택되어야 합니다.")
+        
+        # ✅ 임시 운전 모드:
+        # - Power2 공정 시작 금지
+        # - Power1만 사용할 때도 POWER_2_SW를 함께 켠다
+        if use_p2:
+            raise ValueError(
+                "현재 장비 상태에서는 Power 2를 사용할 수 없습니다.\n"
+                "임시로 Power 1만 사용해 주세요."
+            )
+
+        temp_force_power2_sw = use_p1 and (not use_p2)
+        power1_feedback_adc2 = use_p1 and (not use_p2)
 
         material = str(run_cfg.get("material_name", "")).strip()
         if not material:
@@ -342,6 +354,11 @@ class ProcessController(QObject):
             # --- 공정 기본 ---
             "use_power1": use_p1,
             "use_power2": use_p2,
+
+            # ✅ 임시 우회
+            "temp_force_power2_sw": temp_force_power2_sw,
+            "power1_feedback_adc2": power1_feedback_adc2,
+
             "material_name": material,
             "density": density,
             "z_factor": z_factor,
@@ -494,7 +511,7 @@ class ProcessController(QObject):
 
             # 2) 선택된 파워 ON
             ProcessStep(name="POWER1_SET", type=StepType.PLC_WRITE_COIL, coil="POWER_1_SW", on=use_p1),
-            ProcessStep(name="POWER2_SET", type=StepType.PLC_WRITE_COIL, coil="POWER_2_SW", on=use_p2),
+            ProcessStep(name="POWER2_SET", type=StepType.PLC_WRITE_COIL, coil="POWER_2_SW", on=temp_force_power2_sw),
         ]
 
         # 3) 선택된 source shutter open

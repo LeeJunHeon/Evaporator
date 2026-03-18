@@ -222,8 +222,20 @@ def _read_plc_reg_pair(engine, reg1: str, reg2: str) -> tuple[Optional[float], O
         return None, None
 
 
-def _read_selected_adc_total(engine, use_p1: bool, use_p2: bool) -> tuple[Optional[float], Optional[float], Optional[float]]:
+def _read_selected_adc_total(
+    engine,
+    use_p1: bool,
+    use_p2: bool,
+    *,
+    power1_feedback_adc2: bool = False,
+) -> tuple[Optional[float], Optional[float], Optional[float]]:
     a1, a2 = _read_plc_reg_pair(engine, "POWER_READ_1", "POWER_READ_2")
+
+    # ✅ 임시 운전 모드:
+    # Power1 공정이지만 실제 feedback은 ADC2를 사용
+    if power1_feedback_adc2 and use_p1 and (not use_p2):
+        return a2, a1, a2
+
     total = _sum_selected_values(use_p1, use_p2, a1, a2)
     return total, a1, a2
 
@@ -296,6 +308,9 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
 
     use_p1 = bool(meta.get("use_power1", False))
     use_p2 = bool(meta.get("use_power2", False))
+
+    # ✅ 임시 우회: Power1 공정 시 ADC2를 feedback으로 사용
+    power1_feedback_adc2 = bool(meta.get("power1_feedback_adc2", False))
 
     # ✅ power는 1개 또는 2개 허용(둘 다 False만 금지)
     if not (use_p1 or use_p2):
@@ -639,7 +654,12 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
             engine._check_stop_pause(recipe, step)
             engine._tick_emit(recipe, step)
 
-            adc_total, adc1, adc2 = _read_selected_adc_total(engine, use_p1, use_p2)
+            adc_total, adc1, adc2 = _read_selected_adc_total(
+                engine,
+                use_p1,
+                use_p2,
+                power1_feedback_adc2=power1_feedback_adc2,
+            )
             if adc_total is not None:
                 return float(adc_total), adc1, adc2
 

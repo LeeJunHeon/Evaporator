@@ -297,7 +297,7 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
     sensor_none_abort_s = float(meta.get("sensor_none_abort_s", 5.0) or 5.0)
 
     # ✅ stuck guard(“rate가 안 오르는데 DAC만 계속 올리는 것” 방지)
-    stuck_dac_guard = int(meta.get("stuck_dac_guard", 1500) or 1500)  # 이 이상 DAC인데도
+    stuck_dac_guard = int(meta.get("stuck_dac_guard", 2000) or 2000)  # 이 이상 DAC인데도
     stuck_rate_abs = float(meta.get("stuck_rate_abs", 0.05) or 0.05)  # rate가 이 값 미만이면
     stuck_time_s = float(meta.get("stuck_time_s", 60.0) or 60.0)      # 이 시간 지속 시 중단
 
@@ -441,8 +441,8 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         if d < int(ramp_seg1_max_dac):
             return float(ramp_interval_seg1_s)          # 0~700 : 10s
         if d < int(ramp_seg2_max_dac):
-            return float(ramp_interval_seg2_s)          # 700~1500 : 30s
-        return float(ramp_interval_after_seg2_s)        # 1500 이후 : 30s(기본)
+            return float(ramp_interval_seg2_s)          # 700~2000 : 30s
+        return float(ramp_interval_after_seg2_s)        # 2000 이후 : 30s(기본)
 
     def _dac_min_interval_by_dac(cur_dac: int) -> float:
         # 기존 dac_adjust_interval_s도 존중하되,
@@ -555,8 +555,8 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
 
     # 3) pre_rate까지 ramp-up (구간별 템포)
     #   - 0~700 : 10초에 +100
-    #   - 700~1500 : 30초에 +100
-    #   - 1500에서 rate=0이면 rate>=0.1 될 때까지 대기(최대 5분)
+    #   - 700~2000 : 30초에 +100
+    #   - 2000에서 rate=0이면 rate>=0.1 될 때까지 대기(최대 5분)
     engine._emit_status(message=f"EVAP ramp-up 시작: pre_rate={pre_rate} Å/s")
     apply_dac()
 
@@ -587,7 +587,7 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         else:
             pre_ok_hits = 0
 
-        # ✅ [추가] ignite_dac(1500)에서 rate=0이면 0.1 될 때까지 대기(최대 5분)
+        # ✅ [추가] ignite_dac(2000 기본)에서 rate=0이면 0.1 될 때까지 대기(최대 5분)
         if _handle_ignite_wait(rt, where="pre_ramp"):
             # ignite 대기 중에는 stuck 타이머도 리셋(요구사항 충돌 방지)
             stuck_start_ts_pre = None

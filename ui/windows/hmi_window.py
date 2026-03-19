@@ -274,12 +274,22 @@ class HmiWindow(QWidget):
 
         # Process 창 같이 닫기
         if self.process_window is not None:
+            closed = False
             try:
                 self.process_window._closing_all = True
-                self.process_window.close()
+                closed = bool(self.process_window.close())
             except Exception:
-                pass
-            self.process_window = None
+                closed = False
+
+            # ProcessWindow가 아직 닫히지 못한 경우(HW stop/preflight wait 등)
+            # HMI도 닫지 말고 종료를 취소해야 한다.
+            if not closed:
+                self._closing_all = False
+                event.ignore()
+                return
+
+            # ✅ 여기서 self.process_window = None 으로 끊지 않는다.
+            #    실제 삭제 완료 시 destroyed -> _on_process_destroyed()가 정리하도록 맡긴다.
 
         # ✅ LogService stop은 main()의 aboutToQuit(_shutdown_new_services)에서 처리
         event.accept()

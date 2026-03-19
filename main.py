@@ -218,12 +218,11 @@ def main():
         except Exception:
             pass
 
-        # 3) 외부 서비스 stop
+        # 3) 외부 장비 서비스 stop
         for svc in (
             getattr(hmi, "_stm_service", None),
             getattr(hmi, "_acs_service", None),
-            turbovac_service,
-            log_service,
+            getattr(hmi, "_turbovac_service", None),
         ):
             if svc is None:
                 continue
@@ -238,6 +237,13 @@ def main():
         try:
             if plc_binder is not None:
                 plc_binder.stop()
+        except Exception:
+            pass
+
+        # 5) 맨 마지막에 LogService stop
+        try:
+            if log_service is not None:
+                log_service.stop()
         except Exception:
             pass
 

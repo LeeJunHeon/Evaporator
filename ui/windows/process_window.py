@@ -322,7 +322,10 @@ class ProcessWindow(QWidget):
             _append_text(getattr(self.ui, "logWindow", None), "[DEV][ERR] hmi_window is None -> cannot prepare STM")
             return False
 
-        ini_path = self.hmi_window._ini_path
+        ini_path = getattr(self, "_ini_path", None) or getattr(self.hmi_window, "_ini_path", None)
+        if not ini_path:
+            _append_text(getattr(self.ui, "logWindow", None), "[DEV][ERR] ini_path is None -> cannot prepare STM")
+            return False
 
         # 이전 STM 정리
         self._shutdown_sensors_and_release_memory()
@@ -466,7 +469,6 @@ class ProcessWindow(QWidget):
 
     def _on_start_preflight_result(self, result: STMPreflightResult) -> None:
         self._cleanup_start_worker()
-        self._set_start_busy(False)
 
         if bool(getattr(result, "cancelled", False)):
             self._abort_start_preflight(
@@ -484,7 +486,6 @@ class ProcessWindow(QWidget):
             )
             return
 
-        # 성공 시에만 STM UI bind + RT 시작 + controller.start_from_ui()
         try:
             if self._stm_service is not None:
                 self._bind_stm_ui(self._stm_service)
@@ -508,6 +509,7 @@ class ProcessWindow(QWidget):
             pc.start_from_ui(run_cfg, run_id=self._active_run_id)
             _append_text(getattr(self.ui, "logWindow", None), "[PRECHECK] STM preflight 성공 -> 공정 시작")
             self._pending_run_cfg = None
+            self._set_start_busy(False)
         except Exception as e:
             with contextlib.suppress(Exception):
                 self._emergency_safe_shutdown_plc_best_effort()

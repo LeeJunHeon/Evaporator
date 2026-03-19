@@ -349,39 +349,44 @@ class ProcessController(QObject):
         }
     
     def build_recipe_from_ui(self, run_cfg: dict[str, Any]) -> ProcessRecipe:
-        """
-        UI 입력(run_cfg)을 ProcessRecipe로 변환.
+        power = self._extract_power_mode(run_cfg)
+        material_cfg = self._extract_material_config(run_cfg)
+        process_config = self._build_process_config_from_run_cfg(run_cfg)
 
-        현재 구조의 핵심:
-        - recipe step 자체는 단순하게 유지
-        - 실제 증착 전 램프업(step 1~10, ADC 기준), dep.rate 도달 판정,
-        마지막 step 이후 정책(extra_ramp / stop)은
-        모두 EVAP_DEPOSITION_CONTROL(meta) 내부에서 runtime이 수행
+        meta = self._build_base_evap_meta(
+            run_cfg,
+            power=power,
+            material_cfg=material_cfg,
+            process_config=process_config,
+        )
+        self._apply_material_ramp_overrides(meta, run_cfg.get("ramp"))
 
-        지원 사항:
-        - Power1 / Power2 단일 또는 동시 사용
-        - 동일 물질 기준 dual power 운용
-        - process_window.py 에서 수집한 process_config / ramp_steps / extra_ramp 전달
-        - 기존 material catalog 기반 ramp meta도 하위호환으로 같이 전달
-        """
-        use_p1 = bool(run_cfg.get("use_power1", False))
-        use_p2 = bool(run_cfg.get("use_power2", False))
+        steps = self._build_evap_steps(
+            power=power,
+            meta=meta,
+        )
 
-        if not (use_p1 or use_p2):
-            raise ValueError("Power1/Power2 중 최소 1개는 선택되어야 합니다.")
-        
-        # ✅ 임시 운전 모드:
-        # - Power2 공정 시작 금지
-        # - Power1만 사용할 때도 POWER_2_SW를 함께 켠다
-        if use_p2:
-            raise ValueError(
-                "현재 장비 상태에서는 Power 2를 사용할 수 없습니다.\n"
-                "임시로 Power 1만 사용해 주세요."
-            )
+        process_name = self._sanitize_process_name(
+            run_cfg.get("process_name"),
+            fallback_material=material_cfg["material_name"],
+        )
 
-        temp_force_power2_sw = use_p1 and (not use_p2)
-        power1_feedback_adc2 = use_p1 and (not use_p2)
-
+        recipe = ProcessRecipe(
+            recipe_name=process_name,
+            steps=steps,
+            telemetry_interval_s=1.0,
+            meta=self._build_recipe_trace_meta(
+                process_name=process_name,
+                power=power,
+                material_cfg=material_cfg,
+                process_config=process_config,
+                run_cfg=run_cfg,
+            ),
+        )
+        recipe.validate(strict=True)
+        return recipe
+    
+    def _extract_material_config(self, run_cfg: dict[str, Any]) -> dict[str, Any]:
         material = str(run_cfg.get("material_name", "")).strip()
         if not material:
             raise ValueError("material_name은 필수입니다.")
@@ -395,258 +400,267 @@ class ProcessController(QObject):
         if target_rate <= 0:
             raise ValueError("target_rate(목표 Dep.rate)는 0보다 커야 합니다.")
 
-        target_th = float(run_cfg.get("target_thickness", 0.0) or 0.0)
+        target_thickness = float(run_cfg.get("target_thickness", 0.0) or 0.0)
         delay_min = float(run_cfg.get("delay_min", 0.0) or 0.0)
 
-        if target_th <= 0:
+        if target_thickness <= 0:
             raise ValueError("target_thickness는 0보다 커야 합니다.")
         if delay_min < 0:
             raise ValueError("delay_min은 0 이상이어야 합니다.")
-        
-        # ✅ 신규 process config(step 기반 ADC 램프업) 검증
+
+        return {
+            "material_name": material,
+            "density": density,
+            "z_factor": z_factor,
+            "target_rate": target_rate,
+            "target_thickness": target_thickness,
+            "delay_min": delay_min,
+        }
+    
+    def _build_process_config_from_run_cfg(self, run_cfg: dict[str, Any]) -> dict[str, Any]:
         ramp_steps = self._normalize_ramp_steps(run_cfg)
         last_step_adc = float(ramp_steps[-1]["target_adc"])
         proc_policy = self._normalize_process_policy(run_cfg, last_step_adc=last_step_adc)
 
-        process_config = {
+        return {
             "step_count": len(ramp_steps),
             "ramp_steps": ramp_steps,
             "reach_main_on_rate": bool(proc_policy["reach_main_on_rate"]),
             "after_last_step_policy": str(proc_policy["after_last_step_policy"]),
             "extra_ramp": dict(proc_policy["extra_ramp"]),
+            "last_step_target_adc": last_step_adc,
         }
+    
+    def _build_base_evap_meta(
+        self,
+        run_cfg: dict[str, Any],
+        *,
+        power: dict[str, Any],
+        material_cfg: dict[str, Any],
+        process_config: dict[str, Any],
+    ) -> dict[str, Any]:
+        last_step_adc = float(process_config["last_step_target_adc"])
 
-        # ✅ 호환 제거: 단일 coil 키 제거하고 리스트만 사용
-        source_shutter_coils: list[str] = []
-        if use_p1:
-            source_shutter_coils.append("SHUTTER_1_SW")
-        if use_p2:
-            source_shutter_coils.append("SHUTTER_2_SW")
+        return {
+            "use_power1": power["use_power1"],
+            "use_power2": power["use_power2"],
+            "temp_force_power2_sw": power["temp_force_power2_sw"],
+            "power1_feedback_adc2": power["power1_feedback_adc2"],
+            "source_shutter_coils": list(power["source_shutter_coils"]),
 
-        meta = {
-            # --- 공정 기본 ---
-            "use_power1": use_p1,
-            "use_power2": use_p2,
+            "material_name": material_cfg["material_name"],
+            "density": material_cfg["density"],
+            "z_factor": material_cfg["z_factor"],
+            "target_rate": material_cfg["target_rate"],
+            "target_thickness": material_cfg["target_thickness"],
+            "delay_min": material_cfg["delay_min"],
 
-            # ✅ 임시 우회
-            "temp_force_power2_sw": temp_force_power2_sw,
-            "power1_feedback_adc2": power1_feedback_adc2,
-
-            "material_name": material,
-            "density": density,
-            "z_factor": z_factor,
-
-            "target_rate": target_rate,
-
-            "target_thickness": target_th,
-            "delay_min": delay_min,
-
-            # --- 안전/제한 ---
             "dac_max": 4000,
             "sensor_none_abort_s": 5.0,
 
-            # --- 램프업 파라미터(사용자 요구) ---
-            #  - DAC 0~700 : 10초에 +100
-            #  - DAC 700~2000 : 30초에 +100
-            #  - DAC 2000인데 dep.rate==0이면, dep.rate>=0.1 될 때까지 대기(최대 5분)
             "ramp_step_dac": 100,
             "ramp_seg1_max_dac": 700,
             "ramp_seg2_max_dac": 2000,
             "ramp_interval_seg1_s": 10.0,
             "ramp_interval_seg2_s": 30.0,
             "ramp_interval_after_seg2_s": 30.0,
-
-            # 미세 조정(목표 근접 시): 기본 10 step 이내에서 동적 보정
             "fine_step_dac": 10,
 
-            # ignition(=2000에서 0이면 대기) 파라미터
             "ignite_dac": 2000,
             "ignite_trigger_rate_max": 0.0,
             "ignite_rate_min": 0.1,
             "ignite_timeout_s": 300.0,
 
-            # --- 목표 도달/보정 ---
             "rate_tol_ratio": float(run_cfg.get("rate_tol_ratio", 0.05) or 0.05),
-            # target_rate 도달 판정: tol 이내 N회 연속(기본 5회)
             "target_stable_hits": int(run_cfg.get("target_stable_hits", 5) or 5),
             "target_stable_interval_s": float(run_cfg.get("target_stable_interval_s", 1.0) or 1.0),
 
-            # --- rate drop(급락 감지) ---
             "rate_drop_ratio": float(run_cfg.get("rate_drop_ratio", 0.30) or 0.30),
             "rate_drop_count": int(run_cfg.get("rate_drop_count", 3) or 3),
 
-            # --- pre-rate 홀드 ---
             "pre_rate": 0.4,
             "pre_hold_s": 120.0,
+            "pre_hold_mode": "fixed",
+            "pre_hold_adjust_interval_s": 10.0,
+            "dac_adjust_interval_s": 10.0,
 
-            # ✅ 요청 동작:
-            # - dep.rate≈0.4 도달 후 1~2분 "대기"(파워 흔들림 최소화)
-            # - dep.rate 도달 이후에도 DAC 변경은 10초 텀으로 제한
-            "pre_hold_mode": "fixed",              # fixed | control
-            "pre_hold_adjust_interval_s": 10.0,    # control 모드일 때만 의미
-            "dac_adjust_interval_s": 10.0,         # fine tune / shutter delay / main loop
-
-            # --- stuck 가드 ---
             "stuck_dac_guard": 2000,
             "stuck_rate_abs": 0.05,
             "stuck_time_s": 60.0,
 
-            # ✅ (추가) material shortage 기본값 (ramp_cfg 없을 때도 기본 동작 유지)
             "material_shortage_dac": 2000,
             "material_shortage_rate_max": 0.0,
             "material_shortage_time_s": 10.0,
 
-            # --- shutter delay 후 STM zero 모드 ---
             "zero_mode": "B",
-
-            # --- FTM/STM 안정화 ---
             "wait_after_ftm_on_s": 1.5,
 
-            # ✅ 셔터 리스트만
-            "source_shutter_coils": source_shutter_coils,
-
-            # -------------------------------------------------
-            # ✅ 신규 process config (ADC step 기반 램프업)
-            # -------------------------------------------------
             "adc_control_mode": str(run_cfg.get("adc_control_mode", "adc") or "adc"),
-            "process_config": process_config,
-            "ramp_steps": ramp_steps,
-            "step_count": len(ramp_steps),
-
-            # step 도중 dep.rate 도달 시 메인 공정 진입
-            "reach_main_on_rate": bool(process_config["reach_main_on_rate"]),
-
-            # 마지막 step 종료 후 정책
-            "after_last_step_policy": str(process_config["after_last_step_policy"]),
+            "process_config": {
+                "step_count": process_config["step_count"],
+                "ramp_steps": process_config["ramp_steps"],
+                "reach_main_on_rate": process_config["reach_main_on_rate"],
+                "after_last_step_policy": process_config["after_last_step_policy"],
+                "extra_ramp": dict(process_config["extra_ramp"]),
+            },
+            "ramp_steps": process_config["ramp_steps"],
+            "step_count": process_config["step_count"],
+            "reach_main_on_rate": process_config["reach_main_on_rate"],
+            "after_last_step_policy": process_config["after_last_step_policy"],
             "extra_ramp": dict(process_config["extra_ramp"]),
-
-            # ADC 기반 제어 힌트값
-            "last_step_target_adc": float(last_step_adc),
+            "last_step_target_adc": last_step_adc,
             "adc_dynamic_step_cap": float(process_config["extra_ramp"].get("step_max", 50.0)),
         }
+    
+    def _apply_material_ramp_overrides(self, meta: dict[str, Any], ramp_cfg: Any) -> None:
+        if not isinstance(ramp_cfg, dict) or not ramp_cfg:
+            return
 
-        # ✅ material catalog 기반 보조 램프 파라미터 반영
-        # - 새 process_config(step 기반 ADC 램프업)과 별개로,
-        #   pre_rate / ignite / shortage / fine tune 등의 보조 파라미터는
-        #   계속 meta에 함께 실어 runtime이 참고할 수 있게 유지한다.
-        # - ramp_cfg가 없으면 기존 기본값 유지
-        ramp_cfg = run_cfg.get("ramp")
-        if isinstance(ramp_cfg, dict) and ramp_cfg:
-            def _apply(k: str, cast):
-                if k not in ramp_cfg:
-                    return False
-                v = ramp_cfg.get(k)
-                if v is None or v == "":
-                    return False
-                try:
-                    meta[k] = cast(v)
-                    return True
-                except Exception:
-                    return False
+        def _apply(k: str, cast) -> bool:
+            if k not in ramp_cfg:
+                return False
+            v = ramp_cfg.get(k)
+            if v is None or v == "":
+                return False
+            try:
+                meta[k] = cast(v)
+                return True
+            except Exception:
+                return False
 
-            # int 계열
-            _apply("ramp_step_dac", lambda x: int(float(x)))
-            _apply("ramp_seg1_max_dac", lambda x: int(float(x)))
-            _apply("ramp_seg2_max_dac", lambda x: int(float(x)))
-            _apply("ignite_dac", lambda x: int(float(x)))
-            _apply("fine_step_dac", lambda x: int(float(x)))
-            _apply("material_shortage_dac", lambda x: int(float(x)))
+        _apply("ramp_step_dac", lambda x: int(float(x)))
+        _apply("ramp_seg1_max_dac", lambda x: int(float(x)))
+        _apply("ramp_seg2_max_dac", lambda x: int(float(x)))
+        _apply("ignite_dac", lambda x: int(float(x)))
+        _apply("fine_step_dac", lambda x: int(float(x)))
+        _apply("material_shortage_dac", lambda x: int(float(x)))
 
-            # float 계열
-            _apply("ramp_interval_seg1_s", float)
-            seg2_over = _apply("ramp_interval_seg2_s", float)
-            after_over = _apply("ramp_interval_after_seg2_s", float)
-            if seg2_over and not after_over:
-                # ramp_cfg에서 after를 따로 안 주면 seg2 interval을 따라가게(불일치 방지)
-                meta["ramp_interval_after_seg2_s"] = float(meta["ramp_interval_seg2_s"])
+        _apply("ramp_interval_seg1_s", float)
+        seg2_over = _apply("ramp_interval_seg2_s", float)
+        after_over = _apply("ramp_interval_after_seg2_s", float)
+        if seg2_over and not after_over:
+            meta["ramp_interval_after_seg2_s"] = float(meta["ramp_interval_seg2_s"])
 
-            _apply("ignite_rate_min", float)
-            _apply("ignite_timeout_s", float)
-            _apply("pre_rate", float)
-            _apply("pre_hold_s", float)
-            _apply("pre_hold_adjust_interval_s", float)
-            _apply("pre_drop_ratio", float)
-            _apply("pre_drop_count", lambda x: int(float(x)))
-            _apply("dac_adjust_interval_s", float)
-            _apply("material_shortage_rate_max", float)
-            _apply("material_shortage_time_s", float)
+        _apply("ignite_rate_min", float)
+        _apply("ignite_timeout_s", float)
+        _apply("pre_rate", float)
+        _apply("pre_hold_s", float)
+        _apply("pre_hold_adjust_interval_s", float)
+        _apply("pre_drop_ratio", float)
+        _apply("pre_drop_count", lambda x: int(float(x)))
+        _apply("dac_adjust_interval_s", float)
+        _apply("material_shortage_rate_max", float)
+        _apply("material_shortage_time_s", float)
 
-        # ✅ steps는 리스트 만든 다음 조건부 append로 구성(문법 오류 방지)
+    def _build_evap_steps(
+        self,
+        *,
+        power: dict[str, Any],
+        meta: dict[str, Any],
+    ) -> list[ProcessStep]:
+        use_p1 = bool(power["use_power1"])
+        use_p2 = bool(power["use_power2"])
+        temp_force_power2_sw = bool(power["temp_force_power2_sw"])
+
         steps: list[ProcessStep] = [
-            # 0) 안전 초기화
             ProcessStep(name="MAIN_SHUTTER_CLOSE", type=StepType.PLC_WRITE_COIL, coil="MAIN_SHUTTER_SW", on=False),
             ProcessStep(name="SHUTTER_1_CLOSE_INIT", type=StepType.PLC_WRITE_COIL, coil="SHUTTER_1_SW", on=False),
             ProcessStep(name="SHUTTER_2_CLOSE_INIT", type=StepType.PLC_WRITE_COIL, coil="SHUTTER_2_SW", on=False),
 
-            # 1) DAC 0
             ProcessStep(name="DAC1_ZERO", type=StepType.PLC_WRITE_REG, reg="DAC_POWER_1", value=0),
             ProcessStep(name="DAC2_ZERO", type=StepType.PLC_WRITE_REG, reg="DAC_POWER_2", value=0),
 
-            # 2) 선택된 파워 ON
             ProcessStep(name="POWER1_SET", type=StepType.PLC_WRITE_COIL, coil="POWER_1_SW", on=use_p1),
             ProcessStep(name="POWER2_SET", type=StepType.PLC_WRITE_COIL, coil="POWER_2_SW", on=temp_force_power2_sw),
         ]
 
-        # 3) 선택된 source shutter open
         if use_p1:
             steps.append(ProcessStep(name="SHUTTER_1_OPEN", type=StepType.PLC_WRITE_COIL, coil="SHUTTER_1_SW", on=True))
         if use_p2:
             steps.append(ProcessStep(name="SHUTTER_2_OPEN", type=StepType.PLC_WRITE_COIL, coil="SHUTTER_2_SW", on=True))
 
-        # 4) FTM ON + 1.5초 대기
         steps.append(ProcessStep(name="FTM_ON", type=StepType.PLC_WRITE_COIL, coil="FTM_SW", on=True))
-        steps.append(ProcessStep(
-            name="WAIT_FTM_STM",
-            type=StepType.WAIT_SECONDS,
-            seconds=float(meta["wait_after_ftm_on_s"]),
-            message="FTM/STM 안정화 대기",  # ✅ 상단 상태창에 이 문구가 그대로 표시됨
-        ))
-
-        # 5) deposition 제어(엔진 내부 루프)
+        steps.append(
+            ProcessStep(
+                name="WAIT_FTM_STM",
+                type=StepType.WAIT_SECONDS,
+                seconds=float(meta["wait_after_ftm_on_s"]),
+                message="FTM/STM 안정화 대기",
+            )
+        )
         steps.append(ProcessStep(name="EVAP_DEPOSITION_CONTROL", type=StepType.MARK, meta=meta))
 
-        # 6) 후처리(best-effort): shutter close + FTM OFF
-        #    (안전상 둘 다 닫아도 무해하지만, 선택된 것만 닫게 유지)
         if use_p1:
             steps.append(ProcessStep(name="SHUTTER_1_CLOSE", type=StepType.PLC_WRITE_COIL, coil="SHUTTER_1_SW", on=False))
         if use_p2:
             steps.append(ProcessStep(name="SHUTTER_2_CLOSE", type=StepType.PLC_WRITE_COIL, coil="SHUTTER_2_SW", on=False))
         steps.append(ProcessStep(name="FTM_OFF", type=StepType.PLC_WRITE_COIL, coil="FTM_SW", on=False))
 
-        # ✅ 입력받은 공정명 (main.py에서 run_cfg로 넘어옴)
-        process_name = str(run_cfg.get("process_name", "")).strip()
+        return steps
+    
+    def _sanitize_process_name(self, raw_name: Any, *, fallback_material: str) -> str:
+        process_name = str(raw_name or "").strip()
         process_name = re.sub(r'[<>:"/\\|?*]+', "_", process_name)
         process_name = re.sub(r"\s+", "_", process_name).strip("._ ")
 
         if not process_name:
-            # 방어: 기존 동작 fallback
-            process_name = f"EVAP_{material}"
+            process_name = f"EVAP_{fallback_material}"
+        return process_name
+    
+    def _build_recipe_trace_meta(
+        self,
+        *,
+        process_name: str,
+        power: dict[str, Any],
+        material_cfg: dict[str, Any],
+        process_config: dict[str, Any],
+        run_cfg: dict[str, Any],
+    ) -> dict[str, Any]:
+        return {
+            "process_name": process_name,
+            "material_name": material_cfg["material_name"],
+            "use_power1": power["use_power1"],
+            "use_power2": power["use_power2"],
+            "target_rate": material_cfg["target_rate"],
+            "target_thickness": material_cfg["target_thickness"],
+            "delay_min": material_cfg["delay_min"],
+            "adc_control_mode": str(run_cfg.get("adc_control_mode", "adc") or "adc"),
+            "step_count": process_config["step_count"],
+            "ramp_steps": process_config["ramp_steps"],
+            "after_last_step_policy": process_config["after_last_step_policy"],
+            "extra_ramp": dict(process_config["extra_ramp"]),
+        }
+    
+    def _extract_power_mode(self, run_cfg: dict[str, Any]) -> dict[str, Any]:
+        use_p1 = bool(run_cfg.get("use_power1", False))
+        use_p2 = bool(run_cfg.get("use_power2", False))
 
-        recipe = ProcessRecipe(
-            recipe_name=process_name,
-            steps=steps,
-            telemetry_interval_s=1.0,
-            meta={
-                "process_name": process_name,
-                "material_name": material,
-                "use_power1": use_p1,
-                "use_power2": use_p2,
+        if not (use_p1 or use_p2):
+            raise ValueError("Power1/Power2 중 최소 1개는 선택되어야 합니다.")
 
-                "target_rate": target_rate,
-                "target_thickness": target_th,
-                "delay_min": delay_min,
+        # 현재 장비 임시 제약
+        if use_p2:
+            raise ValueError(
+                "현재 장비 상태에서는 Power 2를 사용할 수 없습니다.\n"
+                "임시로 Power 1만 사용해 주세요."
+            )
 
-                # ✅ 신규 process config trace
-                "adc_control_mode": str(run_cfg.get("adc_control_mode", "adc") or "adc"),
-                "step_count": len(ramp_steps),
-                "ramp_steps": ramp_steps,
-                "after_last_step_policy": process_config["after_last_step_policy"],
-                "extra_ramp": dict(process_config["extra_ramp"]),
-            },
-        )
+        temp_force_power2_sw = use_p1 and (not use_p2)
+        power1_feedback_adc2 = use_p1 and (not use_p2)
 
-        recipe.validate(strict=True)
-        return recipe
+        source_shutter_coils: list[str] = []
+        if use_p1:
+            source_shutter_coils.append("SHUTTER_1_SW")
+        if use_p2:
+            source_shutter_coils.append("SHUTTER_2_SW")
+
+        return {
+            "use_power1": use_p1,
+            "use_power2": use_p2,
+            "temp_force_power2_sw": temp_force_power2_sw,
+            "power1_feedback_adc2": power1_feedback_adc2,
+            "source_shutter_coils": source_shutter_coils,
+        }
 
     def start_from_ui(self, run_cfg: dict[str, Any], *, run_id: Optional[str] = None) -> None:
         """

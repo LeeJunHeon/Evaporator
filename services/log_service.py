@@ -389,7 +389,7 @@ class LogWriterWorker(QThread):
 
     def _migrate_one_run_stem(self, file_stem: str, *, reopen_after: bool) -> bool:
         """
-        fallback run 1개(file_stem)의 .log / .csv / .meta.json을 NAS로 복구.
+        fallback run 1개(file_stem)의 .log / .csv를 NAS로 복구.
         reopen_after=True 이면 현재 열린 run으로 간주하고 NAS 파일로 재오픈까지 수행.
         """
         fb_run = self._pw_dir(self._fallback_dir) / f"{file_stem}.log"
@@ -529,7 +529,7 @@ class LogWriterWorker(QThread):
         """
         ✅ 공정(run) 파일 2종 생성 (NAS 우선, 실패 시 fallback)
         - <root>/ProcessWindowLog/<run_id>_<recipe>.log
-        - <root>/ProcessLog/<run_id>_<recipe>.csv  (+ optional meta.json)
+        - <root>/ProcessLog/<run_id>_<recipe>.csv  (CSV 상단에 run meta 포함)
         """
         self._close_run()
 
@@ -591,6 +591,10 @@ class LogWriterWorker(QThread):
             self._run_open = False
             self._run_dir = None
             self._run_folder_name = ""
+            self._run_id = ""
+            self._run_recipe = ""
+            self._run_open_ts = 0.0
+            self._run_meta = {}
             return
 
         self._run_open = True

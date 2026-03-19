@@ -36,6 +36,7 @@ from services.log_service import LogService
 
 from controller.process_worker import ProcessWorker
 
+_UNSET = object()
 
 class ProcessController(QObject):
     """
@@ -94,24 +95,98 @@ class ProcessController(QObject):
         except Exception:
             pass
 
-        # --- STM trace/status/error -> Process Window ---
+        # --- STM/ACS runtime device signal bind ---
         try:
-            if self.stm is not None:
-                if hasattr(self.stm, "sig_io_trace"):
-                    self.stm.sig_io_trace.connect(self._on_stm_io_trace)
-                if hasattr(self.stm, "sig_error"):
-                    self.stm.sig_error.connect(self._on_stm_error)
-                if hasattr(self.stm, "sig_connected"):
-                    self.stm.sig_connected.connect(self._on_stm_connected)
+            self._rebind_stm_device(self.stm, emit_log=False)
         except Exception:
             pass
 
-        # --- ACS trace -> Process Window ---
         try:
-            if self.acs is not None and hasattr(self.acs, "sig_io_trace"):
-                self.acs.sig_io_trace.connect(self._on_acs_io_trace)
+            self._rebind_acs_device(self.acs, emit_log=False)
         except Exception:
             pass
+
+    def _safe_disconnect(self, obj: Any, signal_name: str, slot: Any) -> None:
+        if obj is None or not hasattr(obj, signal_name):
+            return
+        try:
+            getattr(obj, signal_name).disconnect(slot)
+        except Exception:
+            pass
+
+    def _safe_connect(self, obj: Any, signal_name: str, slot: Any) -> None:
+        if obj is None or not hasattr(obj, signal_name):
+            return
+        sig = getattr(obj, signal_name)
+        try:
+            sig.disconnect(slot)
+        except Exception:
+            pass
+        try:
+            sig.connect(slot)
+        except Exception:
+            pass
+
+    def _rebind_stm_device(self, stm: Optional[Any], *, emit_log: bool = True) -> None:
+        old = getattr(self, "stm", None)
+
+        if old is not None:
+            self._safe_disconnect(old, "sig_io_trace", self._on_stm_io_trace)
+            self._safe_disconnect(old, "sig_error", self._on_stm_error)
+            self._safe_disconnect(old, "sig_connected", self._on_stm_connected)
+
+        self.stm = stm
+
+        if self.stm is not None:
+            self._safe_connect(self.stm, "sig_io_trace", self._on_stm_io_trace)
+            self._safe_connect(self.stm, "sig_error", self._on_stm_error)
+            self._safe_connect(self.stm, "sig_connected", self._on_stm_connected)
+
+        if emit_log:
+            name = type(self.stm).__name__ if self.stm is not None else "None"
+            self._ui_info(f"STM runtime device 교체: {name}")
+
+    def _rebind_acs_device(self, acs: Optional[Any], *, emit_log: bool = True) -> None:
+        old = getattr(self, "acs", None)
+
+        if old is not None:
+            self._safe_disconnect(old, "sig_io_trace", self._on_acs_io_trace)
+
+        self.acs = acs
+
+        if self.acs is not None:
+            self._safe_connect(self.acs, "sig_io_trace", self._on_acs_io_trace)
+
+        if emit_log:
+            name = type(self.acs).__name__ if self.acs is not None else "None"
+            self._ui_info(f"ACS runtime device 교체: {name}")
+
+    def replace_runtime_devices(
+        self,
+        *,
+        stm: Any = _UNSET,
+        acs: Any = _UNSET,
+        turbovac: Any = _UNSET,
+    ) -> None:
+        """
+        공정 시작 전/idle 상태에서 runtime device를 공식적으로 교체한다.
+        실행 중인 공정(engine)은 start 시점의 device 참조를 사용하므로,
+        실행 중 교체는 허용하지 않는다.
+        """
+        if self.is_running():
+            self._ui_warn("공정 실행 중에는 runtime device를 교체할 수 없습니다.")
+            return
+
+        if stm is not _UNSET:
+            self._rebind_stm_device(stm)
+
+        if acs is not _UNSET:
+            self._rebind_acs_device(acs)
+
+        if turbovac is not _UNSET:
+            self.turbovac = turbovac
+            name = type(self.turbovac).__name__ if self.turbovac is not None else "None"
+            self._ui_info(f"Turbovac runtime device 교체: {name}")
 
     # --------------------------------------------------------
     # Recipe I/O
@@ -602,7 +677,7 @@ class ProcessController(QObject):
         r.validate(strict=True)
 
         # 서비스 실행 보장(중복 호출 안전하게 작성)
-        self._ensure_services_running()
+        self._ensure_services_running(start_stm=False)
 
         # ✅ PLC 연결 상태 최종 확인
         if not self._is_plc_ready():
@@ -610,14 +685,7 @@ class ProcessController(QObject):
             return
 
         # 엔진 구성
-        engine = ProcessEngine(
-            plc=self.plc,
-            stm=self.stm,
-            acs=self.acs,
-            turbovac=self.turbovac,
-            log=self.log,
-            callbacks=None,
-        )
+        engine = self._create_engine()
 
         # 워커 생성 (✅ 여기서 ProcessWorker 사용)
         w = ProcessWorker(engine=engine, recipe=r, run_id=run_id)
@@ -690,6 +758,16 @@ class ProcessController(QObject):
         except Exception as e:
             self._ui_warn(f"stop 요청 실패: {e!r}")
 
+    def _create_engine(self) -> ProcessEngine:
+        return ProcessEngine(
+            plc=self.plc,
+            stm=self.stm,
+            acs=self.acs,
+            turbovac=self.turbovac,
+            log=self.log,
+            callbacks=None,
+        )
+
     def _is_plc_ready(self) -> bool:
         """
         공정 시작/안전정지 전에 PLC가 실제 I/O 가능한 상태인지 확인.
@@ -706,7 +784,7 @@ class ProcessController(QObject):
         except Exception:
             return False
 
-    def _ensure_services_running(self) -> None:
+    def _ensure_services_running(self, *, start_stm: bool = False) -> None:
         """
         PLC/센서/로그 서비스가 실행 중인지 확인하고, 꺼져 있으면 켠다.
         - 각 서비스는 start()가 중복 호출되어도 안전해야 함(우리가 만든 구조 기준)
@@ -729,8 +807,9 @@ class ProcessController(QObject):
         except Exception as e:
             self._ui_warn(f"PLC 서비스 start 실패: {e!r}")
 
-        # STM/ACS는 옵션
-        if self.stm is not None:
+        # STM은 ProcessWindow 쪽 preflight/start 경로에서 관리할 예정이므로
+        # 여기서는 기본적으로 자동 start 하지 않는다.
+        if start_stm and self.stm is not None:
             try:
                 if hasattr(self.stm, "start") and hasattr(self.stm, "is_running"):
                     if not self.stm.is_running():

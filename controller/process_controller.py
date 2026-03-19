@@ -348,60 +348,82 @@ class ProcessController(QObject):
             },
         }
     
-    def build_recipe_from_ui(self, run_cfg: dict[str, Any]) -> ProcessRecipe:
+    def _prepare_recipe_build_context(self, run_cfg: dict[str, Any]) -> dict[str, Any]:
+        """
+        UI run_cfg를 기반으로 recipe 생성에 필요한 조립 컨텍스트를 만든다.
+        여기서는 '값 정규화/정책 병합'만 수행하고, ProcessRecipe 객체는 만들지 않는다.
+        """
         power = self._extract_power_mode(run_cfg)
         material_cfg = self._extract_material_config(run_cfg)
         process_config = self._build_process_config_from_run_cfg(run_cfg)
 
-        meta = self._build_base_evap_meta(
+        runtime_meta = self._build_runtime_evap_meta(
             run_cfg,
             power=power,
             material_cfg=material_cfg,
             process_config=process_config,
         )
-        self._apply_material_ramp_overrides(meta, run_cfg.get("ramp"))
-
-        steps = self._build_evap_steps(
-            power=power,
-            meta=meta,
-        )
+        self._apply_material_ramp_overrides(runtime_meta, run_cfg.get("ramp"))
 
         process_name = self._sanitize_process_name(
             run_cfg.get("process_name"),
             fallback_material=material_cfg["material_name"],
         )
 
+        return {
+            "power": power,
+            "material_cfg": material_cfg,
+            "process_config": process_config,
+            "runtime_meta": runtime_meta,
+            "process_name": process_name,
+        }
+
+
+    def build_recipe_from_ui(self, run_cfg: dict[str, Any]) -> ProcessRecipe:
+        ctx = self._prepare_recipe_build_context(run_cfg)
+
+        steps = self._build_evap_steps(
+            power=ctx["power"],
+            meta=ctx["runtime_meta"],
+        )
+
         recipe = ProcessRecipe(
-            recipe_name=process_name,
+            recipe_name=ctx["process_name"],
             steps=steps,
             telemetry_interval_s=1.0,
             meta=self._build_recipe_trace_meta(
-                process_name=process_name,
-                power=power,
-                material_cfg=material_cfg,
-                process_config=process_config,
+                process_name=ctx["process_name"],
+                power=ctx["power"],
+                material_cfg=ctx["material_cfg"],
+                process_config=ctx["process_config"],
                 run_cfg=run_cfg,
             ),
         )
         recipe.validate(strict=True)
         return recipe
     
+    def _to_float(self, value: Any, field_name: str) -> float:
+        try:
+            return float(value or 0.0)
+        except Exception:
+            raise ValueError(f"{field_name} 값 변환에 실패했습니다.")
+
     def _extract_material_config(self, run_cfg: dict[str, Any]) -> dict[str, Any]:
         material = str(run_cfg.get("material_name", "")).strip()
         if not material:
             raise ValueError("material_name은 필수입니다.")
 
-        density = float(run_cfg.get("density", 0.0) or 0.0)
-        z_factor = float(run_cfg.get("z_factor", 0.0) or 0.0)
+        density = self._to_float(run_cfg.get("density", 0.0), "density")
+        z_factor = self._to_float(run_cfg.get("z_factor", 0.0), "z_factor")
         if density <= 0 or z_factor <= 0:
             raise ValueError("density / z_factor 값이 올바르지 않습니다. (0보다 커야 함)")
 
-        target_rate = float(run_cfg.get("target_rate", 0.0) or 0.0)
+        target_rate = self._to_float(run_cfg.get("target_rate", 0.0), "target_rate")
         if target_rate <= 0:
             raise ValueError("target_rate(목표 Dep.rate)는 0보다 커야 합니다.")
 
-        target_thickness = float(run_cfg.get("target_thickness", 0.0) or 0.0)
-        delay_min = float(run_cfg.get("delay_min", 0.0) or 0.0)
+        target_thickness = self._to_float(run_cfg.get("target_thickness", 0.0), "target_thickness")
+        delay_min = self._to_float(run_cfg.get("delay_min", 0.0), "delay_min")
 
         if target_thickness <= 0:
             raise ValueError("target_thickness는 0보다 커야 합니다.")
@@ -431,7 +453,7 @@ class ProcessController(QObject):
             "last_step_target_adc": last_step_adc,
         }
     
-    def _build_base_evap_meta(
+    def _build_runtime_evap_meta(
         self,
         run_cfg: dict[str, Any],
         *,
@@ -496,6 +518,11 @@ class ProcessController(QObject):
             "wait_after_ftm_on_s": 1.5,
 
             "adc_control_mode": str(run_cfg.get("adc_control_mode", "adc") or "adc"),
+
+            # NOTE:
+            # engine.py가 아직 확인되지 않았기 때문에,
+            # process_config 중첩 구조와 top-level 호환 키를 둘 다 유지한다.
+            # engine의 실제 소비 키를 확인한 뒤 한쪽으로 정리할 예정.
             "process_config": {
                 "step_count": process_config["step_count"],
                 "ramp_steps": process_config["ramp_steps"],
@@ -503,6 +530,8 @@ class ProcessController(QObject):
                 "after_last_step_policy": process_config["after_last_step_policy"],
                 "extra_ramp": dict(process_config["extra_ramp"]),
             },
+
+            # backward-compatible top-level aliases
             "ramp_steps": process_config["ramp_steps"],
             "step_count": process_config["step_count"],
             "reach_main_on_rate": process_config["reach_main_on_rate"],

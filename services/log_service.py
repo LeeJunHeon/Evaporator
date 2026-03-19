@@ -173,6 +173,7 @@ class LogWriterWorker(QThread):
         self._run_id: str = ""
         self._run_recipe: str = ""
         self._run_open_ts: float = 0.0
+        self._run_meta: Dict[str, Any] = {}
 
         # ProcessLog CSV 컬럼
         # - DAC/ADC 둘 다 저장
@@ -194,6 +195,54 @@ class LogWriterWorker(QThread):
         # ✅ NAS 복구 감지 주기(초)
         self._last_migrate_check_ts = 0.0
         self._migrate_interval_s = 5.0
+
+    def _tele_header_line(self) -> str:
+        return ",".join(self._tele_fieldnames)
+    
+    def _write_csv_preamble(self) -> None:
+        if self._tele_fp is None:
+            return
+
+        try:
+            if self._tele_fp.tell() != 0:
+                return
+        except Exception:
+            return
+
+        meta_map: Dict[str, Any] = {
+            "run_id": self._run_id,
+            "recipe_name": self._run_recipe,
+            "opened_at": _dt_str(self._run_open_ts if self._run_open_ts > 0 else None),
+        }
+
+        for k, v in (self._run_meta or {}).items():
+            if k not in meta_map:
+                meta_map[k] = v
+
+        self._tele_fp.write("# EVAP_RUN_META\n")
+        for k, v in meta_map.items():
+            if isinstance(v, (dict, list, tuple, bool)) or v is None:
+                val = json.dumps(v, ensure_ascii=False)
+            else:
+                val = str(v)
+            self._tele_fp.write(f"# {k}={val}\n")
+
+        self._tele_fp.write("\n")
+
+    def _prepare_new_tele_file_if_empty(self) -> None:
+        if self._tele_fp is None:
+            return
+
+        try:
+            if self._tele_fp.tell() != 0:
+                return
+        except Exception:
+            return
+
+        self._write_csv_preamble()
+        self._tele_writer = csv.DictWriter(self._tele_fp, fieldnames=self._tele_fieldnames)
+        self._tele_writer.writeheader()
+        self._tele_fp.flush()
 
     # ---------- public ----------
     def post(self, cmd: _CmdBase) -> None:
@@ -349,9 +398,6 @@ class LogWriterWorker(QThread):
         fb_csv = self._proc_dir(self._fallback_dir) / f"{file_stem}.csv"
         nas_csv = self._proc_dir(self._base_dir) / f"{file_stem}.csv"
 
-        fb_meta = self._proc_dir(self._fallback_dir) / f"{file_stem}.meta.json"
-        nas_meta = self._proc_dir(self._base_dir) / f"{file_stem}.meta.json"
-
         if reopen_after:
             try:
                 if self._run_log_fp:
@@ -381,10 +427,6 @@ class LogWriterWorker(QThread):
                 self._merge_csv_file(fb_csv, nas_csv)
                 fb_csv.unlink(missing_ok=True)
 
-            if fb_meta.exists():
-                self._merge_meta_json(fb_meta, nas_meta)
-                fb_meta.unlink(missing_ok=True)
-
             if reopen_after:
                 _ensure_dir(nas_run.parent)
                 _ensure_dir(nas_csv.parent)
@@ -396,6 +438,7 @@ class LogWriterWorker(QThread):
                 self._tele_path = nas_csv
                 self._tele_fp = open(nas_csv, "a", encoding="utf-8-sig", newline="")
                 self._tele_writer = None
+                self._prepare_new_tele_file_if_empty()
 
             return True
 
@@ -419,7 +462,6 @@ class LogWriterWorker(QThread):
         fallback 디렉터리에 남아 있는 '닫힌 run' 파일 stem 수집.
         - ProcessWindowLog/*.log
         - ProcessLog/*.csv
-        - ProcessLog/*.meta.json
         현재 열려 있는 fallback run stem은 제외
         """
         stems: set[str] = set()
@@ -431,8 +473,6 @@ class LogWriterWorker(QThread):
         proc_dir = self._proc_dir(self._fallback_dir)
         if proc_dir.exists():
             stems.update(p.stem for p in proc_dir.glob("*.csv"))
-            for p in proc_dir.glob("*.meta.json"):
-                stems.add(p.name[:-len(".meta.json")])
 
         # 현재 열린 fallback run은 별도 migrate 경로에서 처리
         if self._run_open and self._run_dir == self._fallback_dir and self._run_folder_name:
@@ -455,55 +495,35 @@ class LogWriterWorker(QThread):
 
         _ensure_dir(dst.parent)
 
-        expected_header = ",".join(self._tele_fieldnames)
-        nas_has_data = dst.exists() and dst.stat().st_size > 0
-
-        with open(src, "r", encoding="utf-8-sig", errors="replace") as rf, \
-             open(dst, "a", encoding="utf-8-sig", newline="") as wf:
-            first = rf.readline()
-            if not (nas_has_data and first.strip() == expected_header):
-                wf.write(first)
-            wf.write(rf.read())
-
-    def _merge_meta_json(self, src: Path, dst: Path) -> None:
-        """
-        fallback meta.json을 NAS meta.json으로 복구.
-        - NAS 파일이 없으면 그대로 복사
-        - 둘 다 있으면 dict merge (기존 NAS 값 우선)
-        """
-        if not src.exists():
-            return
-
-        _ensure_dir(dst.parent)
-
-        if not dst.exists() or dst.stat().st_size == 0:
-            with open(src, "r", encoding="utf-8", errors="replace") as rf, \
-                 open(dst, "w", encoding="utf-8") as wf:
+        # dst가 비어 있으면 src 전체를 그대로 복사
+        if (not dst.exists()) or dst.stat().st_size == 0:
+            with open(src, "r", encoding="utf-8-sig", errors="replace") as rf, \
+                 open(dst, "w", encoding="utf-8-sig", newline="") as wf:
                 wf.write(rf.read())
             return
 
-        try:
-            with open(dst, "r", encoding="utf-8", errors="replace") as rf:
-                nas_obj = json.load(rf)
-        except Exception:
-            nas_obj = {}
+        # dst가 이미 있으면 src의 preamble/header는 건너뛰고 data row만 append
+        with open(src, "r", encoding="utf-8-sig", errors="replace") as rf:
+            lines = rf.readlines()
 
-        try:
-            with open(src, "r", encoding="utf-8", errors="replace") as rf:
-                fb_obj = json.load(rf)
-        except Exception:
-            fb_obj = {}
+        header_line = self._tele_header_line()
+        header_idx = None
+        for i, line in enumerate(lines):
+            if line.strip() == header_line:
+                header_idx = i
+                break
 
-        if not isinstance(nas_obj, dict):
-            nas_obj = {}
-        if not isinstance(fb_obj, dict):
-            fb_obj = {}
+        if header_idx is None:
+            # 혹시 구버전 csv라면 전체 append
+            append_lines = lines
+        else:
+            append_lines = lines[header_idx + 1:]
 
-        merged = dict(fb_obj)
-        merged.update(nas_obj)  # NAS 값 우선
+        if not append_lines:
+            return
 
-        with open(dst, "w", encoding="utf-8") as wf:
-            json.dump(merged, wf, ensure_ascii=False, indent=2)
+        with open(dst, "a", encoding="utf-8-sig", newline="") as wf:
+            wf.writelines(append_lines)
 
     def _open_run(self, run_id: str, recipe_name: str, meta: Dict[str, Any], ts: Optional[float]) -> None:
         """
@@ -521,6 +541,7 @@ class LogWriterWorker(QThread):
         self._run_recipe = recipe_name
         self._run_open_ts = _now_ts(ts)
         self._run_folder_name = file_stem
+        self._run_meta = dict(meta or {})
 
         last_err = None
         chosen_root: Optional[Path] = None
@@ -574,14 +595,10 @@ class LogWriterWorker(QThread):
 
         self._run_open = True
 
-        # (선택) meta 저장 (ProcessLog 폴더에 같이)
-        if meta:
-            try:
-                meta_p = self._proc_dir(chosen_root) / f"{file_stem}.meta.json"
-                with open(meta_p, "w", encoding="utf-8") as wf:
-                    json.dump(meta, wf, ensure_ascii=False, indent=2)
-            except Exception:
-                pass
+        try:
+            self._prepare_new_tele_file_if_empty()
+        except Exception:
+            pass
 
         # RUN OPEN은 “일별 로그”에 기록(디버깅용)
         self._write_log("INFO", f"RUN OPEN -> {file_stem}", "LogService", True, ts)
@@ -612,6 +629,7 @@ class LogWriterWorker(QThread):
         self._run_open = False
         self._run_dir = None
         self._run_folder_name = ""
+        self._run_meta = {}
 
     def _close_all(self) -> None:
         self._close_run()
@@ -784,6 +802,8 @@ class LogWriterWorker(QThread):
                 self._tele_path = tele_p
                 self._tele_fp = tele_fp
                 self._tele_writer = None
+
+                self._prepare_new_tele_file_if_empty()
                 return
             except Exception as e:
                 last_err = e
@@ -819,6 +839,15 @@ class LogWriterWorker(QThread):
             row2["pressure_torr"] = row2.get("pressure")
         if "dep.rate" not in row2 and "rate_Aps" in row2:
             row2["dep.rate"] = row2.get("rate_Aps")
+
+        dep_rate_val = row2.get("dep.rate", None)
+        try:
+            if dep_rate_val is not None:
+                dep_rate_f = float(dep_rate_val)
+                if math.isnan(dep_rate_f) or math.isinf(dep_rate_f) or dep_rate_f < 0:
+                    row2["dep.rate"] = None
+        except Exception:
+            pass
 
         row2.setdefault("pressure_torr", "")
         row2.setdefault("dac1", "")
@@ -876,15 +905,10 @@ class LogWriterWorker(QThread):
             return False
 
         if self._tele_writer is None:
-            self._tele_writer = csv.DictWriter(self._tele_fp, fieldnames=self._tele_fieldnames)
-            try:
-                if self._tele_fp.tell() == 0:
-                    self._tele_writer.writeheader()
-            except Exception:
-                try:
-                    self._tele_writer.writeheader()
-                except Exception:
-                    pass
+            self._prepare_new_tele_file_if_empty()
+
+            if self._tele_writer is None:
+                self._tele_writer = csv.DictWriter(self._tele_fp, fieldnames=self._tele_fieldnames)
 
         return True
 

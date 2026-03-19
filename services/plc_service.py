@@ -611,26 +611,20 @@ class PlcServiceWorker(QThread):
         cls,
         raw: int,
         *,
-        deadband_raw: int = 20,
         scale: float = 0.1,
     ) -> float:
         """
         ADC readback 표시용 보정.
         - unsigned -> signed 변환
-        - 0 근처 작은 노이즈는 0 처리
         - 음수는 0 처리
         - 정상값은 scale 적용 후 소수점 1자리 표시
 
         예:
             65525 -> -11 -> 0.0
-            11    -> 0.0
+            11    -> 1.1
             1000  -> 100.0
         """
         signed = cls._u16_to_i16(raw)
-
-        # 0 근처 노이즈 제거
-        if abs(signed) <= int(deadband_raw):
-            return 0.0
 
         # 음수값은 표시상 의미 없으므로 0 처리
         if signed < 0:
@@ -642,7 +636,7 @@ class PlcServiceWorker(QThread):
         """
         EV에서 필요한 레지스터:
         - DAC set 값 2개 (정수 그대로 유지)
-        - ADC readback 값 2개 (노이즈 제거 + 표시용 스케일 적용)
+        - ADC readback 값 2개 (signed 보정 + 0.1 스케일 적용)
         - 실패를 조용히 숨기지 않고, 루프 예외로 올려 끊김 감지/재연결 흐름에 태운다.
         """
         out: Dict[str, RegValue] = {}
@@ -657,12 +651,10 @@ class PlcServiceWorker(QThread):
 
         out["POWER_READ_1"] = self._sanitize_and_scale_power_read(
             raw1,
-            deadband_raw=20,
             scale=0.1,
         )
         out["POWER_READ_2"] = self._sanitize_and_scale_power_read(
             raw2,
-            deadband_raw=20,
             scale=0.1,
         )
 
@@ -713,9 +705,6 @@ class PlcServiceWorker(QThread):
     # -------------------------------
     def get_last_snapshot(self) -> Optional[PLCSnapshot]:
         return self._last_snapshot
-    
-    def is_connected(self) -> bool:
-        return bool(self._connected)
 
 
 # ============================================================

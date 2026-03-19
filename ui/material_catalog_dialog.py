@@ -45,17 +45,6 @@ def _to_float(v: Any, default: float = 0.0) -> float:
         return float(default)
 
 
-def _to_int(v: Any, default: int = 0) -> int:
-    try:
-        s = _to_str(v)
-        if not s:
-            return int(default)
-        s = s.replace("*", "").strip()
-        return int(float(s))
-    except Exception:
-        return int(default)
-
-
 _COLS = [
     ("Material", "material", "str", "물질 이름 (예: Al, Au, SiO2)"),
     ("Density (g/cm³)", "density_g_cm3", "float>0", "필수. 0보다 커야 함"),
@@ -232,7 +221,6 @@ class MaterialCatalogDialog(QDialog):
 
     def _collect_rows(self) -> Optional[list[MaterialRow]]:
         mats: list[MaterialRow] = []
-        _DEF = MaterialRow(material="_", density_g_cm3=1.0, z_factor=1.0, note="")
 
         def cell(r: int, c: int) -> str:
             it = self.table.item(r, c)
@@ -269,32 +257,6 @@ class MaterialCatalogDialog(QDialog):
                 _fail(row_idx, col_idx, f"{row_idx+1}행({field}): nan/inf 는 허용되지 않습니다.")
                 raise ValueError
             return v
-
-        def _parse_int_cell(row_idx: int, col_idx: int, field: str, default: int, *, allow_blank_default: bool) -> int:
-            raw = _to_str(cell(row_idx, col_idx))
-            if raw == "":
-                if allow_blank_default:
-                    return int(default)
-                _fail(row_idx, col_idx, f"{row_idx+1}행({field}): 값이 비어있습니다.")
-                raise ValueError
-
-            s = raw.replace("*", "").strip()
-            try:
-                fv = float(s)
-            except Exception:
-                _fail(row_idx, col_idx, f"{row_idx+1}행({field}): '{raw}' 는 정수가 아닙니다.")
-                raise ValueError
-
-            if not math.isfinite(fv):
-                _fail(row_idx, col_idx, f"{row_idx+1}행({field}): nan/inf 는 허용되지 않습니다.")
-                raise ValueError
-
-            iv = int(round(fv))
-            if abs(fv - iv) > 1e-9:
-                _fail(row_idx, col_idx, f"{row_idx+1}행({field}): 정수만 입력 가능합니다. (입력값: '{raw}')")
-                raise ValueError
-
-            return iv
 
         for r in range(self.table.rowCount()):
             try:

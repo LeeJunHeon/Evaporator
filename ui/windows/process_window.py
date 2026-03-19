@@ -101,7 +101,6 @@ class ProcessWindow(QWidget):
         self.ui.stackedWidget.setCurrentIndex(1)  # Process page
 
         self.hmi_window: Optional[HmiWindow] = None
-        self._closing_all = False
         self._close_stop_guard = False   # ✅ closeEvent에서 stop 중복 실행 방지
 
         self._process_controller: Any = None
@@ -601,7 +600,7 @@ class ProcessWindow(QWidget):
 
         except Exception as e:
             with contextlib.suppress(Exception):
-                self._safe_shutdown_plc_best_effort()
+                self._emergency_safe_shutdown_plc_best_effort()
             with contextlib.suppress(Exception):
                 self._rt_stop()
             with contextlib.suppress(Exception):
@@ -617,32 +616,22 @@ class ProcessWindow(QWidget):
             return
             
     def _on_stop_clicked(self) -> None:
+        pc = self._process_controller
+
+        # 1) 엔진/컨트롤러가 살아 있으면 "정지 요청"만 보낸다.
+        if pc is not None:
+            try:
+                pc.stop()
+                _append_text(self.ui.logWindow, "[UI] 공정 정지 요청 -> engine safety shutdown 대기")
+                return
+            except Exception as e:
+                _append_text(self.ui.logWindow, f"[STOP FAIL] controller stop failed: {e!r}")
+
+        # 2) controller 자체가 없거나 stop 요청이 실패한 경우에만 emergency fallback
         try:
-            # ✅ 1) 제일 먼저 하드웨어 안전종료(셔터→DAC0→파워OFF)
-            self._safe_shutdown_plc_best_effort()
-
-            # ✅ 2) 그 다음 UI RT 멈춤
-            self._rt_stop()
-
-            # ✅ 3) 공정 로직 stop
-            pc = self._process_controller
-            if pc is not None:
-                try:
-                    pc.stop()
-                    _append_text(self.ui.logWindow, "[UI] 공정 정지 요청")
-                except Exception as e:
-                    _append_text(self.ui.logWindow, f"[STOP FAIL] {e!r}")
-
-            # ✅ 4) Stop에서 STM/ACS 끊고 메모리 해제
-            self._shutdown_sensors_and_release_memory()
-
-            # ✅ UI 초기화
-            self._reset_process_ui()
-
-        finally:
-            # ✅ run close는 ProcessController/Engine이 담당
-            self._active_run_id = None
-            self._active_recipe_name = ""
+            self._emergency_safe_shutdown_plc_best_effort()
+        except Exception as e:
+            _append_text(self.ui.logWindow, f"[SAFE][FAIL] emergency shutdown failed: {e!r}")
 
     def _on_pause_clicked(self) -> None:
         pc = self._process_controller
@@ -791,32 +780,31 @@ class ProcessWindow(QWidget):
 
     def _on_finished(self, result: Any) -> None:
         try:
-            # ✅ UI RT 정지
+            # 1) worker가 끝났으니 이제 RT 정지
             with contextlib.suppress(Exception):
                 self._rt_stop()
 
-            # ✅ 운영 안전: best-effort 안전정지
-            with contextlib.suppress(Exception):
-                self._safe_shutdown_plc_best_effort()
+            # 2) 여기서는 PLC 종료를 직접 하지 않는다.
+            #    stop/error 경로의 safety shutdown은 engine.py가 이미 담당한다.
 
-            # ✅ 센서/메모리 정리
+            # 3) worker 종료 후에만 센서/메모리 정리
             with contextlib.suppress(Exception):
                 self._shutdown_sensors_and_release_memory()
 
-            # ✅ finished 로그(파일에 남기기 위해 close_run 전에 출력)
             try:
                 ok = bool(getattr(result, "ok", False))
                 rid = getattr(result, "run_id", "")
-                _append_text(getattr(self.ui, "logWindow", None), f"[FINISHED] ok={ok} run_id={rid}")
+                _append_text(
+                    getattr(self.ui, "logWindow", None),
+                    f"[FINISHED] ok={ok} run_id={rid}"
+                )
             except Exception:
                 _append_text(getattr(self.ui, "logWindow", None), "[FINISHED]")
 
         finally:
-            # ✅ run close는 ProcessController/Engine이 담당
             self._active_run_id = None
             self._active_recipe_name = ""
 
-            # ✅ 성공/실패/예외 상관없이 UI 초기화 보장
             with contextlib.suppress(Exception):
                 self._reset_process_ui()
 
@@ -848,9 +836,32 @@ class ProcessWindow(QWidget):
             time.sleep(0.05)
 
         return False
+    
+    def _estimate_stop_wait_timeout_s(self) -> float:
+        """
+        closeEvent에서 stop 요청 후 얼마나 기다릴지 계산.
+        engine shutdown ramp 기준:
+        - 1초마다 100 감소
+        - max(dac1, dac2) 기준으로 대기시간 추정
+        - 여유 버퍼 추가
+        """
+        dac1 = 0.0
+        dac2 = 0.0
+
+        try:
+            d1, d2 = self._read_plc_power_dac_pair()
+            dac1 = float(d1 or 0.0)
+            dac2 = float(d2 or 0.0)
+        except Exception:
+            pass
+
+        max_dac = max(dac1, dac2, 0.0)
+        ramp_s = max_dac / 100.0   # 1초에 100 감소 기준
+        timeout_s = ramp_s + 5.0   # 버퍼 5초
+        return max(3.0, min(timeout_s, 30.0))
 
     def closeEvent(self, event):
-        # ✅ Process 창 닫기(X) = Stop 버튼과 동일하게 동작
+        # Process 창 닫기(X) = stop 요청 후 worker 종료 대기
         if not getattr(self, "_close_stop_guard", False):
             self._close_stop_guard = True
             try:
@@ -858,22 +869,28 @@ class ProcessWindow(QWidget):
             except Exception:
                 pass
 
+        timeout_s = 3.0
+        try:
+            timeout_s = self._estimate_stop_wait_timeout_s()
+        except Exception:
+            timeout_s = 8.0
+
         stopped = True
         try:
-            stopped = self._wait_process_stop(timeout_s=3.0)
+            stopped = self._wait_process_stop(timeout_s=timeout_s)
         except Exception:
             stopped = True
 
         if not stopped:
             _append_text(
                 getattr(self.ui, "logWindow", None),
-                "[UI][WARN] Process stop wait timeout -> close canceled"
+                f"[UI][WARN] Process stop wait timeout ({timeout_s:.1f}s) -> close canceled"
             )
             QMessageBox.warning(
                 self,
                 "Process",
                 "공정 정지 완료를 아직 확인하지 못했습니다.\n"
-                "잠시 후 다시 닫아주세요."
+                "DAC ramp-down 종료 후 다시 닫아주세요."
             )
             self._close_stop_guard = False
             event.ignore()
@@ -881,7 +898,7 @@ class ProcessWindow(QWidget):
 
         _append_text(
             getattr(self.ui, "logWindow", None),
-            "[UI] Process window closed -> SAFE STOP confirmed"
+            "[UI] Process window closed -> engine stop finished"
         )
 
         if self.hmi_window is not None:
@@ -1577,12 +1594,11 @@ class ProcessWindow(QWidget):
     # ================== UI 값 파싱 ==================
 
     # ================== 공정 종료 함수 ==================
-    def _safe_shutdown_plc_best_effort(self) -> None:
+    def _emergency_safe_shutdown_plc_best_effort(self) -> None:
         """
-        Stop 시 안전종료 순서:
-        1) MAIN_SHUTTER close
-        2) DAC 0
-        3) POWER off
+        비상 fallback 전용 PLC 종료.
+        정상 Stop/Abort/Error 종료는 engine.py 의 safety shutdown 경로가 담당한다.
+        이 함수는 controller/worker stop 요청이 불가능할 때만 사용한다.
         """
         if self.hmi_window is None:
             return

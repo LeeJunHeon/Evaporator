@@ -630,8 +630,21 @@ class ProcessWindow(QWidget):
         # 2) controller 자체가 없거나 stop 요청이 실패한 경우에만 emergency fallback
         try:
             self._emergency_safe_shutdown_plc_best_effort()
+            _append_text(self.ui.logWindow, "[SAFE] emergency fallback shutdown executed")
         except Exception as e:
             _append_text(self.ui.logWindow, f"[SAFE][FAIL] emergency shutdown failed: {e!r}")
+
+        # 3) fallback 경로에서는 sig_finished 를 기대할 수 없으므로
+        #    UI/센서 정리를 여기서 직접 마무리한다.
+        with contextlib.suppress(Exception):
+            self._rt_stop()
+        with contextlib.suppress(Exception):
+            self._shutdown_sensors_and_release_memory()
+        with contextlib.suppress(Exception):
+            self._reset_process_ui()
+
+        self._active_run_id = None
+        self._active_recipe_name = ""
 
     def _on_pause_clicked(self) -> None:
         pc = self._process_controller

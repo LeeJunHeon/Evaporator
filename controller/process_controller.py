@@ -781,25 +781,6 @@ class ProcessController(QObject):
         self._worker = None
         self._ui_info("공정 스레드 종료")
 
-    def _csv_event(self, *, event: str, target: str, value: Any = "", detail: str = "") -> None:
-        """
-        공정 CSV(telemetry)에 이벤트 1줄 추가.
-        - 공정이 실행 중일 때만 의미가 있음(=run open 상태에서만 기록됨)
-        """
-        if not self.is_running():
-            return
-        try:
-            line = f"{str(event)} {str(target)}={value}"
-            if detail:
-                line += f" | {str(detail)}"
-
-            self.log.telemetry({
-                "step": f"CTRL:{event}",
-                "detail": line,
-            })
-        except Exception:
-            pass
-
     def _on_plc_cmd_trace(self, obj: object) -> None:
         try:
             d = dict(obj or {})

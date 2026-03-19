@@ -5,7 +5,6 @@
       "material": "Al",
       "density_g_cm3": 2.7,
       "z_factor": 1.08,
-      "note": "INFICON 매뉴얼의 주석: 재료에 대한 Z-ratio가 라이브러리에 없으면 1.000을 기본값으로 넣어라고 돼 있어서 Ge는 1.000으로 썼습니다. 실제로는 Ge의 음향 임피던스 값을 알면 8.83으로 나눠서 더 정확하게 넣을 수 있습니다.",
       "ramp_step_dac": 100,
       "ramp_seg1_max_dac": 700,
       "ramp_interval_seg1_s": 10.0,
@@ -24,13 +23,13 @@
       "fine_step_dac": 10,
       "material_shortage_dac": 2000,
       "material_shortage_rate_max": 0.0,
-      "material_shortage_time_s": 10.0
+      "material_shortage_time_s": 10.0,
+      "note": "INFICON 매뉴얼의 주석: 재료에 대한 Z-ratio가 라이브러리에 없으면 1.000을 기본값으로 넣어라고 돼 있어서 Ge는 1.000으로 썼습니다. 실제로는 Ge의 음향 임피던스 값을 알면 8.83으로 나눠서 더 정확하게 넣을 수 있습니다."
     },
     {
       "material": "Au",
       "density_g_cm3": 19.3,
       "z_factor": 0.381,
-      "note": "",
       "ramp_step_dac": 100,
       "ramp_seg1_max_dac": 700,
       "ramp_interval_seg1_s": 10.0,
@@ -49,13 +48,13 @@
       "fine_step_dac": 10,
       "material_shortage_dac": 2000,
       "material_shortage_rate_max": 0.0,
-      "material_shortage_time_s": 10.0
+      "material_shortage_time_s": 10.0,
+      "note": ""
     },
     {
       "material": "Ag",
       "density_g_cm3": 10.5,
       "z_factor": 0.529,
-      "note": "위 숫자들은 QCM(Quartz Crystal Monitor) 컨트롤러용 재료 라이브러리 값이라서, 네 열증착기에서 쓰는 인피콘/동등 컨트롤러에 그대로 넣어도 되는 수준",
       "ramp_step_dac": 100,
       "ramp_seg1_max_dac": 700,
       "ramp_interval_seg1_s": 10.0,
@@ -74,13 +73,13 @@
       "fine_step_dac": 10,
       "material_shortage_dac": 2000,
       "material_shortage_rate_max": 0.0,
-      "material_shortage_time_s": 10.0
+      "material_shortage_time_s": 10.0,
+      "note": "위 숫자들은 QCM(Quartz Crystal Monitor) 컨트롤러용 재료 라이브러리 값이라서, 네 열증착기에서 쓰는 인피콘/동등 컨트롤러에 그대로 넣어도 되는 수준"
     },
     {
       "material": "Cu",
       "density_g_cm3": 8.93,
       "z_factor": 0.437,
-      "note": "",
       "ramp_step_dac": 100,
       "ramp_seg1_max_dac": 700,
       "ramp_interval_seg1_s": 10.0,
@@ -99,13 +98,13 @@
       "fine_step_dac": 10,
       "material_shortage_dac": 2000,
       "material_shortage_rate_max": 0.0,
-      "material_shortage_time_s": 10.0
+      "material_shortage_time_s": 10.0,
+      "note": ""
     },
     {
       "material": "Cr",
       "density_g_cm3": 7.2,
       "z_factor": 0.305,
-      "note": "Ge만 라이브러리에 없어서 1.000으로 적었고, 이 경우 실제 두께가 약간 벗어날 수 있어요. 한 번 증착해서 실측 두께(예: 프로파일러, 엘립소미터)로 맞춰서 Z를 역산하면 더 정확해집니다.",
       "ramp_step_dac": 100,
       "ramp_seg1_max_dac": 700,
       "ramp_interval_seg1_s": 10.0,
@@ -124,13 +123,13 @@
       "fine_step_dac": 10,
       "material_shortage_dac": 2000,
       "material_shortage_rate_max": 0.0,
-      "material_shortage_time_s": 10.0
+      "material_shortage_time_s": 10.0,
+      "note": "Ge만 라이브러리에 없어서 1.000으로 적었고, 이 경우 실제 두께가 약간 벗어날 수 있어요. 한 번 증착해서 실측 두께(예: 프로파일러, 엘립소미터)로 맞춰서 Z를 역산하면 더 정확해집니다."
     },
     {
       "material": "Ni",
       "density_g_cm3": 8.91,
       "z_factor": 0.331,
-      "note": "",
       "ramp_step_dac": 100,
       "ramp_seg1_max_dac": 700,
       "ramp_interval_seg1_s": 10.0,
@@ -149,13 +148,13 @@
       "fine_step_dac": 10,
       "material_shortage_dac": 2000,
       "material_shortage_rate_max": 0.0,
-      "material_shortage_time_s": 10.0
+      "material_shortage_time_s": 10.0,
+      "note": ""
     },
     {
       "material": "Sn",
       "density_g_cm3": 7.3,
       "z_factor": 0.724,
-      "note": "나중에 다른 금속(예: Co, Fe)을 추가하면 위 매뉴얼 Appendix A 같은 방식으로 같은 표에 바로 붙이면 됩니다.",
       "ramp_step_dac": 100,
       "ramp_seg1_max_dac": 700,
       "ramp_interval_seg1_s": 10.0,
@@ -174,13 +173,13 @@
       "fine_step_dac": 10,
       "material_shortage_dac": 2000,
       "material_shortage_rate_max": 0.0,
-      "material_shortage_time_s": 10.0
+      "material_shortage_time_s": 10.0,
+      "note": "나중에 다른 금속(예: Co, Fe)을 추가하면 위 매뉴얼 Appendix A 같은 방식으로 같은 표에 바로 붙이면 됩니다."
     },
     {
       "material": "In",
       "density_g_cm3": 7.3,
       "z_factor": 0.841,
-      "note": "",
       "ramp_step_dac": 100,
       "ramp_seg1_max_dac": 700,
       "ramp_interval_seg1_s": 10.0,
@@ -199,13 +198,13 @@
       "fine_step_dac": 10,
       "material_shortage_dac": 2000,
       "material_shortage_rate_max": 0.0,
-      "material_shortage_time_s": 10.0
+      "material_shortage_time_s": 10.0,
+      "note": ""
     },
     {
       "material": "Pb",
       "density_g_cm3": 11.3,
       "z_factor": 1.13,
-      "note": "",
       "ramp_step_dac": 100,
       "ramp_seg1_max_dac": 700,
       "ramp_interval_seg1_s": 10.0,
@@ -224,13 +223,13 @@
       "fine_step_dac": 10,
       "material_shortage_dac": 2000,
       "material_shortage_rate_max": 0.0,
-      "material_shortage_time_s": 10.0
+      "material_shortage_time_s": 10.0,
+      "note": ""
     },
     {
       "material": "Bi",
       "density_g_cm3": 9.8,
       "z_factor": 0.79,
-      "note": "",
       "ramp_step_dac": 100,
       "ramp_seg1_max_dac": 700,
       "ramp_interval_seg1_s": 10.0,
@@ -249,13 +248,13 @@
       "fine_step_dac": 10,
       "material_shortage_dac": 2000,
       "material_shortage_rate_max": 0.0,
-      "material_shortage_time_s": 10.0
+      "material_shortage_time_s": 10.0,
+      "note": ""
     },
     {
       "material": "Zn",
       "density_g_cm3": 7.04,
       "z_factor": 0.514,
-      "note": "",
       "ramp_step_dac": 100,
       "ramp_seg1_max_dac": 700,
       "ramp_interval_seg1_s": 10.0,
@@ -274,13 +273,13 @@
       "fine_step_dac": 10,
       "material_shortage_dac": 2000,
       "material_shortage_rate_max": 0.0,
-      "material_shortage_time_s": 10.0
+      "material_shortage_time_s": 10.0,
+      "note": ""
     },
     {
       "material": "Pd",
       "density_g_cm3": 12.038,
       "z_factor": 0.357,
-      "note": "",
       "ramp_step_dac": 100,
       "ramp_seg1_max_dac": 700,
       "ramp_interval_seg1_s": 10.0,
@@ -299,13 +298,13 @@
       "fine_step_dac": 10,
       "material_shortage_dac": 2000,
       "material_shortage_rate_max": 0.0,
-      "material_shortage_time_s": 10.0
+      "material_shortage_time_s": 10.0,
+      "note": ""
     },
     {
       "material": "Pt",
       "density_g_cm3": 21.4,
       "z_factor": 0.245,
-      "note": "",
       "ramp_step_dac": 100,
       "ramp_seg1_max_dac": 700,
       "ramp_interval_seg1_s": 10.0,
@@ -324,13 +323,13 @@
       "fine_step_dac": 10,
       "material_shortage_dac": 2000,
       "material_shortage_rate_max": 0.0,
-      "material_shortage_time_s": 10.0
+      "material_shortage_time_s": 10.0,
+      "note": ""
     },
     {
       "material": "Se",
       "density_g_cm3": 4.81,
       "z_factor": 0.864,
-      "note": "",
       "ramp_step_dac": 100,
       "ramp_seg1_max_dac": 700,
       "ramp_interval_seg1_s": 10.0,
@@ -349,13 +348,13 @@
       "fine_step_dac": 10,
       "material_shortage_dac": 2000,
       "material_shortage_rate_max": 0.0,
-      "material_shortage_time_s": 10.0
+      "material_shortage_time_s": 10.0,
+      "note": ""
     },
     {
       "material": "Te",
       "density_g_cm3": 6.25,
       "z_factor": 0.9,
-      "note": "",
       "ramp_step_dac": 100,
       "ramp_seg1_max_dac": 700,
       "ramp_interval_seg1_s": 10.0,
@@ -374,13 +373,13 @@
       "fine_step_dac": 10,
       "material_shortage_dac": 2000,
       "material_shortage_rate_max": 0.0,
-      "material_shortage_time_s": 10.0
+      "material_shortage_time_s": 10.0,
+      "note": ""
     },
     {
       "material": "Ge",
       "density_g_cm3": 5.323,
       "z_factor": 1.0,
-      "note": "",
       "ramp_step_dac": 100,
       "ramp_seg1_max_dac": 700,
       "ramp_interval_seg1_s": 10.0,
@@ -399,7 +398,8 @@
       "fine_step_dac": 10,
       "material_shortage_dac": 2000,
       "material_shortage_rate_max": 0.0,
-      "material_shortage_time_s": 10.0
+      "material_shortage_time_s": 10.0,
+      "note": ""
     }
   ]
 }

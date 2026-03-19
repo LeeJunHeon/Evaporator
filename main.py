@@ -73,7 +73,6 @@ def main():
     # ✅ PLC 연결/버튼 팝업/원복 로직은 HmiPlcBinder가 계속 담당 (그대로 유지)
     plc_binder = HmiPlcBinder(hmi.ui, plc_settings)
     plc_binder.start()
-    app.aboutToQuit.connect(plc_binder.stop)
 
     # ✅ HMI 로그는 PLC binder가 찍는 포맷([HH:MM:SS] ...)으로 통일
     def _hmi_log(msg: object) -> None:
@@ -157,31 +156,69 @@ def main():
         process_controller = ProcessController(
             plc=getattr(plc_binder, "_plc"),
             log=log_service,
-            stm=None,          # STM은 Start에서 붙임
-            acs=acs_service,   # ✅ ACS는 부팅부터 유지
+            stm=None,
+            acs=acs_service,
             turbovac=turbovac_service,
         )
+
+        try:
+            plc_binder.set_process_controller(process_controller)
+        except Exception as e:
+            _hmi_log(f"[BOOT][WARN] set_process_controller failed: {e!r}")
     except Exception as e:
         process_controller = None
         _hmi_log(f"[BOOT][WARN] ProcessController init failed: {e!r}")
 
+    def _wait_process_controller_stop(timeout_s: float = 30.0) -> bool:
+        """
+        앱 종료 시 ProcessController가 실제로 멈출 때까지 잠깐 기다린다.
+        stop()은 '요청'만 보내는 구조이므로, 곧바로 서비스 종료하면
+        engine safety shutdown / DAC ramp-down이 중간에 끊길 수 있다.
+        """
+        if process_controller is None:
+            return True
+
+        is_running_fn = getattr(process_controller, "is_running", None)
+        if not callable(is_running_fn):
+            return True
+
+        deadline = time.monotonic() + max(0.5, float(timeout_s))
+
+        while time.monotonic() < deadline:
+            try:
+                if not bool(is_running_fn()):
+                    return True
+            except Exception:
+                return True
+
+            try:
+                app.processEvents()
+            except Exception:
+                pass
+
+            time.sleep(0.05)
+
+        return False
+
     # 종료 시 신규 서비스 정리
     def _shutdown_new_services() -> None:
+        # 1) 실행 중 공정이 있으면 먼저 stop 요청
         if process_controller is not None:
             try:
                 if process_controller.is_running():
                     process_controller.stop()
+                    _wait_process_controller_stop(timeout_s=30.0)
             except Exception:
                 pass
 
-        # ✅ 종료 시 run 파일 먼저 닫기(안전)
+        # 2) 공정 종료가 끝난 뒤 run 파일 닫기
         try:
             if log_service is not None:
                 log_service.close_run()
         except Exception:
             pass
 
-        # ✅ stop()만 시도
+        # 3) 외부 서비스 stop
         for svc in (
             getattr(hmi, "_stm_service", None),
             getattr(hmi, "_acs_service", None),
@@ -196,6 +233,13 @@ def main():
                     fn()
                 except Exception:
                     pass
+
+        # 4) 제일 마지막에 PLC binder stop
+        try:
+            if plc_binder is not None:
+                plc_binder.stop()
+        except Exception:
+            pass
 
     app.aboutToQuit.connect(_shutdown_new_services)
 

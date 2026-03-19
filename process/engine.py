@@ -26,7 +26,10 @@ import uuid
 import math
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
-from process.safety import build_engine_safe_shutdown_steps
+from process.safety import (
+    build_engine_safe_shutdown_steps,
+    build_safety_steps
+)
 from process.evap_runtime import run_evap_deposition_control
 
 from process.models import (
@@ -265,7 +268,7 @@ class ProcessEngine:
 
             # ✅ EV 안전정지 시퀀스 통일
             #    (셔터 닫기 → DAC pair ramp-down → Power off)
-            self._safe_shutdown_sequence(tag=f"STOP_{e.mode.value}")
+            self._safe_shutdown_sequence(tag=f"STOP_{e.mode.value}", mode=e.mode)
 
             self._phase = ProcessPhase.FINISHED
             self._run_line(
@@ -291,7 +294,7 @@ class ProcessEngine:
 
             # ✅ 에러 시에도 동일한 안전정지 시퀀스
             #    (셔터 닫기 → DAC pair ramp-down → Power off)
-            self._safe_shutdown_sequence(tag="ERROR_ABORT")
+            self._safe_shutdown_sequence(tag="ERROR_ABORT", mode=StopMode.ABORT)
             ok = False
 
         finally:
@@ -447,20 +450,25 @@ class ProcessEngine:
 
         raise EngineFailed(step.name, f"unsupported step type: {t}")
 
-    def _safe_shutdown_sequence(self, *, tag: str) -> None:
+    def _safe_shutdown_sequence(
+        self,
+        *,
+        tag: str,
+        mode: Optional[StopMode] = None,
+    ) -> None:
         """
         기존 engine.py의 하드코딩 안전정지 순서를 그대로 유지하되,
         실제 step 정의는 process/safety.py 에서 가져와 실행한다.
 
         순서(최신 safety plan 기준):
         1) MAIN_SHUTTER close
-        2) DAC pair ramp-down marker 해석
+        2) SHUTTER_1_SW close
+        3) SHUTTER_2_SW close
+        4) DAC pair ramp-down marker 해석
         - 현재 DAC 값에서 시작
         - step_dac 만큼 감소
         - interval_s 간격으로 반복
         - 0까지 clamp
-        3) SHUTTER_1_SW close
-        4) SHUTTER_2_SW close
         5) POWER_1_SW off
         6) POWER_2_SW off
         7) FTM_SW off
@@ -476,7 +484,10 @@ class ProcessEngine:
             return
 
         try:
-            steps = build_engine_safe_shutdown_steps()
+            if mode is None:
+                steps = build_engine_safe_shutdown_steps()
+            else:
+                steps = build_safety_steps(mode)
         except Exception as e:
             self._log_error(
                 f"[SAFETY:{tag}] build_engine_safe_shutdown_steps failed: {e!r}",
@@ -487,6 +498,22 @@ class ProcessEngine:
 
         for st in steps:
             try:
+                meta = getattr(st, "meta", None)
+                if not isinstance(meta, dict):
+                    meta = {}
+
+                action = str(
+                    (getattr(st, "action", None) or meta.get("action") or "")
+                ).strip().lower()
+
+                step_dac_raw = getattr(st, "step_dac", None)
+                if step_dac_raw is None:
+                    step_dac_raw = meta.get("step_dac", 100)
+
+                interval_s_raw = getattr(st, "interval_s", None)
+                if interval_s_raw is None:
+                    interval_s_raw = meta.get("interval_s", 1.0)
+
                 if st.type == StepType.PLC_WRITE_COIL:
                     self._plc_write_coil(
                         st.coil,
@@ -503,25 +530,23 @@ class ProcessEngine:
                         tag=f"{tag}_{st.name}",
                     )
 
-                elif st.type == StepType.MARK:
-                    action = str(getattr(st, "action", "") or "").strip().lower()
-
-                    if action == "ramp_down_dac_pair":
-                        self._run_shutdown_dac_pair_ramp_down(
-                            step_dac=int(getattr(st, "step_dac", 100) or 100),
-                            interval_s=float(getattr(st, "interval_s", 1.0) or 1.0),
-                            tag=f"{tag}_{st.name}",
-                        )
-                    else:
-                        self._log_warn(
-                            f"[SAFETY:{tag}] unsupported safety MARK action: "
-                            f"name={st.name}, action={action!r}",
-                            tag="ENGINE",
-                            also_ui=True,
-                        )
+                elif st.type in (StepType.MARK, StepType.LOG) and action == "ramp_down_dac_pair":
+                    self._run_shutdown_dac_pair_ramp_down(
+                        step_dac=int(step_dac_raw or 100),
+                        interval_s=float(interval_s_raw or 1.0),
+                        tag=f"{tag}_{st.name}",
+                    )
 
                 elif st.type == StepType.LOG:
                     self._run_line(st.message or st.name)
+
+                elif st.type == StepType.MARK:
+                    self._log_warn(
+                        f"[SAFETY:{tag}] unsupported safety MARK action: "
+                        f"name={st.name}, action={action!r}",
+                        tag="ENGINE",
+                        also_ui=True,
+                    )
 
                 else:
                     self._log_warn(

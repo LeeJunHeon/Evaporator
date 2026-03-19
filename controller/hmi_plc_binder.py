@@ -69,6 +69,7 @@ class HmiPlcBinder(QObject):
         self.ui = ui
         self.settings = settings
         self._log = log  # ✅ 공정 CSV(LogService) 주입
+        self._process_controller: Optional[object] = None
 
         # thread-safe state (다른 스레드에서도 읽을 수 있음)
         self._state_lock = threading.Lock()
@@ -230,6 +231,9 @@ class HmiPlcBinder(QObject):
         # 실제 TMP_SW가 ON이면 바로 attach하지 말고 사용자에게 먼저 묻는다.
         if self.is_ui_connected() and self.read_coil("TMP_SW", False):
             self._queue_tmp_attach_prompt(force=False)
+
+    def set_process_controller(self, pc: object | None) -> None:
+        self._process_controller = pc
 
     def _render_status_line(self) -> None:
         """상단 상태라인(processMonitor_HMI)에는 연결 상태만 표시."""
@@ -971,31 +975,43 @@ class HmiPlcBinder(QObject):
             self._set_hmi_log("[BLOCK] ALL STOP (PLC not connected)")
             self._popup_warn("PLC 미연결", "PLC가 연결되지 않아 ALL STOP을 전송할 수 없습니다.")
             return
-        
-        # ✅ ALL STOP에서는 TMP 장비 정지 + PLC TMP OFF 둘 다 수행
+
+        # 1) 공정 실행 중이면 controller/engine 종료 경로로 위임
+        pc = getattr(self, "_process_controller", None)
+        try:
+            is_running = bool(pc.is_running()) if pc is not None and hasattr(pc, "is_running") else False
+        except Exception:
+            is_running = False
+
+        if is_running and pc is not None:
+            try:
+                pc.stop()
+                self._set_hmi_log("[UI] ALL STOP -> delegated to process_controller.stop()")
+                return
+            except Exception as e:
+                self._set_hmi_log(f"[WARN] ALL STOP delegate failed: {e!r} -> fallback hard stop")
+
+        # 2) 실행 중 공정이 없거나 위임 실패 시에만 direct hard stop fallback
         if self._turbovac_service is not None:
             try:
                 self._set_tmp_connect_hint(False)
                 self._turbovac_service.stop_pump()
-                self._set_hmi_log("[UI] TMP STOP sent (ALL STOP)")
+                self._set_hmi_log("[UI] TMP STOP sent (ALL STOP fallback)")
             except Exception as e:
-                self._set_hmi_log(f"[WARN] TMP STOP failed in ALL STOP: {e!r}")
+                self._set_hmi_log(f"[WARN] TMP STOP failed in ALL STOP fallback: {e!r}")
 
-        # ✅ 안전 순서(권장): MAIN_SHUTTER close → DAC=0 → POWER off → 나머지 off
-        self._plc.enqueue_write_coil("MAIN_SHUTTER_SW", False, tag="HMI:ALL_STOP")
+        self._plc.enqueue_write_coil("MAIN_SHUTTER_SW", False, tag="HMI:ALL_STOP_FALLBACK")
+        self._plc.enqueue_write_reg("DAC_POWER_1", 0, tag="HMI:ALL_STOP_FALLBACK")
+        self._plc.enqueue_write_reg("DAC_POWER_2", 0, tag="HMI:ALL_STOP_FALLBACK")
+        self._plc.enqueue_write_coil("POWER_1_SW", False, tag="HMI:ALL_STOP_FALLBACK")
+        self._plc.enqueue_write_coil("POWER_2_SW", False, tag="HMI:ALL_STOP_FALLBACK")
 
-        self._plc.enqueue_write_reg("DAC_POWER_1", 0, tag="HMI:ALL_STOP")
-        self._plc.enqueue_write_reg("DAC_POWER_2", 0, tag="HMI:ALL_STOP")
-
-        self._plc.enqueue_write_coil("POWER_1_SW", False, tag="HMI:ALL_STOP")
-        self._plc.enqueue_write_coil("POWER_2_SW", False, tag="HMI:ALL_STOP")
         for b in self.BUTTONS:
             if b.coil_name in ("MAIN_SHUTTER_SW", "POWER_1_SW", "POWER_2_SW"):
                 continue
-            self._plc.enqueue_write_coil(b.coil_name, False, tag="HMI:ALL_STOP")
+            self._plc.enqueue_write_coil(b.coil_name, False, tag="HMI:ALL_STOP_FALLBACK")
 
-        # ✅ 상단 상태라인은 건드리지 않고, 하단 로그만 남김
-        self._set_hmi_log("[UI] ALL STOP sent (MAIN_SHUTTER close + DAC=0 + POWER OFF + others OFF)")
+        self._set_hmi_log("[UI] ALL STOP fallback sent (direct PLC hard stop)")
 
     def _on_tmp_start_clicked(self) -> None:
         svc = self._turbovac_service

@@ -8,7 +8,6 @@ import contextlib
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Any, TYPE_CHECKING
-from concurrent.futures import TimeoutError as FuturesTimeoutError
 
 from PySide6.QtWidgets import QWidget, QMessageBox, QVBoxLayout, QApplication
 from PySide6.QtCore import QTimer
@@ -17,6 +16,11 @@ from ui.windows.mainWindow import Ui_Form
 from ui.rt_plot_widget import DepositionPlotWidget
 from ui.material_catalog_dialog import MaterialCatalogDialog
 from services.stm_service import STMService
+from controller.process_start_worker import (
+    ProcessStartWorker,
+    STMPreflightConfig,
+    STMPreflightResult,
+)
 
 if TYPE_CHECKING:
     from ui.windows.hmi_window import HmiWindow
@@ -107,6 +111,12 @@ class ProcessWindow(QWidget):
         self._log_service: Any = None
         self._stm_service: Any = None
         self._acs_service: Any = None
+
+        # ✅ Start preflight 상태
+        self._start_worker: Optional[ProcessStartWorker] = None
+        self._start_in_progress: bool = False
+        self._start_preflight_cancel_requested: bool = False
+        self._pending_run_cfg: Optional[dict[str, Any]] = None
 
         # ✅ UI에 "실제로 connect된 STM 인스턴스" 추적용(경고/중복 connect 방지)
         self._stm_ui_bound: bool = False
@@ -250,134 +260,6 @@ class ProcessWindow(QWidget):
             self._last_thickness = float(th)
         except Exception:
             self._last_thickness = None
-
-    def _check_stm_crystal_health_before_start(self) -> bool:
-        """
-        Start 버튼 눌렀을 때:
-        - STM 연결된 후(U/V 등) LIFE/FREQ/CRYSTAL FAIL을 읽어서
-        - 조건 만족할 때만 공정을 시작하도록 gate.
-        """
-        # --- 설정값(원하면 나중에 config로 빼도 됨) ---
-        LIFE_MIN_PERCENT = 80.0
-
-        # STM-100 스펙: 6 MHz crystal, max freq shift 1 MHz
-        # → 정상적인 U(Hz) 값 sanity 범위(너무 타이트하게 잡지 않음)
-        FREQ_MIN_MHZ = 5.0
-        FREQ_MAX_MHZ = 6.1
-
-        def _abort(title: str, msg: str) -> bool:
-            # ✅ 1) 먼저 UI에 로그 출력
-            _append_text(getattr(self.ui, "logWindow", None), f"[PRECHECK][BLOCK] {title}: {msg}")
-
-            # ✅ 2) 프리체크 때문에 켜둔 장비/상태 정리(FTM OFF 포함)
-            with contextlib.suppress(Exception):
-                self._shutdown_sensors_and_release_memory()  # 여기 안에 FTM OFF + PC detach 포함
-
-            # ✅ 3) 사용자 경고
-            QMessageBox.warning(self, title, msg)
-
-            # ✅ 4) run 생명주기(open/close)는 main.py가 아니라 ProcessController/Engine이 담당
-            self._active_run_id = None
-            self._active_recipe_name = ""
-            return False
-
-        stm = getattr(self, "_stm_service", None)
-        if stm is None:
-            return _abort("STM", "STM 서비스가 없습니다. (STM 연결 실패)")
-
-        if not hasattr(stm, "submit_read_crystal_health"):
-            return _abort(
-                "STM",
-                "STM 서비스에 submit_read_crystal_health()가 없습니다.\n"
-                "services/stm_service.py 수정이 반영됐는지 확인하세요."
-            )
-
-        # 1) LIFE/FREQ 스냅샷 읽기
-        try:
-            fut = stm.submit_read_crystal_health()
-            snap = fut.result(timeout=3.0)
-        except FuturesTimeoutError:
-            return _abort("STM", "STM LIFE/FREQ 읽기 Timeout (통신/전원/케이블/FTM_SW 상태 확인 필요)")
-        except Exception as e:
-            return _abort("STM", f"STM LIFE/FREQ 읽기 실패: {e!r}")
-
-        # 2) 값 파싱
-        crystal_fail_raw = snap.get("crystal_fail", None)
-        life = snap.get("life_percent", None)
-        freq_mhz = snap.get("freq_mhz", None)
-
-        reasons = []
-
-        # ✅ 0) stm_service가 준 errors도 이유에 포함
-        errs = snap.get("errors", None)
-        if errs:
-            if isinstance(errs, (list, tuple)):
-                for e in errs:
-                    reasons.append(f"STM 오류: {e}")
-            else:
-                reasons.append(f"STM 오류: {errs}")
-
-        # ✅ 1) crystal_fail = None(확인불가)면 차단
-        if crystal_fail_raw is None:
-            reasons.append("CRYSTAL FAIL 상태 확인 불가")
-        elif bool(crystal_fail_raw):
-            reasons.append("CRYSTAL FAIL 상태")
-
-        try:
-            if life is None:
-                reasons.append("LIFE 값을 읽지 못함")
-            else:
-                life_f = float(life)
-                if life_f < LIFE_MIN_PERCENT:
-                    reasons.append(f"LIFE {life_f:.1f}% < {LIFE_MIN_PERCENT:.1f}%")
-        except Exception:
-            reasons.append(f"LIFE 값이 숫자가 아님: {life!r}")
-
-        try:
-            if freq_mhz is None:
-                reasons.append("FREQ 값을 읽지 못함")
-            else:
-                fmhz = float(freq_mhz)
-                if not (FREQ_MIN_MHZ <= fmhz <= FREQ_MAX_MHZ):
-                    reasons.append(f"FREQ {fmhz:.3f} MHz (정상범위 {FREQ_MIN_MHZ}~{FREQ_MAX_MHZ} MHz 밖)")
-        except Exception:
-            reasons.append(f"FREQ 값이 숫자가 아님: {freq_mhz!r}")
-
-        # 4) 실패면 공정 시작 차단
-        if reasons:
-            def _fmt_pct(v) -> str:
-                try:
-                    return f"{float(v):.1f}%"
-                except Exception:
-                    return "None" if v is None else f"{v!r}"
-
-            def _fmt_mhz(v) -> str:
-                try:
-                    return f"{float(v):.3f} MHz"
-                except Exception:
-                    return "None" if v is None else f"{v!r}"
-
-            life_str = _fmt_pct(life)
-            freq_str = _fmt_mhz(freq_mhz)
-
-            msg = (
-                "STM 크리스탈 상태 불량으로 공정을 시작하지 않습니다.\n\n"
-                f"- LIFE: {life_str}\n"
-                f"- FREQ: {freq_str}\n\n"
-                "사유:\n- " + "\n- ".join(reasons)
-            )
-            return _abort("STM Pre-check", msg)
-
-        # 5) 통과 로그
-        try:
-            _append_text(
-                getattr(self.ui, "logWindow", None),
-                f"[PRECHECK] STM OK: LIFE {float(life):.1f}% | FREQ {float(freq_mhz):.3f} MHz"
-            )
-        except Exception:
-            _append_text(getattr(self.ui, "logWindow", None), f"[PRECHECK] STM OK: {snap!r}")
-
-        return True
     
     def _check_plc_ready_before_start(self) -> bool:
         """
@@ -425,26 +307,34 @@ class ProcessWindow(QWidget):
         _append_text(getattr(self.ui, "logWindow", None), "[PRECHECK] PLC OK: connected")
         return True
 
-    def _ensure_sensors_connected_fresh(self) -> bool:
+    def _prepare_stm_service_for_start(self) -> bool:
+        """
+        Start 직후 UI thread에서는
+        - FTM ON 요청
+        - STMService 객체 생성/start
+        - ProcessController에 runtime device 주입
+        까지만 수행한다.
+
+        실제 연결 대기 / crystal health check는
+        ProcessStartWorker(QThread)에서 처리한다.
+        """
         if self.hmi_window is None:
-            _append_text(getattr(self.ui, "logWindow", None), "[DEV][ERR] hmi_window is None -> cannot connect STM")
+            _append_text(getattr(self.ui, "logWindow", None), "[DEV][ERR] hmi_window is None -> cannot prepare STM")
             return False
 
         ini_path = self.hmi_window._ini_path
 
-        # ✅ 이전 STM 정리 (여기서도 FTM OFF까지 되도록 2번 수정이 전제)
+        # 이전 STM 정리
         self._shutdown_sensors_and_release_memory()
 
         binder = getattr(self.hmi_window, "_plc_binder", None)
         if binder is None:
-            _append_text(self.ui.logWindow, "[DEV][ERR] plc_binder is None (cannot turn on FTM_SW) -> abort STM connect")
+            _append_text(getattr(self.ui, "logWindow", None), "[DEV][ERR] plc_binder is None (cannot turn on FTM_SW)")
             return False
 
         try:
             binder.enqueue_write("FTM_SW", True)
-            _append_text(self.ui.logWindow, "[DEV] FTM_SW -> ON (before STM connect)")
-
-            time.sleep(1.5)
+            _append_text(getattr(self.ui, "logWindow", None), "[DEV] FTM_SW -> ON (before STM preflight)")
 
             stm = STMService(ini_path=ini_path)
             stm.start()
@@ -453,22 +343,205 @@ class ProcessWindow(QWidget):
             self.hmi_window._stm_service = stm
 
             self._acs_service = getattr(self.hmi_window, "_acs_service", None)
-            self.hmi_window._set_process_controller_devices(stm, self._acs_service)
 
-            _append_text(self.ui.logWindow, "[DEV] STM connected (ACS kept alive).")
+            pc = self._process_controller
+            if pc is not None and hasattr(pc, "replace_runtime_devices"):
+                pc.replace_runtime_devices(stm=stm, acs=self._acs_service)
+            else:
+                _append_text(getattr(self.ui, "logWindow", None), "[DEV][WARN] ProcessController.replace_runtime_devices() 없음")
+
+            _append_text(getattr(self.ui, "logWindow", None), "[DEV] STM service prepared (health/preflight pending)")
             return True
 
         except Exception as e:
-            _append_text(self.ui.logWindow, f"[DEV][ERR] STM start failed: {e!r}")
+            _append_text(getattr(self.ui, "logWindow", None), f"[DEV][ERR] STM prepare failed: {e!r}")
 
-            # ✅ 실패했으면 FTM 다시 OFF
             with contextlib.suppress(Exception):
                 binder.enqueue_write("FTM_SW", False)
-                _append_text(self.ui.logWindow, "[DEV] FTM_SW -> OFF (STM start failed)")
+                _append_text(getattr(self.ui, "logWindow", None), "[DEV] FTM_SW -> OFF (STM prepare failed)")
 
             self._stm_service = None
-            self.hmi_window._stm_service = None
+            if self.hmi_window is not None:
+                self.hmi_window._stm_service = None
             return False
+        
+    def _set_start_busy(self, busy: bool) -> None:
+        self._start_in_progress = bool(busy)
+
+        btn = getattr(self.ui, "startProcess", None)
+        if btn is not None and hasattr(btn, "setEnabled"):
+            with contextlib.suppress(Exception):
+                btn.setEnabled(not busy)
+
+        stop_btn = getattr(self.ui, "stopProcess", None)
+        if stop_btn is not None and hasattr(stop_btn, "setEnabled"):
+            with contextlib.suppress(Exception):
+                stop_btn.setEnabled(True)
+
+        monitor = getattr(self.ui, "processMonitor_Process", None)
+        if monitor is not None and hasattr(monitor, "setText") and busy:
+            with contextlib.suppress(Exception):
+                monitor.setText("Preparing STM...")
+
+    def _cleanup_start_worker(self) -> None:
+        worker = self._start_worker
+        if worker is None:
+            return
+
+        with contextlib.suppress(Exception):
+            worker.sig_progress.disconnect(self._on_start_preflight_progress)
+        with contextlib.suppress(Exception):
+            worker.sig_result.disconnect(self._on_start_preflight_result)
+
+        with contextlib.suppress(Exception):
+            if worker.isRunning():
+                worker.quit()
+                worker.wait(200)
+
+        self._start_worker = None
+
+    def _start_async_preflight(self, run_cfg: dict[str, Any]) -> None:
+        stm = self._stm_service
+        if stm is None:
+            QMessageBox.warning(self, "STM", "STM 서비스가 준비되지 않았습니다.")
+            self._active_run_id = None
+            self._active_recipe_name = ""
+            return
+
+        self._pending_run_cfg = dict(run_cfg)
+        self._start_preflight_cancel_requested = False
+        self._set_start_busy(True)
+
+        cfg = STMPreflightConfig(
+            ftm_settle_s=1.5,
+            connected_timeout_s=8.0,
+            health_timeout_s=3.0,
+            poll_interval_ms=100,
+            require_health_check=True,
+            allow_skip_if_not_supported=True,
+        )
+
+        worker = ProcessStartWorker(stm=stm, config=cfg, parent=self)
+        worker.sig_progress.connect(self._on_start_preflight_progress)
+        worker.sig_result.connect(self._on_start_preflight_result)
+
+        self._start_worker = worker
+        worker.start()
+
+    def _on_start_preflight_progress(self, text: str) -> None:
+        _append_text(getattr(self.ui, "logWindow", None), f"[PRECHECK] {text}")
+
+        monitor = getattr(self.ui, "processMonitor_Process", None)
+        if monitor is not None and hasattr(monitor, "setText"):
+            with contextlib.suppress(Exception):
+                monitor.setText(str(text))
+
+    def _abort_start_preflight(self, *, show_warning: bool, title: str, message: str) -> None:
+        with contextlib.suppress(Exception):
+            self._rt_stop()
+
+        with contextlib.suppress(Exception):
+            self._shutdown_sensors_and_release_memory()
+
+        # ✅ 여기서는 사용자 입력값을 지우지 않는다.
+        #    preflight 실패했다고 process name / thickness / rate까지 초기화하면 UX가 나빠진다.
+
+        self._pending_run_cfg = None
+        self._active_run_id = None
+        self._active_recipe_name = ""
+
+        self._cleanup_start_worker()
+        self._set_start_busy(False)
+
+        monitor = getattr(self.ui, "processMonitor_Process", None)
+        if monitor is not None and hasattr(monitor, "setText"):
+            with contextlib.suppress(Exception):
+                monitor.setText("---")
+
+        if message:
+            _append_text(getattr(self.ui, "logWindow", None), f"[PRECHECK][ABORT] {message}")
+
+        if show_warning:
+            QMessageBox.warning(self, title, message)
+
+    def _on_start_preflight_result(self, result: STMPreflightResult) -> None:
+        self._cleanup_start_worker()
+        self._set_start_busy(False)
+
+        if bool(getattr(result, "cancelled", False)):
+            self._abort_start_preflight(
+                show_warning=False,
+                title="Process",
+                message="STM preflight가 취소되었습니다.",
+            )
+            return
+
+        if not bool(getattr(result, "ok", False)):
+            self._abort_start_preflight(
+                show_warning=True,
+                title="STM Pre-check",
+                message=str(getattr(result, "message", "STM preflight 실패")),
+            )
+            return
+
+        # 성공 시에만 STM UI bind + RT 시작 + controller.start_from_ui()
+        try:
+            if self._stm_service is not None:
+                self._bind_stm_ui(self._stm_service)
+        except Exception:
+            pass
+
+        self._rt_start()
+
+        pc = self._process_controller
+        run_cfg = self._pending_run_cfg or {}
+
+        if pc is None or not hasattr(pc, "start_from_ui"):
+            self._abort_start_preflight(
+                show_warning=True,
+                title="Process",
+                message="start_from_ui가 구현되어 있지 않습니다.",
+            )
+            return
+
+        try:
+            pc.start_from_ui(run_cfg, run_id=self._active_run_id)
+            _append_text(getattr(self.ui, "logWindow", None), "[PRECHECK] STM preflight 성공 -> 공정 시작")
+            self._pending_run_cfg = None
+        except Exception as e:
+            with contextlib.suppress(Exception):
+                self._emergency_safe_shutdown_plc_best_effort()
+
+            self._abort_start_preflight(
+                show_warning=True,
+                title="Process Start Failed",
+                message=f"{e!r}",
+            )
+
+    def _has_active_start_preflight(self) -> bool:
+        worker = self._start_worker
+        return bool(worker is not None and worker.isRunning())
+
+    def _wait_start_preflight_stop(self, timeout_s: float = 3.0) -> bool:
+        worker = self._start_worker
+        if worker is None:
+            return True
+
+        deadline = time.monotonic() + max(0.1, float(timeout_s))
+
+        while time.monotonic() < deadline:
+            try:
+                if not worker.isRunning():
+                    return True
+            except Exception:
+                return True
+
+            with contextlib.suppress(Exception):
+                QApplication.processEvents()
+
+            time.sleep(0.05)
+
+        return not worker.isRunning()
 
     def _shutdown_sensors_and_release_memory(self) -> None:
         """Stop에서 호출: STM 연결 해제 + 객체 해제 + gc.collect()
@@ -489,10 +562,11 @@ class ProcessWindow(QWidget):
             except Exception as e:
                 _append_text(self.ui.logWindow, f"[DEV][WARN] STM stop failed: {e!r}")
 
-        # ✅ 2) ProcessController에서 STM 참조/시그널까지 정리(ACS는 유지)
+        # ✅ 2) ProcessController에서 STM runtime device 참조 정리(ACS는 유지)
         try:
-            if self.hmi_window is not None:
-                self.hmi_window._set_process_controller_devices(None, self._acs_service)
+            pc = self._process_controller
+            if pc is not None and hasattr(pc, "replace_runtime_devices"):
+                pc.replace_runtime_devices(stm=None, acs=self._acs_service)
         except Exception:
             pass
 
@@ -515,16 +589,27 @@ class ProcessWindow(QWidget):
         _append_text(self.ui.logWindow, "[DEV] STM released + gc.collect() (ACS kept alive)")
 
     def _on_start_clicked(self) -> None:
+        if self._start_in_progress:
+            _append_text(getattr(self.ui, "logWindow", None), "[UI] Start ignored: preflight already running")
+            return
+
         pc = self._process_controller
         if pc is None:
             QMessageBox.warning(self, "Process", "ProcessController가 연결되지 않았습니다.")
             return
 
-        # ✅ 1) UI 입력값 먼저 검증
+        try:
+            if hasattr(pc, "is_running") and pc.is_running():
+                QMessageBox.information(self, "Process", "이미 공정이 실행 중입니다.")
+                return
+        except Exception:
+            pass
+
+        # 1) UI 입력 검증
         run_cfg = self._collect_ui_run_cfg()
         if run_cfg is None:
             return
-        
+
         proc_cfg = run_cfg.get("process_config") or {}
         steps = proc_cfg.get("ramp_steps") or []
         if steps:
@@ -541,101 +626,60 @@ class ProcessWindow(QWidget):
             f"extra_ramp={proc_cfg.get('extra_ramp')}"
         )
 
-        # ✅ run_id만 생성해서 ProcessController로 전달
-        #    실제 open_run()/close_run()는 ProcessController/Engine 쪽에서 담당
+        # 2) run_id 생성
         self._active_run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
 
         pname = str(run_cfg.get("process_name", "") or "").strip()
         mat = str(run_cfg.get("material_name", "") or "").strip()
-
-        # 현재 main.py에서는 recipe_name을 파일 open 용도로 직접 쓰지 않음
         self._active_recipe_name = pname if pname else (f"EVAP_{mat}" if mat else "EVAP")
 
-        # ✅ 2) PLC 연결 상태 먼저 확인
+        # 3) PLC precheck
         if not self._check_plc_ready_before_start():
             self._active_run_id = None
             self._active_recipe_name = ""
             return
 
-        # ✅ 3) 그 다음 FTM ON → STM 연결
-        if not self._ensure_sensors_connected_fresh():
-            QMessageBox.warning(self, "Device Connect Failed", "STM 연결 실패")
-
-            # ✅ 한 곳으로 정리 통일 (FTM OFF 포함)
+        # 4) STM service 준비(여기서는 blocking wait 안 함)
+        if not self._prepare_stm_service_for_start():
+            QMessageBox.warning(self, "Device Connect Failed", "STM 준비 실패")
             with contextlib.suppress(Exception):
                 self._shutdown_sensors_and_release_memory()
-            with contextlib.suppress(Exception):
-                self._reset_process_ui()
-
             self._active_run_id = None
             self._active_recipe_name = ""
             return
-        
-        # ✅ 2.5) STM 크리스탈 상태(LIFE/FREQ) 사전 점검: 통과 시에만 공정 진행
-        if not self._check_stm_crystal_health_before_start():
-            return
 
-        # ✅ 3) STM UI 바인딩 + RT 시작
-        try:
-            if self._stm_service is not None:
-                self._bind_stm_ui(self._stm_service)
-        except Exception:
-            pass
-        self._rt_start()
-
-        # ✅ 4) 공정 시작
-        if not hasattr(pc, "start_from_ui"):
-            QMessageBox.warning(self, "Process", "start_from_ui가 구현되어 있지 않습니다.\nProcessController에 start_from_ui를 추가하세요.")
-            self._rt_stop()
-            self._shutdown_sensors_and_release_memory()
-            self._reset_process_ui()
-
-            self._active_run_id = None
-            self._active_recipe_name = ""
-            return
-        
-        try:
-            # ✅ (변경) run_id를 ProcessController로 전달 (process log/csv와 묶이게)
-            pc.start_from_ui(run_cfg, run_id=self._active_run_id)
-
-        except Exception as e:
-            with contextlib.suppress(Exception):
-                self._emergency_safe_shutdown_plc_best_effort()
-            with contextlib.suppress(Exception):
-                self._rt_stop()
-            with contextlib.suppress(Exception):
-                self._shutdown_sensors_and_release_memory()
-            with contextlib.suppress(Exception):
-                self._reset_process_ui()
-
-            self._active_run_id = None
-            self._active_recipe_name = ""
-
-            QMessageBox.warning(self, "Process Start Failed", f"{e!r}")
-            _append_text(self.ui.logWindow, f"[START FAIL] {e!r}")
-            return
+        # 5) 실제 연결 대기 / crystal health는 worker로 넘긴다
+        self._start_async_preflight(run_cfg)
             
     def _on_stop_clicked(self) -> None:
+        # 0) Start preflight 중이면 우선 취소
+        if self._has_active_start_preflight():
+            worker = self._start_worker
+            if worker is not None:
+                with contextlib.suppress(Exception):
+                    worker.request_cancel()
+            self._start_preflight_cancel_requested = True
+            _append_text(getattr(self.ui, "logWindow", None), "[UI] STM preflight 취소 요청")
+            return
+
         pc = self._process_controller
 
         # 1) 엔진/컨트롤러가 살아 있으면 "정지 요청"만 보낸다.
         if pc is not None:
             try:
                 pc.stop()
-                _append_text(self.ui.logWindow, "[UI] 공정 정지 요청 -> engine safety shutdown 대기")
+                _append_text(getattr(self.ui, "logWindow", None), "[UI] 공정 정지 요청 -> engine safety shutdown 대기")
                 return
             except Exception as e:
-                _append_text(self.ui.logWindow, f"[STOP FAIL] controller stop failed: {e!r}")
+                _append_text(getattr(self.ui, "logWindow", None), f"[STOP FAIL] controller stop failed: {e!r}")
 
-        # 2) controller 자체가 없거나 stop 요청이 실패한 경우에만 emergency fallback
+        # 2) controller stop 요청이 안 되는 경우에만 emergency fallback
         try:
             self._emergency_safe_shutdown_plc_best_effort()
-            _append_text(self.ui.logWindow, "[SAFE] emergency fallback shutdown executed")
+            _append_text(getattr(self.ui, "logWindow", None), "[SAFE] emergency fallback shutdown executed")
         except Exception as e:
-            _append_text(self.ui.logWindow, f"[SAFE][FAIL] emergency shutdown failed: {e!r}")
+            _append_text(getattr(self.ui, "logWindow", None), f"[SAFE][FAIL] emergency shutdown failed: {e!r}")
 
-        # 3) fallback 경로에서는 sig_finished 를 기대할 수 없으므로
-        #    UI/센서 정리를 여기서 직접 마무리한다.
         with contextlib.suppress(Exception):
             self._rt_stop()
         with contextlib.suppress(Exception):
@@ -874,7 +918,7 @@ class ProcessWindow(QWidget):
         return max(3.0, min(timeout_s, 30.0))
 
     def closeEvent(self, event):
-        # Process 창 닫기(X) = stop 요청 후 worker 종료 대기
+        # 1) 먼저 stop / cancel 요청
         if not getattr(self, "_close_stop_guard", False):
             self._close_stop_guard = True
             try:
@@ -882,6 +926,30 @@ class ProcessWindow(QWidget):
             except Exception:
                 pass
 
+        # 2) Start preflight가 살아 있으면 먼저 기다린다
+        if self._has_active_start_preflight():
+            stopped = True
+            try:
+                stopped = self._wait_start_preflight_stop(timeout_s=5.0)
+            except Exception:
+                stopped = True
+
+            if not stopped:
+                _append_text(
+                    getattr(self.ui, "logWindow", None),
+                    "[UI][WARN] STM preflight stop wait timeout -> close canceled"
+                )
+                QMessageBox.warning(
+                    self,
+                    "Process",
+                    "STM 준비 작업이 아직 종료되지 않았습니다.\n"
+                    "잠시 후 다시 닫아주세요."
+                )
+                self._close_stop_guard = False
+                event.ignore()
+                return
+
+        # 3) 실제 공정이 돌고 있었다면 기존 shutdown wait
         timeout_s = 3.0
         try:
             timeout_s = self._estimate_stop_wait_timeout_s()
@@ -911,7 +979,7 @@ class ProcessWindow(QWidget):
 
         _append_text(
             getattr(self.ui, "logWindow", None),
-            "[UI] Process window closed -> engine stop finished"
+            "[UI] Process window closed -> engine/preflight stop finished"
         )
 
         if self.hmi_window is not None:

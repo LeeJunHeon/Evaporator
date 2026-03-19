@@ -637,13 +637,16 @@ class ProcessConfigDialog(QDialog):
                 }
             )
 
+        policy = str(self.afterLastStepPolicyCombo.currentData() or "extra_ramp")
+        extra_enabled = bool(self.extraRampEnabledCheck.isChecked()) if policy == "extra_ramp" else False
+
         cfg = {
             "step_count": count,
             "ramp_steps": steps,
             "reach_main_on_rate": bool(self.reachMainOnRateCheck.isChecked()),
-            "after_last_step_policy": str(self.afterLastStepPolicyCombo.currentData() or "extra_ramp"),
+            "after_last_step_policy": policy,
             "extra_ramp": {
-                "enabled": bool(self.extraRampEnabledCheck.isChecked()),
+                "enabled": extra_enabled,
                 "max_adc": float(self.extraMaxAdcSpin.value()),
                 "step_max": float(self.extraStepMaxSpin.value()),
                 "interval_s": float(self.extraIntervalSpin.value()),

@@ -14,7 +14,6 @@ ProcessController
 from __future__ import annotations
 
 import re
-import concurrent.futures
 from pathlib import Path
 from typing import Optional, Union, Any
 
@@ -26,7 +25,6 @@ from PySide6.QtCore import QObject, Signal
 # ------------------------------------------------------------
 from process.models import (
     ProcessRecipe,
-    ProcessError,
     StopMode,
     ProcessStep,
     StepType,
@@ -640,37 +638,26 @@ class ProcessController(QObject):
 
     def stop(self) -> None:
         """
-        정상 정지(안전정지).
-        - 공정 실행 중이 아니어도 '안전 출력'은 항상 수행
+        정상 정지 요청.
+        실제 안전 종료 순서(셔터 닫기 -> DAC ramp-down -> power off)는
+        engine.py / safety.py 경로에서 수행한다.
         """
-        safe_ok = self._issue_safe_stop_outputs(tag="STOP_BTN")
-        if not safe_ok:
-            self._ui_warn("일부 안전 출력 전달이 실패했거나 timeout 되었습니다.")
-
         if self.is_running():
             self._request_engine_stop(StopMode.STOP)
         else:
-            self._ui_info("실행 중 공정 없음 → 안전 출력만 수행")
+            self._ui_info("실행 중 공정 없음")
 
     def abort(self) -> None:
-        safe_ok = self._issue_safe_stop_outputs(tag="ABORT_BTN")
-        if not safe_ok:
-            self._ui_warn("일부 안전 출력 전달이 실패했거나 timeout 되었습니다.")
-
         if self.is_running():
             self._request_engine_stop(StopMode.ABORT)
         else:
-            self._ui_info("실행 중 공정 없음 → 안전 출력만 수행")
+            self._ui_info("실행 중 공정 없음")
 
     def estop(self) -> None:
-        safe_ok = self._issue_safe_stop_outputs(tag="ESTOP_BTN")
-        if not safe_ok:
-            self._ui_warn("일부 안전 출력 전달이 실패했거나 timeout 되었습니다.")
-
         if self.is_running():
             self._request_engine_stop(StopMode.ESTOP)
         else:
-            self._ui_info("실행 중 공정 없음 → 안전 출력만 수행")
+            self._ui_info("실행 중 공정 없음")
 
     def pause(self) -> None:
         if not self.is_running():
@@ -693,77 +680,6 @@ class ProcessController(QObject):
     # --------------------------------------------------------
     # Internal helpers
     # --------------------------------------------------------
-    def _submit_safe_coil(self, coil: str, on: bool, *, tag: str, timeout_s: float) -> bool:
-        try:
-            fut = self.plc.submit_write_coil(coil, on, tag=tag)
-            fut.result(timeout=timeout_s)
-            self._csv_event(event="WRITE_COIL", target=coil, value=int(bool(on)), detail=f"OK tag={tag}")
-            return True
-        except concurrent.futures.TimeoutError as e:
-            self._csv_event(event="WRITE_COIL", target=coil, value=int(bool(on)), detail=f"TIMEOUT tag={tag} {e!r}")
-            self._ui_warn(f"{coil} write timeout: {e!r}")
-            return False
-        except Exception as e:
-            self._csv_event(event="WRITE_COIL", target=coil, value=int(bool(on)), detail=f"ERR tag={tag} {e!r}")
-            self._ui_warn(f"{coil} write 실패: {e!r}")
-            return False
-
-    def _submit_safe_reg(self, reg: str, value: int, *, tag: str, timeout_s: float) -> bool:
-        try:
-            fut = self.plc.submit_write_reg(reg, int(value), tag=tag)
-            fut.result(timeout=timeout_s)
-            self._csv_event(event="SET_DAC", target=reg, value=int(value), detail=f"OK tag={tag}")
-            return True
-        except concurrent.futures.TimeoutError as e:
-            self._csv_event(event="SET_DAC", target=reg, value=int(value), detail=f"TIMEOUT tag={tag} {e!r}")
-            self._ui_warn(f"{reg} write timeout: {e!r}")
-            return False
-        except Exception as e:
-            self._csv_event(event="SET_DAC", target=reg, value=int(value), detail=f"ERR tag={tag} {e!r}")
-            self._ui_warn(f"{reg} write 실패: {e!r}")
-            return False
-        
-    def _issue_safe_stop_outputs(self, *, tag: str = "SAFE_STOP", timeout_s: float = 0.8) -> bool:
-        """
-        안전 출력 전달 보장 시도:
-        1) MAIN_SHUTTER close
-        2) SOURCE SHUTTER close (1/2)
-        3) DAC 0
-        4) POWER off
-        5) FTM off
-
-        반환값:
-        - True  : 모든 안전 출력 전달 성공
-        - False : 하나라도 timeout/실패
-        """
-        try:
-            self._ensure_services_running()
-        except Exception:
-            pass
-
-        if not self._is_plc_ready():
-            self._ui_warn("PLC 미연결 상태여서 안전 출력 전달을 보장할 수 없습니다.")
-            return False
-
-        ok = True
-
-        # 1) Shutters close
-        for coil in ("MAIN_SHUTTER_SW", "SHUTTER_1_SW", "SHUTTER_2_SW"):
-            ok = self._submit_safe_coil(coil, False, tag=tag, timeout_s=timeout_s) and ok
-
-        # 2) DAC=0
-        for reg in ("DAC_POWER_1", "DAC_POWER_2"):
-            ok = self._submit_safe_reg(reg, 0, tag=tag, timeout_s=timeout_s) and ok
-
-        # 3) Power off
-        for coil in ("POWER_1_SW", "POWER_2_SW"):
-            ok = self._submit_safe_coil(coil, False, tag=tag, timeout_s=timeout_s) and ok
-
-        # 4) FTM off
-        ok = self._submit_safe_coil("FTM_SW", False, tag=tag, timeout_s=timeout_s) and ok
-
-        return ok
-
     def _request_engine_stop(self, mode: StopMode) -> None:
         if not self.is_running():
             self._ui_warn("실행 중인 공정이 없습니다.")

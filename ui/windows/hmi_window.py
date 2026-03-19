@@ -136,6 +136,37 @@ class HmiWindow(QWidget):
         except Exception:
             pass
 
+        try:
+            pw._turbovac_service = self._turbovac_service
+        except Exception:
+            pass
+
+    def _sync_process_controller_runtime_refs(self) -> None:
+        """
+        HMI가 들고 있는 최신 runtime object를
+        ProcessController의 공식 API로 동기화한다.
+
+        주의:
+        - 공정 실행 중이면 controller 쪽에서 교체를 거부할 수 있다.
+        - startup / idle 상태에서만 실질 반영되는 용도다.
+        """
+        pc = self._process_controller
+        if pc is None or not hasattr(pc, "replace_runtime_devices"):
+            return
+
+        try:
+            if hasattr(pc, "is_running") and pc.is_running():
+                return
+        except Exception:
+            pass
+
+        with contextlib.suppress(Exception):
+            pc.replace_runtime_devices(
+                stm=self._stm_service,
+                acs=self._acs_service,
+                turbovac=self._turbovac_service,
+            )
+
     def set_runtime_objects(
         self,
         plc_binder: HmiPlcBinder,
@@ -162,68 +193,11 @@ class HmiWindow(QWidget):
             with contextlib.suppress(Exception):
                 self._log_service.attach_text_widget(getattr(self.ui, "hmiLogWindow", None), channel="HMI")
 
+        # ✅ controller도 공식 API 기준으로 최신 device 참조 동기화
+        self._sync_process_controller_runtime_refs()
+
         # ✅ 이미 떠 있는 ProcessWindow가 있으면 최신 참조 반영
         self._refresh_process_window_runtime_refs()
-
-    def _set_process_controller_devices(self, stm: Any, acs: Any) -> None:
-        """
-        ProcessController가 stm/acs를 참조한다면 여기서 갈아끼움.
-
-        ✅ 목표:
-        - dep.rate/thickness 폴링(S/T)은 기존처럼 로그에서 제외
-        - 그 외 STM 명령(E/F/C/B/i/j/k...)은 ProcessWindowLog에 출력
-        - STM 연결/해제/오류도 ProcessWindowLog에 출력
-        """
-        pc = self._process_controller
-        if pc is None:
-            return
-
-        # ---------- 1) 기존 STM 시그널 disconnect ----------
-        prev_stm = None
-        try:
-            prev_stm = getattr(pc, "stm", None) if hasattr(pc, "stm") else getattr(pc, "_stm", None)
-        except Exception:
-            prev_stm = None
-
-        if prev_stm is not None:
-            # io trace
-            if hasattr(prev_stm, "sig_io_trace") and hasattr(pc, "_on_stm_io_trace"):
-                with contextlib.suppress(Exception):
-                    prev_stm.sig_io_trace.disconnect(pc._on_stm_io_trace)
-
-            # error
-            if hasattr(prev_stm, "sig_error") and hasattr(pc, "_on_stm_error"):
-                with contextlib.suppress(Exception):
-                    prev_stm.sig_error.disconnect(pc._on_stm_error)
-
-            # connected
-            if hasattr(prev_stm, "sig_connected") and hasattr(pc, "_on_stm_connected"):
-                with contextlib.suppress(Exception):
-                    prev_stm.sig_connected.disconnect(pc._on_stm_connected)
-
-        # ---------- 2) 참조 교체 ----------
-        for attr, val in (("stm", stm), ("acs", acs)):
-            try:
-                if hasattr(pc, attr):
-                    setattr(pc, attr, val)
-                elif hasattr(pc, f"_{attr}"):
-                    setattr(pc, f"_{attr}", val)
-            except Exception:
-                pass
-
-        # ---------- 3) 새 STM 시그널 connect ----------
-        if stm is not None:
-            if hasattr(stm, "sig_io_trace") and hasattr(pc, "_on_stm_io_trace"):
-                with contextlib.suppress(Exception):
-                    stm.sig_io_trace.connect(pc._on_stm_io_trace)
-
-            if hasattr(stm, "sig_error") and hasattr(pc, "_on_stm_error"):
-                with contextlib.suppress(Exception):
-                    stm.sig_error.connect(pc._on_stm_error)
-
-            if hasattr(stm, "sig_connected") and hasattr(pc, "_on_stm_connected"):
-                with contextlib.suppress(Exception):
-                    stm.sig_connected.connect(pc._on_stm_connected)
 
     def open_config_dialog(self) -> None:
         """Config 팝업 → Save(=Accepted)면 즉시 장비 재연결 (기존 유지)"""

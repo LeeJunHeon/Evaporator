@@ -444,6 +444,20 @@ class ProcessController(QObject):
         }
     
     def _build_process_config_from_run_cfg(self, run_cfg: dict[str, Any]) -> dict[str, Any]:
+        proc_src = dict(run_cfg.get("process_config") or {})
+
+        def _cfg_int(name: str, default: int) -> int:
+            try:
+                return int(proc_src.get(name, default))
+            except Exception:
+                return int(default)
+
+        def _cfg_float(name: str, default: float) -> float:
+            try:
+                return float(proc_src.get(name, default))
+            except Exception:
+                return float(default)
+
         ramp_steps = self._normalize_ramp_steps(run_cfg)
         last_step_adc = float(ramp_steps[-1]["target_adc"])
         proc_policy = self._normalize_process_policy(run_cfg, last_step_adc=last_step_adc)
@@ -455,6 +469,35 @@ class ProcessController(QObject):
             "after_last_step_policy": str(proc_policy["after_last_step_policy"]),
             "extra_ramp": dict(proc_policy["extra_ramp"]),
             "last_step_target_adc": last_step_adc,
+
+            "ramp_step_dac": _cfg_int("ramp_step_dac", 100),
+            "ramp_seg1_max_dac": _cfg_int("ramp_seg1_max_dac", 700),
+            "ramp_interval_seg1_s": _cfg_float("ramp_interval_seg1_s", 10.0),
+            "ramp_seg2_max_dac": _cfg_int("ramp_seg2_max_dac", 2000),
+            "ramp_interval_seg2_s": _cfg_float("ramp_interval_seg2_s", 30.0),
+            "ramp_interval_after_seg2_s": _cfg_float("ramp_interval_after_seg2_s", 30.0),
+
+            "ignite_dac": _cfg_int("ignite_dac", 2000),
+            "ignite_rate_min": _cfg_float("ignite_rate_min", 0.1),
+            "ignite_timeout_s": _cfg_float("ignite_timeout_s", 300.0),
+
+            "pre_rate": _cfg_float("pre_rate", 0.4),
+            "pre_hold_s": _cfg_float("pre_hold_s", 120.0),
+            "pre_hold_adjust_interval_s": _cfg_float("pre_hold_adjust_interval_s", 10.0),
+            "pre_drop_ratio": _cfg_float("pre_drop_ratio", 0.50),
+            "pre_drop_count": _cfg_int("pre_drop_count", 3),
+
+            "dac_adjust_interval_s": _cfg_float("dac_adjust_interval_s", 10.0),
+            "fine_step_dac": _cfg_int("fine_step_dac", 10),
+
+            "material_shortage_dac": _cfg_int("material_shortage_dac", 2000),
+            "material_shortage_rate_max": _cfg_float("material_shortage_rate_max", 0.0),
+            "material_shortage_time_s": _cfg_float("material_shortage_time_s", 10.0),
+
+            "rate_filter_window": _cfg_int("rate_filter_window", 5),
+            "rate_stable_sec": _cfg_float("rate_stable_sec", 3.0),
+            "rate_drop_ratio": _cfg_float("rate_drop_ratio", 0.50),
+            "rate_drop_count": _cfg_int("rate_drop_count", 3),
         }
     
     def _build_power_runtime_meta(self, power: dict[str, Any]) -> dict[str, Any]:
@@ -466,7 +509,6 @@ class ProcessController(QObject):
             "source_shutter_coils": list(power["source_shutter_coils"]),
         }
 
-
     def _build_material_runtime_meta(self, material_cfg: dict[str, Any]) -> dict[str, Any]:
         return {
             "material_name": material_cfg["material_name"],
@@ -477,70 +519,101 @@ class ProcessController(QObject):
             "delay_min": material_cfg["delay_min"],
         }
 
-
-    def _build_control_runtime_meta(self, run_cfg: dict[str, Any]) -> dict[str, Any]:
+    def _build_control_runtime_meta(
+        self,
+        run_cfg: dict[str, Any],
+        process_config: dict[str, Any],
+    ) -> dict[str, Any]:
         return {
             "dac_max": 4000,
             "sensor_none_abort_s": 5.0,
 
-            "ramp_step_dac": 100,
-            "ramp_seg1_max_dac": 700,
-            "ramp_seg2_max_dac": 2000,
-            "ramp_interval_seg1_s": 10.0,
-            "ramp_interval_seg2_s": 30.0,
-            "ramp_interval_after_seg2_s": 30.0,
-            "fine_step_dac": 10,
+            "ramp_step_dac": int(process_config["ramp_step_dac"]),
+            "ramp_seg1_max_dac": int(process_config["ramp_seg1_max_dac"]),
+            "ramp_seg2_max_dac": int(process_config["ramp_seg2_max_dac"]),
+            "ramp_interval_seg1_s": float(process_config["ramp_interval_seg1_s"]),
+            "ramp_interval_seg2_s": float(process_config["ramp_interval_seg2_s"]),
+            "ramp_interval_after_seg2_s": float(process_config["ramp_interval_after_seg2_s"]),
+            "fine_step_dac": int(process_config["fine_step_dac"]),
 
-            "ignite_dac": 2000,
+            "ignite_dac": int(process_config["ignite_dac"]),
             "ignite_trigger_rate_max": 0.0,
-            "ignite_rate_min": 0.1,
-            "ignite_timeout_s": 300.0,
+            "ignite_rate_min": float(process_config["ignite_rate_min"]),
+            "ignite_timeout_s": float(process_config["ignite_timeout_s"]),
 
+            # 기존 로직과의 호환용
             "rate_tol_ratio": float(run_cfg.get("rate_tol_ratio", 0.05) or 0.05),
             "target_stable_hits": int(run_cfg.get("target_stable_hits", 5) or 5),
             "target_stable_interval_s": float(run_cfg.get("target_stable_interval_s", 1.0) or 1.0),
 
-            "rate_drop_ratio": float(run_cfg.get("rate_drop_ratio", 0.30) or 0.30),
-            "rate_drop_count": int(run_cfg.get("rate_drop_count", 3) or 3),
+            # 신규 dep.rate 판단 파라미터
+            "rate_filter_window": int(process_config["rate_filter_window"]),
+            "rate_stable_sec": float(process_config["rate_stable_sec"]),
+            "rate_drop_ratio": float(process_config["rate_drop_ratio"]),
+            "rate_drop_count": int(process_config["rate_drop_count"]),
 
-            "pre_rate": 0.4,
-            "pre_hold_s": 120.0,
+            "pre_rate": float(process_config["pre_rate"]),
+            "pre_hold_s": float(process_config["pre_hold_s"]),
             "pre_hold_mode": "fixed",
-            "pre_hold_adjust_interval_s": 10.0,
-            "dac_adjust_interval_s": 10.0,
+            "pre_hold_adjust_interval_s": float(process_config["pre_hold_adjust_interval_s"]),
+            "pre_drop_ratio": float(process_config["pre_drop_ratio"]),
+            "pre_drop_count": int(process_config["pre_drop_count"]),
+            "dac_adjust_interval_s": float(process_config["dac_adjust_interval_s"]),
 
             "stuck_dac_guard": 2000,
             "stuck_rate_abs": 0.05,
             "stuck_time_s": 60.0,
 
-            "material_shortage_dac": 2000,
-            "material_shortage_rate_max": 0.0,
-            "material_shortage_time_s": 10.0,
+            "material_shortage_dac": int(process_config["material_shortage_dac"]),
+            "material_shortage_rate_max": float(process_config["material_shortage_rate_max"]),
+            "material_shortage_time_s": float(process_config["material_shortage_time_s"]),
 
             "zero_mode": "B",
             "wait_after_ftm_on_s": 1.5,
             "adc_control_mode": str(run_cfg.get("adc_control_mode", "adc") or "adc"),
         }
 
-
     def _build_process_runtime_meta(self, process_config: dict[str, Any]) -> dict[str, Any]:
         last_step_adc = float(process_config["last_step_target_adc"])
 
         return {
-            # NOTE:
-            # 현재 engine.py 자체는 이 키들을 직접 해석하지 않고
-            # EVAP_DEPOSITION_CONTROL step을 evap_runtime.py로 넘긴다.
-            # 따라서 nested / top-level 중복 유지 여부는
-            # evap_runtime.py 확인 전까지 유지한다.
             "process_config": {
                 "step_count": process_config["step_count"],
                 "ramp_steps": process_config["ramp_steps"],
                 "reach_main_on_rate": process_config["reach_main_on_rate"],
                 "after_last_step_policy": process_config["after_last_step_policy"],
                 "extra_ramp": dict(process_config["extra_ramp"]),
+
+                "ramp_step_dac": int(process_config["ramp_step_dac"]),
+                "ramp_seg1_max_dac": int(process_config["ramp_seg1_max_dac"]),
+                "ramp_interval_seg1_s": float(process_config["ramp_interval_seg1_s"]),
+                "ramp_seg2_max_dac": int(process_config["ramp_seg2_max_dac"]),
+                "ramp_interval_seg2_s": float(process_config["ramp_interval_seg2_s"]),
+                "ramp_interval_after_seg2_s": float(process_config["ramp_interval_after_seg2_s"]),
+
+                "ignite_dac": int(process_config["ignite_dac"]),
+                "ignite_rate_min": float(process_config["ignite_rate_min"]),
+                "ignite_timeout_s": float(process_config["ignite_timeout_s"]),
+
+                "pre_rate": float(process_config["pre_rate"]),
+                "pre_hold_s": float(process_config["pre_hold_s"]),
+                "pre_hold_adjust_interval_s": float(process_config["pre_hold_adjust_interval_s"]),
+                "pre_drop_ratio": float(process_config["pre_drop_ratio"]),
+                "pre_drop_count": int(process_config["pre_drop_count"]),
+
+                "dac_adjust_interval_s": float(process_config["dac_adjust_interval_s"]),
+                "fine_step_dac": int(process_config["fine_step_dac"]),
+
+                "material_shortage_dac": int(process_config["material_shortage_dac"]),
+                "material_shortage_rate_max": float(process_config["material_shortage_rate_max"]),
+                "material_shortage_time_s": float(process_config["material_shortage_time_s"]),
+
+                "rate_filter_window": int(process_config["rate_filter_window"]),
+                "rate_stable_sec": float(process_config["rate_stable_sec"]),
+                "rate_drop_ratio": float(process_config["rate_drop_ratio"]),
+                "rate_drop_count": int(process_config["rate_drop_count"]),
             },
 
-            # backward-compatible top-level aliases
             "ramp_steps": process_config["ramp_steps"],
             "step_count": process_config["step_count"],
             "reach_main_on_rate": process_config["reach_main_on_rate"],
@@ -549,7 +622,6 @@ class ProcessController(QObject):
             "last_step_target_adc": last_step_adc,
             "adc_dynamic_step_cap": float(process_config["extra_ramp"].get("step_max", 50.0)),
         }
-
 
     def _build_runtime_evap_meta(
         self,
@@ -562,7 +634,7 @@ class ProcessController(QObject):
         meta: dict[str, Any] = {}
         meta.update(self._build_power_runtime_meta(power))
         meta.update(self._build_material_runtime_meta(material_cfg))
-        meta.update(self._build_control_runtime_meta(run_cfg))
+        meta.update(self._build_control_runtime_meta(run_cfg, process_config))
         meta.update(self._build_process_runtime_meta(process_config))
         return meta
         
@@ -574,6 +646,15 @@ class ProcessController(QObject):
         if not ramp_cfg:
             return
 
+        nested = meta.get("process_config")
+        if not isinstance(nested, dict):
+            nested = None
+
+        def _set_meta(k: str, value: Any) -> None:
+            meta[k] = value
+            if nested is not None:
+                nested[k] = value
+
         def _apply(k: str, cast) -> bool:
             if k not in ramp_cfg:
                 return False
@@ -583,7 +664,8 @@ class ProcessController(QObject):
                 return False
 
             try:
-                meta[k] = cast(v)
+                converted = cast(v)
+                _set_meta(k, converted)
                 return True
             except Exception:
                 raise ValueError(f"ramp 설정값 변환 실패: {k}={v!r}")
@@ -594,23 +676,31 @@ class ProcessController(QObject):
         _apply("ignite_dac", lambda x: int(float(x)))
         _apply("fine_step_dac", lambda x: int(float(x)))
         _apply("material_shortage_dac", lambda x: int(float(x)))
+        _apply("rate_filter_window", lambda x: int(float(x)))
+        _apply("pre_drop_count", lambda x: int(float(x)))
+        _apply("rate_drop_count", lambda x: int(float(x)))
 
         _apply("ramp_interval_seg1_s", float)
         seg2_over = _apply("ramp_interval_seg2_s", float)
         after_over = _apply("ramp_interval_after_seg2_s", float)
         if seg2_over and not after_over:
-            meta["ramp_interval_after_seg2_s"] = float(meta["ramp_interval_seg2_s"])
+            _set_meta("ramp_interval_after_seg2_s", float(meta["ramp_interval_seg2_s"]))
 
         _apply("ignite_rate_min", float)
         _apply("ignite_timeout_s", float)
+
         _apply("pre_rate", float)
         _apply("pre_hold_s", float)
         _apply("pre_hold_adjust_interval_s", float)
         _apply("pre_drop_ratio", float)
-        _apply("pre_drop_count", lambda x: int(float(x)))
+
         _apply("dac_adjust_interval_s", float)
+
         _apply("material_shortage_rate_max", float)
         _apply("material_shortage_time_s", float)
+
+        _apply("rate_stable_sec", float)
+        _apply("rate_drop_ratio", float)
 
     def _build_evap_steps(
         self,

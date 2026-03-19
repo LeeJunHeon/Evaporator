@@ -321,61 +321,88 @@ class ProcessEngine:
     # Step execution
     # --------------------------------------------------------
     def _execute_step(self, recipe: ProcessRecipe, step: ProcessStep) -> None:
-        """
-        step.type에 따라 동작 수행.
-        """
         t = step.type
 
-        # 항상 주기적으로 status/telemetry emit
         self._tick_emit(recipe, step)
 
-        if t == StepType.LOG:
+        if t in (StepType.LOG, StepType.MARK):
+            self._execute_meta_step(recipe, step)
+            return
+
+        if t in (
+            StepType.PLC_WRITE_COIL,
+            StepType.PLC_PULSE_COIL,
+            StepType.PLC_WRITE_REG,
+            StepType.PLC_SET_DAC_MA,
+        ):
+            self._execute_plc_step(step)
+            return
+
+        if t in (
+            StepType.WAIT_SECONDS,
+            StepType.WAIT_PRESSURE_LEQ,
+            StepType.WAIT_THICKNESS_GEQ,
+            StepType.WAIT_RATE_IN_RANGE,
+            StepType.WAIT_COIL_IS,
+        ):
+            self._execute_wait_step(recipe, step)
+            return
+
+        raise EngineFailed(step.name, f"unsupported step type: {t}")
+
+
+    def _execute_meta_step(self, recipe: ProcessRecipe, step: ProcessStep) -> None:
+        if step.type == StepType.LOG:
             self._log_info(step.message, tag="PROCESS", also_ui=True)
             return
 
-        if t == StepType.MARK:
-            # ✅ EVAP 증착 제어 루프(특수 MARK)
-            # - process_controller에서 step.name="EVAP_DEPOSITION_CONTROL" 로 넣어주면 여기로 들어온다.
+        if step.type == StepType.MARK:
             if step.name == "EVAP_DEPOSITION_CONTROL":
                 run_evap_deposition_control(self, recipe, step)
                 return
 
-            # UI trace용 마커(기본)
             self._log_info(f"MARK: {step.name}", tag="PROCESS", also_ui=False)
             return
 
-        # ---------- PLC actions ----------
+        raise EngineFailed(step.name, f"unsupported meta step type: {step.type}")
+
+
+    def _execute_plc_step(self, step: ProcessStep) -> None:
+        t = step.type
+
         if t == StepType.PLC_WRITE_COIL:
             coil = str(step.coil or "")
             on = bool(step.on)
-            # ✅ 스텝별 짧은 표시
-            self._emit_status(step_idx=self._current_step_idx, step_name=self._current_step_name,
-                            message=self._ui_coil_text(coil, on), force=True)
+            self._emit_status(
+                step_idx=self._current_step_idx,
+                step_name=self._current_step_name,
+                message=self._ui_coil_text(coil, on),
+                force=True,
+            )
             self._plc_write_coil(coil, on, tag=step.name)
             return
 
         if t == StepType.PLC_PULSE_COIL:
             coil = str(step.coil or "")
             ms = int(step.pulse_ms or 200)
-
-            # ✅ 펄스 스텝도 상단에 짧게 표시
             self._emit_status(
                 step_idx=self._current_step_idx,
                 step_name=self._current_step_name,
                 message=self._ui_pulse_text(coil, ms),
                 force=True,
             )
-
-            # momentary pulse(ON 펄스)로 통일
             self._plc_pulse_coil(coil, ms, tag=step.name)
             return
 
         if t == StepType.PLC_WRITE_REG:
             reg = str(step.reg or "")
             v = int(step.value or 0)
-            # ✅ 스텝별 짧은 표시
-            self._emit_status(step_idx=self._current_step_idx, step_name=self._current_step_name,
-                            message=self._ui_reg_text(reg, v), force=True)
+            self._emit_status(
+                step_idx=self._current_step_idx,
+                step_name=self._current_step_name,
+                message=self._ui_reg_text(reg, v),
+                force=True,
+            )
             self._plc_write_reg(reg, v, tag=step.name)
             return
 
@@ -383,7 +410,12 @@ class ProcessEngine:
             self._plc_set_dac_ma(int(step.dac_ch or 1), float(step.dac_ma or 4.0), tag=step.name)
             return
 
-        # ---------- WAIT actions ----------
+        raise EngineFailed(step.name, f"unsupported plc step type: {t}")
+
+
+    def _execute_wait_step(self, recipe: ProcessRecipe, step: ProcessStep) -> None:
+        t = step.type
+
         if t == StepType.WAIT_SECONDS:
             sec = float(step.seconds or 0.0)
             self._wait_seconds(recipe, step, sec)
@@ -396,8 +428,6 @@ class ProcessEngine:
                 step=step,
                 cond_fn=lambda: self._get_pressure_ok_leq(target),
                 cond_desc=f"압력 ≤ {target:g}",
-                # ✅ 압력도 표시하고 싶으면 sensor_value_fn을 넣되,
-                #    압력계가 순간 None이어도 바로 실패하지 않게 abort는 꺼둠(0.0)
                 sensor_value_fn=self._get_pressure,
                 sensor_label="압력",
                 sensor_missing_abort_s=0.0,
@@ -432,8 +462,8 @@ class ProcessEngine:
                 step=step,
                 cond_fn=lambda: self._get_rate_ok_in_range(mn, mx),
                 cond_desc=f"dep.rate [{mn}, {mx}] Å/s",
-                sensor_value_fn=self._get_rate,   # ✅ 추가
-                sensor_label="STM dep.rate",          # ✅ 추가
+                sensor_value_fn=self._get_rate,
+                sensor_label="STM dep.rate",
             )
             return
 
@@ -448,7 +478,7 @@ class ProcessEngine:
             )
             return
 
-        raise EngineFailed(step.name, f"unsupported step type: {t}")
+        raise EngineFailed(step.name, f"unsupported wait step type: {t}")
 
     def _safe_shutdown_sequence(
         self,
@@ -1197,7 +1227,7 @@ class ProcessEngine:
         else:
             message = self._ui_last_message
 
-        adc1, adc2 = self._get_power_read_pair()
+        adc1, adc2 = self._get_power_read_pair_cached()
 
         st = ProcessStatus(
             phase=self._phase,
@@ -1210,11 +1240,8 @@ class ProcessEngine:
             pressure=self._get_pressure(),
             thickness_a=self._get_thickness(),
             rate_a_s=self._get_rate(),
-
             dac1=(self._last_dac_power_1 if self._is_plc_ready() else None),
             dac2=(self._last_dac_power_2 if self._is_plc_ready() else None),
-
-            # ✅ ADC readback 추가
             adc1=adc1,
             adc2=adc2,
         )
@@ -1224,7 +1251,6 @@ class ProcessEngine:
             try:
                 cb(st)
             except Exception:
-                # 콜백 예외는 엔진에 영향 주지 않음
                 pass
 
     def _emit_step(self, st: StepStatus) -> None:
@@ -1244,29 +1270,21 @@ class ProcessEngine:
                 pass
 
     def _emit_telemetry(self, recipe: ProcessRecipe, step: ProcessStep) -> None:
-        """
-        LogService.telemetry()로 run별 CSV에 저장.
-        """
         try:
-            adc1, adc2 = self._get_power_read_pair()
+            adc1, adc2 = self._get_power_read_pair_cached()
 
             self.log.telemetry({
                 "step": (self._ui_last_message or self._current_step_name),
                 "detail": "",
-
                 "pressure_torr": self._get_pressure(),
                 "dac1": (self._last_dac_power_1 if self._is_plc_ready() else None),
                 "dac2": (self._last_dac_power_2 if self._is_plc_ready() else None),
-
-                # ✅ ADC readback 추가
                 "adc1": adc1,
                 "adc2": adc2,
-
                 "dep.rate": self._get_rate(),
                 "thickness_A": self._get_thickness(),
             })
         except Exception:
-            # 텔레메트리 실패해도 공정은 계속
             pass
 
     # --------------------------------------------------------
@@ -1332,26 +1350,21 @@ class ProcessEngine:
         return f"{c} PULSE ({int(pulse_ms)}ms)" if c else f"PULSE ({int(pulse_ms)}ms)"
     
     def _tele_event(self, *, event: str, target: str, value: Any = "", detail: str = "") -> None:
-        """공정 CSV에 이벤트 1줄 추가(event/target/value/detail)."""
         try:
             line = f"{str(event)} {str(target)}={value}"
             if detail:
                 line += f" | {str(detail)}"
 
-            adc1, adc2 = self._get_power_read_pair()
+            adc1, adc2 = self._get_power_read_pair_cached()
 
             self.log.telemetry({
                 "step": (self._ui_last_message or self._current_step_name),
                 "detail": line,
-
                 "pressure_torr": self._get_pressure(),
                 "dac1": (self._last_dac_power_1 if self._is_plc_ready() else None),
                 "dac2": (self._last_dac_power_2 if self._is_plc_ready() else None),
-
-                # ✅ ADC readback 추가
                 "adc1": adc1,
                 "adc2": adc2,
-
                 "dep.rate": self._get_rate(),
                 "thickness_A": self._get_thickness(),
             })

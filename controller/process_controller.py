@@ -219,20 +219,6 @@ class ProcessController(QObject):
         return self._recipe
     
     def _normalize_ramp_steps(self, run_cfg: dict[str, Any]) -> list[dict[str, float]]:
-        """
-        process_window.py 에서 넘어온 ramp step 설정을
-        runtime 이 바로 사용할 수 있는 표준 형태로 정규화한다.
-
-        기대 입력:
-        - run_cfg["ramp_steps"] 또는
-        - run_cfg["process_config"]["ramp_steps"]
-
-        반환 형식:
-        [
-            {"step_no": 1, "target_adc": 100.0, "delay_s": 0.0},
-            ...
-        ]
-        """
         raw_steps = (
             run_cfg.get("ramp_steps")
             or (run_cfg.get("process_config") or {}).get("ramp_steps")
@@ -242,10 +228,16 @@ class ProcessController(QObject):
         if not isinstance(raw_steps, list) or not raw_steps:
             raise ValueError("Process Config의 ramp_steps가 비어 있습니다.")
 
+        if len(raw_steps) > 10:
+            raise ValueError(
+                f"Process Config의 step 개수가 너무 많습니다. "
+                f"현재 최대 10개까지 지원합니다. (입력={len(raw_steps)})"
+            )
+
         steps: list[dict[str, float]] = []
         last_adc = -1.0
 
-        for idx, item in enumerate(raw_steps[:10], start=1):
+        for idx, item in enumerate(raw_steps, start=1):
             if not isinstance(item, dict):
                 raise ValueError(f"Process Config step {idx} 형식이 올바르지 않습니다.")
 
@@ -260,7 +252,6 @@ class ProcessController(QObject):
             if delay_s < 0:
                 raise ValueError(f"Process Config step {idx}의 delay_s는 0 이상이어야 합니다.")
 
-            # 안전상 오름차순 권장 / dialog에서도 검사하지만 controller에서 한 번 더 방어
             if last_adc >= 0 and target_adc < last_adc:
                 raise ValueError(
                     f"Process Config step {idx}의 target_adc가 이전 step보다 작습니다. "
@@ -287,9 +278,6 @@ class ProcessController(QObject):
         *,
         last_step_adc: float,
     ) -> dict[str, Any]:
-        """
-        마지막 step 이후 정책 / extra ramp 설정을 표준화한다.
-        """
         proc_cfg = run_cfg.get("process_config") or {}
 
         policy = str(
@@ -299,7 +287,10 @@ class ProcessController(QObject):
         ).strip().lower()
 
         if policy not in {"extra_ramp", "stop"}:
-            policy = "extra_ramp"
+            raise ValueError(
+                f"after_last_step_policy 값이 올바르지 않습니다: {policy!r} "
+                "(허용: 'extra_ramp', 'stop')"
+            )
 
         extra_src = (
             run_cfg.get("extra_ramp")
@@ -307,31 +298,36 @@ class ProcessController(QObject):
             or {}
         )
         if not isinstance(extra_src, dict):
-            extra_src = {}
+            raise ValueError("extra_ramp 설정 형식이 올바르지 않습니다. dict 형태여야 합니다.")
 
         enabled = bool(extra_src.get("enabled", True))
 
         try:
             max_adc = float(extra_src.get("max_adc", last_step_adc) or last_step_adc)
         except Exception:
-            max_adc = last_step_adc
+            raise ValueError(f"extra_ramp.max_adc 값 변환에 실패했습니다: {extra_src.get('max_adc')!r}")
 
         try:
             step_max = float(extra_src.get("step_max", 50.0) or 50.0)
         except Exception:
-            step_max = 50.0
+            raise ValueError(f"extra_ramp.step_max 값 변환에 실패했습니다: {extra_src.get('step_max')!r}")
 
         try:
             interval_s = float(extra_src.get("interval_s", 5.0) or 5.0)
         except Exception:
-            interval_s = 5.0
+            raise ValueError(f"extra_ramp.interval_s 값 변환에 실패했습니다: {extra_src.get('interval_s')!r}")
 
-        # 방어
         if max_adc < last_step_adc:
-            max_adc = last_step_adc
+            raise ValueError(
+                f"extra_ramp.max_adc는 마지막 step target_adc보다 작을 수 없습니다. "
+                f"(last_step_adc={last_step_adc}, max_adc={max_adc})"
+            )
 
-        step_max = min(100.0, max(1.0, step_max))
-        interval_s = max(0.1, interval_s)
+        if not (1.0 <= step_max <= 100.0):
+            raise ValueError(f"extra_ramp.step_max는 1.0 ~ 100.0 범위여야 합니다. (입력={step_max})")
+
+        if interval_s < 0.1:
+            raise ValueError(f"extra_ramp.interval_s는 0.1초 이상이어야 합니다. (입력={interval_s})")
 
         reach_main_on_rate = bool(
             proc_cfg.get("reach_main_on_rate", run_cfg.get("reach_main_on_rate", True))
@@ -347,7 +343,7 @@ class ProcessController(QObject):
                 "interval_s": interval_s,
             },
         }
-    
+
     def _prepare_recipe_build_context(self, run_cfg: dict[str, Any]) -> dict[str, Any]:
         """
         UI run_cfg를 기반으로 recipe 생성에 필요한 조립 컨텍스트를 만든다.
@@ -378,10 +374,12 @@ class ProcessController(QObject):
             "process_name": process_name,
         }
 
-
-    def build_recipe_from_ui(self, run_cfg: dict[str, Any]) -> ProcessRecipe:
-        ctx = self._prepare_recipe_build_context(run_cfg)
-
+    def _build_recipe_from_context(
+        self,
+        ctx: dict[str, Any],
+        *,
+        run_cfg: dict[str, Any],
+    ) -> ProcessRecipe:
         steps = self._build_evap_steps(
             power=ctx["power"],
             meta=ctx["runtime_meta"],
@@ -396,11 +394,17 @@ class ProcessController(QObject):
                 power=ctx["power"],
                 material_cfg=ctx["material_cfg"],
                 process_config=ctx["process_config"],
+                runtime_meta=ctx["runtime_meta"],
                 run_cfg=run_cfg,
             ),
         )
         recipe.validate(strict=True)
         return recipe
+
+
+    def build_recipe_from_ui(self, run_cfg: dict[str, Any]) -> ProcessRecipe:
+        ctx = self._prepare_recipe_build_context(run_cfg)
+        return self._build_recipe_from_context(ctx, run_cfg=run_cfg)
     
     def _to_float(self, value: Any, field_name: str) -> float:
         try:
@@ -453,30 +457,29 @@ class ProcessController(QObject):
             "last_step_target_adc": last_step_adc,
         }
     
-    def _build_runtime_evap_meta(
-        self,
-        run_cfg: dict[str, Any],
-        *,
-        power: dict[str, Any],
-        material_cfg: dict[str, Any],
-        process_config: dict[str, Any],
-    ) -> dict[str, Any]:
-        last_step_adc = float(process_config["last_step_target_adc"])
-
+    def _build_power_runtime_meta(self, power: dict[str, Any]) -> dict[str, Any]:
         return {
             "use_power1": power["use_power1"],
             "use_power2": power["use_power2"],
             "temp_force_power2_sw": power["temp_force_power2_sw"],
             "power1_feedback_adc2": power["power1_feedback_adc2"],
             "source_shutter_coils": list(power["source_shutter_coils"]),
+        }
 
+
+    def _build_material_runtime_meta(self, material_cfg: dict[str, Any]) -> dict[str, Any]:
+        return {
             "material_name": material_cfg["material_name"],
             "density": material_cfg["density"],
             "z_factor": material_cfg["z_factor"],
             "target_rate": material_cfg["target_rate"],
             "target_thickness": material_cfg["target_thickness"],
             "delay_min": material_cfg["delay_min"],
+        }
 
+
+    def _build_control_runtime_meta(self, run_cfg: dict[str, Any]) -> dict[str, Any]:
+        return {
             "dac_max": 4000,
             "sensor_none_abort_s": 5.0,
 
@@ -516,13 +519,19 @@ class ProcessController(QObject):
 
             "zero_mode": "B",
             "wait_after_ftm_on_s": 1.5,
-
             "adc_control_mode": str(run_cfg.get("adc_control_mode", "adc") or "adc"),
+        }
 
+
+    def _build_process_runtime_meta(self, process_config: dict[str, Any]) -> dict[str, Any]:
+        last_step_adc = float(process_config["last_step_target_adc"])
+
+        return {
             # NOTE:
-            # engine.py가 아직 확인되지 않았기 때문에,
-            # process_config 중첩 구조와 top-level 호환 키를 둘 다 유지한다.
-            # engine의 실제 소비 키를 확인한 뒤 한쪽으로 정리할 예정.
+            # 현재 engine.py 자체는 이 키들을 직접 해석하지 않고
+            # EVAP_DEPOSITION_CONTROL step을 evap_runtime.py로 넘긴다.
+            # 따라서 nested / top-level 중복 유지 여부는
+            # evap_runtime.py 확인 전까지 유지한다.
             "process_config": {
                 "step_count": process_config["step_count"],
                 "ramp_steps": process_config["ramp_steps"],
@@ -540,22 +549,44 @@ class ProcessController(QObject):
             "last_step_target_adc": last_step_adc,
             "adc_dynamic_step_cap": float(process_config["extra_ramp"].get("step_max", 50.0)),
         }
-    
+
+
+    def _build_runtime_evap_meta(
+        self,
+        run_cfg: dict[str, Any],
+        *,
+        power: dict[str, Any],
+        material_cfg: dict[str, Any],
+        process_config: dict[str, Any],
+    ) -> dict[str, Any]:
+        meta: dict[str, Any] = {}
+        meta.update(self._build_power_runtime_meta(power))
+        meta.update(self._build_material_runtime_meta(material_cfg))
+        meta.update(self._build_control_runtime_meta(run_cfg))
+        meta.update(self._build_process_runtime_meta(process_config))
+        return meta
+        
     def _apply_material_ramp_overrides(self, meta: dict[str, Any], ramp_cfg: Any) -> None:
-        if not isinstance(ramp_cfg, dict) or not ramp_cfg:
+        if ramp_cfg is None:
+            return
+        if not isinstance(ramp_cfg, dict):
+            raise ValueError("ramp 설정 형식이 올바르지 않습니다. dict 형태여야 합니다.")
+        if not ramp_cfg:
             return
 
         def _apply(k: str, cast) -> bool:
             if k not in ramp_cfg:
                 return False
+
             v = ramp_cfg.get(k)
             if v is None or v == "":
                 return False
+
             try:
                 meta[k] = cast(v)
                 return True
             except Exception:
-                return False
+                raise ValueError(f"ramp 설정값 변환 실패: {k}={v!r}")
 
         _apply("ramp_step_dac", lambda x: int(float(x)))
         _apply("ramp_seg1_max_dac", lambda x: int(float(x)))
@@ -643,6 +674,7 @@ class ProcessController(QObject):
         power: dict[str, Any],
         material_cfg: dict[str, Any],
         process_config: dict[str, Any],
+        runtime_meta: dict[str, Any],
         run_cfg: dict[str, Any],
     ) -> dict[str, Any]:
         return {
@@ -658,8 +690,26 @@ class ProcessController(QObject):
             "ramp_steps": process_config["ramp_steps"],
             "after_last_step_policy": process_config["after_last_step_policy"],
             "extra_ramp": dict(process_config["extra_ramp"]),
+
+            # 실제 실행 메타 일부 snapshot
+            "effective_runtime": {
+                "ramp_step_dac": runtime_meta.get("ramp_step_dac"),
+                "ramp_seg1_max_dac": runtime_meta.get("ramp_seg1_max_dac"),
+                "ramp_seg2_max_dac": runtime_meta.get("ramp_seg2_max_dac"),
+                "ramp_interval_seg1_s": runtime_meta.get("ramp_interval_seg1_s"),
+                "ramp_interval_seg2_s": runtime_meta.get("ramp_interval_seg2_s"),
+                "ramp_interval_after_seg2_s": runtime_meta.get("ramp_interval_after_seg2_s"),
+                "ignite_dac": runtime_meta.get("ignite_dac"),
+                "ignite_rate_min": runtime_meta.get("ignite_rate_min"),
+                "ignite_timeout_s": runtime_meta.get("ignite_timeout_s"),
+                "fine_step_dac": runtime_meta.get("fine_step_dac"),
+                "material_shortage_dac": runtime_meta.get("material_shortage_dac"),
+                "material_shortage_rate_max": runtime_meta.get("material_shortage_rate_max"),
+                "material_shortage_time_s": runtime_meta.get("material_shortage_time_s"),
+                "wait_after_ftm_on_s": runtime_meta.get("wait_after_ftm_on_s"),
+            },
         }
-    
+        
     def _extract_power_mode(self, run_cfg: dict[str, Any]) -> dict[str, Any]:
         use_p1 = bool(run_cfg.get("use_power1", False))
         use_p2 = bool(run_cfg.get("use_power2", False))
@@ -695,9 +745,13 @@ class ProcessController(QObject):
         """
         UI 입력값으로 공정 시작.
         """
-        r = self.build_recipe_from_ui(run_cfg)
-        self.set_recipe(r)
-        self.start(run_id=run_id, recipe=r)
+        try:
+            r = self.build_recipe_from_ui(run_cfg)
+            self.set_recipe(r)
+            self.start(run_id=run_id, recipe=r)
+        except Exception as e:
+            self._ui_warn(f"공정 시작 준비 실패: {e}")
+            raise
 
     # --------------------------------------------------------
     # Run control

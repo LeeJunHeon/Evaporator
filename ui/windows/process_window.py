@@ -1676,16 +1676,6 @@ class ProcessWindow(QWidget):
         den = float((base_mat or {}).get("density_g_cm3", 0.0) or 0.0)
         zf = float((base_mat or {}).get("z_factor", 0.0) or 0.0)
 
-        proc_cfg = self._normalize_process_config(getattr(self, "_process_cfg", None))
-
-        # ✅ 임시 호환용:
-        #    기존 controller/runtime가 run_cfg["ramp"]를 읽는 코드가 남아 있을 수 있으므로
-        #    material이 아니라 process_config 기준으로 bridge 한다.
-        legacy_ramp_cfg: dict[str, Any] = {}
-        for k in getattr(self, "_PROCESS_CFG_KEYS", ()):
-            if k in proc_cfg:
-                legacy_ramp_cfg[k] = proc_cfg.get(k)
-
         if not mat_name:
             QMessageBox.warning(self, "Input", "Material 이름이 비어있습니다. Material을 다시 선택하세요.")
             return None

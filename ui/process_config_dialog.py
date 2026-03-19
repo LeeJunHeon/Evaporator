@@ -34,12 +34,21 @@ class ProcessConfigDialog(QDialog):
     - 각 step:
         * target_adc
         * delay_s
-    - 공통 옵션:
+    - 공통 정책:
         * dep.rate 도달 시 즉시 메인 공정 진입
         * 마지막 step 후 정책(extra_ramp / stop)
         * extra ramp 설정(enabled / max_adc / step_max / interval_s)
 
-    process_window.py 와 맞춰서
+    - DAC / ramp 세부 설정:
+        * ramp_step_dac
+        * ramp_seg1_max_dac / ramp_interval_seg1_s
+        * ramp_seg2_max_dac / ramp_interval_seg2_s
+        * ramp_interval_after_seg2_s
+
+    - ignite / pre-hold 설정
+    - shortage 판단 설정
+    - dep.rate 필터/유지시간 설정
+
     get_config() -> dict 형태를 반환한다.
     """
 
@@ -78,9 +87,66 @@ class ProcessConfigDialog(QDialog):
                 "step_max": 50.0,
                 "interval_s": 5.0,
             },
+
+            # DAC / ramp
+            "ramp_step_dac": 100,
+            "ramp_seg1_max_dac": 700,
+            "ramp_interval_seg1_s": 10.0,
+            "ramp_seg2_max_dac": 2000,
+            "ramp_interval_seg2_s": 30.0,
+            "ramp_interval_after_seg2_s": 30.0,
+
+            # ignite
+            "ignite_dac": 2000,
+            "ignite_rate_min": 0.1,
+            "ignite_timeout_s": 300.0,
+
+            # pre-hold
+            "pre_rate": 0.4,
+            "pre_hold_s": 120.0,
+            "pre_hold_adjust_interval_s": 10.0,
+            "pre_drop_ratio": 0.50,
+            "pre_drop_count": 3,
+
+            # DAC adjust
+            "dac_adjust_interval_s": 10.0,
+            "fine_step_dac": 10,
+
+            # shortage
+            "material_shortage_dac": 2000,
+            "material_shortage_rate_max": 0.0,
+            "material_shortage_time_s": 10.0,
+
+            # dep.rate 판단
+            "rate_filter_window": 5,
+            "rate_stable_sec": 3.0,
+            "rate_drop_ratio": 0.50,
+            "rate_drop_count": 3,
         }
 
     def _normalize_config(self, cfg: dict[str, Any]) -> dict[str, Any]:
+        def _as_int(name: str, default_val: int, min_v: int | None = None, max_v: int | None = None) -> int:
+            try:
+                v = int(src.get(name, default_val))
+            except Exception:
+                v = int(default_val)
+            if min_v is not None:
+                v = max(min_v, v)
+            if max_v is not None:
+                v = min(max_v, v)
+            return v
+
+        def _as_float(name: str, default_val: float, min_v: float | None = None, max_v: float | None = None) -> float:
+            try:
+                v = float(src.get(name, default_val))
+            except Exception:
+                v = float(default_val)
+            if min_v is not None:
+                v = max(min_v, v)
+            if max_v is not None:
+                v = min(max_v, v)
+            return v
+
         src = dict(cfg or {})
         default = self._default_config()
 
@@ -155,6 +221,35 @@ class ProcessConfigDialog(QDialog):
                 "step_max": step_max,
                 "interval_s": interval_s,
             },
+
+            "ramp_step_dac": _as_int("ramp_step_dac", 100, 1),
+            "ramp_seg1_max_dac": _as_int("ramp_seg1_max_dac", 700, 1),
+            "ramp_interval_seg1_s": _as_float("ramp_interval_seg1_s", 10.0, 0.1),
+            "ramp_seg2_max_dac": _as_int("ramp_seg2_max_dac", 2000, 1),
+            "ramp_interval_seg2_s": _as_float("ramp_interval_seg2_s", 30.0, 0.1),
+            "ramp_interval_after_seg2_s": _as_float("ramp_interval_after_seg2_s", 30.0, 0.1),
+
+            "ignite_dac": _as_int("ignite_dac", 2000, 0),
+            "ignite_rate_min": _as_float("ignite_rate_min", 0.1, 0.0),
+            "ignite_timeout_s": _as_float("ignite_timeout_s", 300.0, 1.0),
+
+            "pre_rate": _as_float("pre_rate", 0.4, 0.0),
+            "pre_hold_s": _as_float("pre_hold_s", 120.0, 0.0),
+            "pre_hold_adjust_interval_s": _as_float("pre_hold_adjust_interval_s", 10.0, 0.1),
+            "pre_drop_ratio": _as_float("pre_drop_ratio", 0.50, 0.01, 1.0),
+            "pre_drop_count": _as_int("pre_drop_count", 3, 1),
+
+            "dac_adjust_interval_s": _as_float("dac_adjust_interval_s", 10.0, 0.1),
+            "fine_step_dac": _as_int("fine_step_dac", 10, 1),
+
+            "material_shortage_dac": _as_int("material_shortage_dac", 2000, 0),
+            "material_shortage_rate_max": _as_float("material_shortage_rate_max", 0.0, 0.0),
+            "material_shortage_time_s": _as_float("material_shortage_time_s", 10.0, 0.0),
+
+            "rate_filter_window": _as_int("rate_filter_window", 5, 1, 21),
+            "rate_stable_sec": _as_float("rate_stable_sec", 3.0, 0.0),
+            "rate_drop_ratio": _as_float("rate_drop_ratio", 0.50, 0.01, 1.0),
+            "rate_drop_count": _as_int("rate_drop_count", 3, 1, 20),
         }
 
     # =========================================================
@@ -276,6 +371,90 @@ class ProcessConfigDialog(QDialog):
 
         root.addWidget(extra_box)
 
+        ramp_box = QGroupBox("Ramp Detail")
+        ramp_form = QFormLayout(ramp_box)
+
+        self.rampStepDacSpin = self._make_int_spin(minimum=1, maximum=5000, step=10)
+        self.rampSeg1MaxDacSpin = self._make_int_spin(minimum=1, maximum=9999, step=10)
+        self.rampSeg1IntervalSpin = self._make_delay_spin(maximum=9999.0, decimals=1)
+        self.rampSeg1IntervalSpin.setMinimum(0.1)
+
+        self.rampSeg2MaxDacSpin = self._make_int_spin(minimum=1, maximum=9999, step=10)
+        self.rampSeg2IntervalSpin = self._make_delay_spin(maximum=9999.0, decimals=1)
+        self.rampSeg2IntervalSpin.setMinimum(0.1)
+
+        self.rampAfterSeg2IntervalSpin = self._make_delay_spin(maximum=9999.0, decimals=1)
+        self.rampAfterSeg2IntervalSpin.setMinimum(0.1)
+
+        ramp_form.addRow("DAC Step", self.rampStepDacSpin)
+        ramp_form.addRow("Seg1 Max DAC", self.rampSeg1MaxDacSpin)
+        ramp_form.addRow("Seg1 Interval (s)", self.rampSeg1IntervalSpin)
+        ramp_form.addRow("Seg2 Max DAC", self.rampSeg2MaxDacSpin)
+        ramp_form.addRow("Seg2 Interval (s)", self.rampSeg2IntervalSpin)
+        ramp_form.addRow("After Seg2 Interval (s)", self.rampAfterSeg2IntervalSpin)
+
+        root.addWidget(ramp_box)
+
+        ignite_box = QGroupBox("Ignite / Pre-Hold")
+        ignite_form = QFormLayout(ignite_box)
+
+        self.igniteDacSpin = self._make_int_spin(minimum=0, maximum=9999, step=10)
+        self.igniteRateMinSpin = self._make_adc_spin(maximum=999.0, decimals=2)
+        self.igniteTimeoutSpin = self._make_delay_spin(maximum=99999.0, decimals=1)
+
+        self.preRateSpin = self._make_adc_spin(maximum=999.0, decimals=2)
+        self.preHoldSpin = self._make_delay_spin(maximum=99999.0, decimals=1)
+        self.preHoldAdjustIntervalSpin = self._make_delay_spin(maximum=99999.0, decimals=1)
+        self.preDropRatioSpin = self._make_adc_spin(maximum=1.0, decimals=2)
+        self.preDropRatioSpin.setRange(0.01, 1.0)
+        self.preDropCountSpin = self._make_int_spin(minimum=1, maximum=20, step=1)
+
+        ignite_form.addRow("Ignite DAC", self.igniteDacSpin)
+        ignite_form.addRow("Ignite Rate Min (Å/s)", self.igniteRateMinSpin)
+        ignite_form.addRow("Ignite Timeout (s)", self.igniteTimeoutSpin)
+
+        ignite_form.addRow("Pre Rate (Å/s)", self.preRateSpin)
+        ignite_form.addRow("Pre Hold (s)", self.preHoldSpin)
+        ignite_form.addRow("Pre Hold Adjust Interval (s)", self.preHoldAdjustIntervalSpin)
+        ignite_form.addRow("Pre Drop Ratio", self.preDropRatioSpin)
+        ignite_form.addRow("Pre Drop Count", self.preDropCountSpin)
+
+        root.addWidget(ignite_box)
+
+        shortage_box = QGroupBox("Shortage / DAC Adjust")
+        shortage_form = QFormLayout(shortage_box)
+
+        self.dacAdjustIntervalSpin = self._make_delay_spin(maximum=99999.0, decimals=1)
+        self.fineStepDacSpin = self._make_int_spin(minimum=1, maximum=1000, step=1)
+
+        self.shortageDacSpin = self._make_int_spin(minimum=0, maximum=9999, step=10)
+        self.shortageRateMaxSpin = self._make_adc_spin(maximum=999.0, decimals=2)
+        self.shortageTimeSpin = self._make_delay_spin(maximum=99999.0, decimals=1)
+
+        shortage_form.addRow("DAC Adjust Interval (s)", self.dacAdjustIntervalSpin)
+        shortage_form.addRow("Fine Step DAC", self.fineStepDacSpin)
+        shortage_form.addRow("Shortage DAC", self.shortageDacSpin)
+        shortage_form.addRow("Shortage Rate Max (Å/s)", self.shortageRateMaxSpin)
+        shortage_form.addRow("Shortage Time (s)", self.shortageTimeSpin)
+
+        root.addWidget(shortage_box)
+
+        rate_box = QGroupBox("Rate Filter / Judge")
+        rate_form = QFormLayout(rate_box)
+
+        self.rateFilterWindowSpin = self._make_int_spin(minimum=1, maximum=21, step=2)
+        self.rateStableSecSpin = self._make_delay_spin(maximum=60.0, decimals=1)
+        self.rateDropRatioSpin = self._make_adc_spin(maximum=1.0, decimals=2)
+        self.rateDropRatioSpin.setRange(0.01, 1.0)
+        self.rateDropCountSpin = self._make_int_spin(minimum=1, maximum=20, step=1)
+
+        rate_form.addRow("Rate Filter Window", self.rateFilterWindowSpin)
+        rate_form.addRow("Rate Stable Sec", self.rateStableSecSpin)
+        rate_form.addRow("Rate Drop Ratio", self.rateDropRatioSpin)
+        rate_form.addRow("Rate Drop Count", self.rateDropCountSpin)
+
+        root.addWidget(rate_box)
+
         # -------------------------
         # 버튼
         # -------------------------
@@ -302,6 +481,13 @@ class ProcessConfigDialog(QDialog):
         w.setSingleStep(10.0)
         w.setAlignment(Qt.AlignmentFlag.AlignRight)
         w.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.UpDownArrows)
+        return w
+    
+    def _make_int_spin(self, *, minimum: int = 0, maximum: int = 999999, step: int = 1) -> QSpinBox:
+        w = QSpinBox(self)
+        w.setRange(minimum, maximum)
+        w.setSingleStep(step)
+        w.setAlignment(Qt.AlignmentFlag.AlignRight)
         return w
 
     def _make_delay_spin(self, *, maximum: float = 9999.0, decimals: int = 1) -> QDoubleSpinBox:
@@ -346,6 +532,35 @@ class ProcessConfigDialog(QDialog):
         self.extraMaxAdcSpin.setValue(float(extra.get("max_adc", 300.0) or 300.0))
         self.extraStepMaxSpin.setValue(float(extra.get("step_max", 50.0) or 50.0))
         self.extraIntervalSpin.setValue(float(extra.get("interval_s", 5.0) or 5.0))
+
+        self.rampStepDacSpin.setValue(int(cfg.get("ramp_step_dac", 100)))
+        self.rampSeg1MaxDacSpin.setValue(int(cfg.get("ramp_seg1_max_dac", 700)))
+        self.rampSeg1IntervalSpin.setValue(float(cfg.get("ramp_interval_seg1_s", 10.0)))
+        self.rampSeg2MaxDacSpin.setValue(int(cfg.get("ramp_seg2_max_dac", 2000)))
+        self.rampSeg2IntervalSpin.setValue(float(cfg.get("ramp_interval_seg2_s", 30.0)))
+        self.rampAfterSeg2IntervalSpin.setValue(float(cfg.get("ramp_interval_after_seg2_s", 30.0)))
+
+        self.igniteDacSpin.setValue(int(cfg.get("ignite_dac", 2000)))
+        self.igniteRateMinSpin.setValue(float(cfg.get("ignite_rate_min", 0.1)))
+        self.igniteTimeoutSpin.setValue(float(cfg.get("ignite_timeout_s", 300.0)))
+
+        self.preRateSpin.setValue(float(cfg.get("pre_rate", 0.4)))
+        self.preHoldSpin.setValue(float(cfg.get("pre_hold_s", 120.0)))
+        self.preHoldAdjustIntervalSpin.setValue(float(cfg.get("pre_hold_adjust_interval_s", 10.0)))
+        self.preDropRatioSpin.setValue(float(cfg.get("pre_drop_ratio", 0.5)))
+        self.preDropCountSpin.setValue(int(cfg.get("pre_drop_count", 3)))
+
+        self.dacAdjustIntervalSpin.setValue(float(cfg.get("dac_adjust_interval_s", 10.0)))
+        self.fineStepDacSpin.setValue(int(cfg.get("fine_step_dac", 10)))
+
+        self.shortageDacSpin.setValue(int(cfg.get("material_shortage_dac", 2000)))
+        self.shortageRateMaxSpin.setValue(float(cfg.get("material_shortage_rate_max", 0.0)))
+        self.shortageTimeSpin.setValue(float(cfg.get("material_shortage_time_s", 10.0)))
+
+        self.rateFilterWindowSpin.setValue(int(cfg.get("rate_filter_window", 5)))
+        self.rateStableSecSpin.setValue(float(cfg.get("rate_stable_sec", 3.0)))
+        self.rateDropRatioSpin.setValue(float(cfg.get("rate_drop_ratio", 0.5)))
+        self.rateDropCountSpin.setValue(int(cfg.get("rate_drop_count", 3)))
 
         self._sync_step_enabled_rows()
         self._update_extra_ramp_enabled()
@@ -433,6 +648,35 @@ class ProcessConfigDialog(QDialog):
                 "step_max": float(self.extraStepMaxSpin.value()),
                 "interval_s": float(self.extraIntervalSpin.value()),
             },
+
+            "ramp_step_dac": int(self.rampStepDacSpin.value()),
+            "ramp_seg1_max_dac": int(self.rampSeg1MaxDacSpin.value()),
+            "ramp_interval_seg1_s": float(self.rampSeg1IntervalSpin.value()),
+            "ramp_seg2_max_dac": int(self.rampSeg2MaxDacSpin.value()),
+            "ramp_interval_seg2_s": float(self.rampSeg2IntervalSpin.value()),
+            "ramp_interval_after_seg2_s": float(self.rampAfterSeg2IntervalSpin.value()),
+
+            "ignite_dac": int(self.igniteDacSpin.value()),
+            "ignite_rate_min": float(self.igniteRateMinSpin.value()),
+            "ignite_timeout_s": float(self.igniteTimeoutSpin.value()),
+
+            "pre_rate": float(self.preRateSpin.value()),
+            "pre_hold_s": float(self.preHoldSpin.value()),
+            "pre_hold_adjust_interval_s": float(self.preHoldAdjustIntervalSpin.value()),
+            "pre_drop_ratio": float(self.preDropRatioSpin.value()),
+            "pre_drop_count": int(self.preDropCountSpin.value()),
+
+            "dac_adjust_interval_s": float(self.dacAdjustIntervalSpin.value()),
+            "fine_step_dac": int(self.fineStepDacSpin.value()),
+
+            "material_shortage_dac": int(self.shortageDacSpin.value()),
+            "material_shortage_rate_max": float(self.shortageRateMaxSpin.value()),
+            "material_shortage_time_s": float(self.shortageTimeSpin.value()),
+
+            "rate_filter_window": int(self.rateFilterWindowSpin.value()),
+            "rate_stable_sec": float(self.rateStableSecSpin.value()),
+            "rate_drop_ratio": float(self.rateDropRatioSpin.value()),
+            "rate_drop_count": int(self.rateDropCountSpin.value()),
         }
         return self._normalize_config(cfg)
 
@@ -445,6 +689,26 @@ class ProcessConfigDialog(QDialog):
 
         if not steps:
             QMessageBox.warning(self, "Process Config", "최소 1개의 step이 필요합니다.")
+            return
+        
+        if cfg["ramp_step_dac"] <= 0:
+            QMessageBox.warning(self, "Process Config", "DAC Step은 1 이상이어야 합니다.")
+            return
+
+        if cfg["ramp_seg2_max_dac"] < cfg["ramp_seg1_max_dac"]:
+            QMessageBox.warning(self, "Process Config", "Seg2 Max DAC는 Seg1 Max DAC보다 작을 수 없습니다.")
+            return
+
+        if not (0.0 < cfg["pre_drop_ratio"] <= 1.0):
+            QMessageBox.warning(self, "Process Config", "Pre Drop Ratio는 0 초과 1 이하이어야 합니다.")
+            return
+
+        if cfg["rate_filter_window"] < 1:
+            QMessageBox.warning(self, "Process Config", "Rate Filter Window는 1 이상이어야 합니다.")
+            return
+
+        if not (0.0 < cfg["rate_drop_ratio"] <= 1.0):
+            QMessageBox.warning(self, "Process Config", "Rate Drop Ratio는 0 초과 1 이하이어야 합니다.")
             return
 
         # step target_adc 오름차순 체크

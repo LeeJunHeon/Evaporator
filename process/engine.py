@@ -20,13 +20,12 @@ ProcessEngine
 
 from __future__ import annotations
 
-import contextlib
 import concurrent.futures
 import time
 import uuid
 import math
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Optional
 from process.safety import build_engine_safe_shutdown_steps
 from process.evap_runtime import run_evap_deposition_control
 
@@ -264,7 +263,8 @@ class ProcessEngine:
             self._emit_status(message=f"정지 요청 처리중: {e.mode.value}")
             self._log_warn(f"Stop requested: {e.mode.value}", tag="ENGINE", also_ui=True)
 
-            # ✅ EV 안전정지 시퀀스 통일 (셔터닫기 → DAC0 → PowerOff)
+            # ✅ EV 안전정지 시퀀스 통일
+            #    (셔터 닫기 → DAC pair ramp-down → Power off)
             self._safe_shutdown_sequence(tag=f"STOP_{e.mode.value}")
 
             self._phase = ProcessPhase.FINISHED
@@ -290,6 +290,7 @@ class ProcessEngine:
             )
 
             # ✅ 에러 시에도 동일한 안전정지 시퀀스
+            #    (셔터 닫기 → DAC pair ramp-down → Power off)
             self._safe_shutdown_sequence(tag="ERROR_ABORT")
             ok = False
 
@@ -451,15 +452,18 @@ class ProcessEngine:
         기존 engine.py의 하드코딩 안전정지 순서를 그대로 유지하되,
         실제 step 정의는 process/safety.py 에서 가져와 실행한다.
 
-        순서(기존과 동일):
+        순서(최신 safety plan 기준):
         1) MAIN_SHUTTER close
-        2) DAC_POWER_1 = 0
-        3) DAC_POWER_2 = 0
-        4) SHUTTER_1_SW close
-        5) SHUTTER_2_SW close
-        6) POWER_1_SW off
-        7) POWER_2_SW off
-        8) FTM_SW off
+        2) DAC pair ramp-down marker 해석
+        - 현재 DAC 값에서 시작
+        - step_dac 만큼 감소
+        - interval_s 간격으로 반복
+        - 0까지 clamp
+        3) SHUTTER_1_SW close
+        4) SHUTTER_2_SW close
+        5) POWER_1_SW off
+        6) POWER_2_SW off
+        7) FTM_SW off
 
         실패해도 예외는 삼키고 계속 진행(best-effort)한다.
         """
@@ -498,11 +502,25 @@ class ProcessEngine:
                         value,
                         tag=f"{tag}_{st.name}",
                     )
-                    # _plc_write_reg 안에서 DAC last 값도 이미 동기화됨
+
+                elif st.type == StepType.MARK:
+                    action = str(getattr(st, "action", "") or "").strip().lower()
+
+                    if action == "ramp_down_dac_pair":
+                        self._run_shutdown_dac_pair_ramp_down(
+                            step_dac=int(getattr(st, "step_dac", 100) or 100),
+                            interval_s=float(getattr(st, "interval_s", 1.0) or 1.0),
+                            tag=f"{tag}_{st.name}",
+                        )
+                    else:
+                        self._log_warn(
+                            f"[SAFETY:{tag}] unsupported safety MARK action: "
+                            f"name={st.name}, action={action!r}",
+                            tag="ENGINE",
+                            also_ui=True,
+                        )
 
                 elif st.type == StepType.LOG:
-                    # 현재 legacy sequence에는 LOG step을 안 쓰지만,
-                    # 혹시 plan에 추가되더라도 안전하게 기록 가능하도록 둠
                     self._run_line(st.message or st.name)
 
                 else:
@@ -513,12 +531,119 @@ class ProcessEngine:
                     )
 
             except Exception as e:
-                # 기존 엔진과 동일하게 best-effort
                 self._log_warn(
                     f"[SAFETY:{tag}] step failed but continue: {st.name} / {e!r}",
                     tag="ENGINE",
                     also_ui=True,
                 )
+
+    def _get_reg_int_from_snapshot(self, reg_name: str) -> Optional[int]:
+        """
+        PLC snapshot.regs 에서 정수형 레지스터 값을 읽는다.
+        - 없으면 None
+        - 형변환 실패해도 None
+        """
+        snap = self._get_plc_snapshot()
+        if snap is None:
+            return None
+        if not getattr(snap, "connected", False):
+            return None
+
+        regs = getattr(snap, "regs", None)
+        if not isinstance(regs, dict):
+            return None
+
+        raw = regs.get(str(reg_name))
+        if raw is None:
+            return None
+
+        try:
+            return int(float(raw))
+        except Exception:
+            return None
+
+
+    def _get_shutdown_dac_start_pair(self) -> tuple[int, int]:
+        """
+        종료 ramp-down 시작 DAC를 결정한다.
+
+        우선순위:
+        1) engine 내부 last cache (_last_dac_power_1/_2)
+        2) PLC snapshot.regs["DAC_POWER_1"/"DAC_POWER_2"] fallback
+        3) 둘 다 없으면 0
+        """
+        snap_dac1 = self._get_reg_int_from_snapshot("DAC_POWER_1")
+        snap_dac2 = self._get_reg_int_from_snapshot("DAC_POWER_2")
+
+        dac1 = self._last_dac_power_1 if self._last_dac_power_1 is not None else snap_dac1
+        dac2 = self._last_dac_power_2 if self._last_dac_power_2 is not None else snap_dac2
+
+        return max(0, int(dac1 or 0)), max(0, int(dac2 or 0))
+
+
+    def _run_shutdown_dac_pair_ramp_down(
+        self,
+        *,
+        step_dac: int = 100,
+        interval_s: float = 1.0,
+        tag: str,
+    ) -> None:
+        """
+        종료 전용 DAC pair ramp-down.
+        - 1초 간격(기본)
+        - 100씩 감소(기본)
+        - 0 clamp
+        - DAC1/DAC2 각각 독립 처리
+        - shutdown 경로이므로 _wait_seconds()를 쓰지 않고 직접 sleep 한다.
+        """
+        step_dac = max(1, int(step_dac or 100))
+        interval_s = max(0.0, float(interval_s or 1.0))
+
+        dac1, dac2 = self._get_shutdown_dac_start_pair()
+
+        self._log_info(
+            f"[SAFETY:{tag}] ramp_down_dac_pair start | "
+            f"dac1={dac1}, dac2={dac2}, step_dac={step_dac}, interval_s={interval_s}",
+            tag="ENGINE",
+            also_ui=True,
+        )
+
+        # 이미 둘 다 0이면 바로 종료
+        if dac1 <= 0 and dac2 <= 0:
+            self._last_dac_power_1 = 0
+            self._last_dac_power_2 = 0
+            self._emit_status(message="POWER RAMP DOWN (DAC1=0, DAC2=0)", force=True)
+            return
+
+        while True:
+            next_dac1 = max(0, dac1 - step_dac) if dac1 > 0 else 0
+            next_dac2 = max(0, dac2 - step_dac) if dac2 > 0 else 0
+
+            # 채널별 독립 처리
+            if next_dac1 != dac1:
+                self._plc_write_reg("DAC_POWER_1", next_dac1, tag=f"{tag}_DAC1_RAMP")
+
+            if next_dac2 != dac2:
+                self._plc_write_reg("DAC_POWER_2", next_dac2, tag=f"{tag}_DAC2_RAMP")
+
+            self._emit_status(
+                message=f"POWER RAMP DOWN (DAC1={next_dac1}, DAC2={next_dac2})",
+                force=True,
+            )
+            self._run_line(
+                f"[SAFETY:{tag}] DAC ramp -> DAC_POWER_1={next_dac1}, DAC_POWER_2={next_dac2}"
+            )
+
+            dac1, dac2 = next_dac1, next_dac2
+
+            if dac1 <= 0 and dac2 <= 0:
+                break
+
+            time.sleep(interval_s)
+
+        # 최종 캐시 정리
+        self._last_dac_power_1 = 0
+        self._last_dac_power_2 = 0
 
     # --------------------------------------------------------
     # PLC wrappers

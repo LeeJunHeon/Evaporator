@@ -53,8 +53,10 @@ def _append_text(widget: Any, text: str) -> None:
 # Process 창
 # ============================================================
 class ProcessWindow(QWidget):
-    # ✅ Material catalog에서 가져올 ramp 파라미터 키 목록
-    _RAMP_KEYS = (
+    # ✅ 공정 세부 파라미터 키 목록
+    #    source(material)에서 가져오는 값이 아니라,
+    #    process_config에서 유지/전달할 값들이다.
+    _PROCESS_CFG_KEYS = (
         "ramp_step_dac",
         "ramp_seg1_max_dac",
         "ramp_interval_seg1_s",
@@ -74,23 +76,11 @@ class ProcessWindow(QWidget):
         "material_shortage_dac",
         "material_shortage_rate_max",
         "material_shortage_time_s",
+        "rate_filter_window",
+        "rate_stable_sec",
+        "rate_drop_ratio",
+        "rate_drop_count",
     )
-
-    # ✅ float 비교가 필요한 키(듀얼 파워 동일성 검사에 사용)
-    _RAMP_FLOAT_KEYS = {
-        "ramp_interval_seg1_s",
-        "ramp_interval_seg2_s",
-        "ramp_interval_after_seg2_s",
-        "ignite_rate_min",
-        "ignite_timeout_s",
-        "pre_rate",
-        "pre_hold_s",
-        "pre_hold_adjust_interval_s",
-        "pre_drop_ratio",
-        "dac_adjust_interval_s",
-        "material_shortage_rate_max",
-        "material_shortage_time_s",
-    }
 
     def __init__(self):
         super().__init__()
@@ -994,16 +984,13 @@ class ProcessWindow(QWidget):
         if not sel:
             return
 
+        # ✅ source 버튼은 물질 정보만 관리
         data = {
             "material": getattr(sel, "material", ""),
             "density_g_cm3": getattr(sel, "density_g_cm3", 0.0),
             "z_factor": getattr(sel, "z_factor", 0.0),
+            "note": getattr(sel, "note", ""),
         }
-
-        # ✅ ramp 파라미터들까지 함께 저장 (구버전 sel에도 안전하게 getattr)
-        for k in getattr(self, "_RAMP_KEYS", ()):
-            if hasattr(sel, k):
-                data[k] = getattr(sel, k)
 
         self._apply_material(channel, data)
 
@@ -1018,11 +1005,6 @@ class ProcessWindow(QWidget):
             self.ui.materialEdit2.setText(mat or "Select")
 
     def _default_process_config(self) -> dict[str, Any]:
-        """
-        공정용 기본 설정.
-        - step은 최소 1개
-        - 지금은 ADC 기준 램프업 step 구조를 미리 보관만 한다.
-        """
         return {
             "step_count": 1,
             "ramp_steps": [
@@ -1031,28 +1013,80 @@ class ProcessWindow(QWidget):
                     "delay_s": 0.0,
                 }
             ],
-            # step 중 dep.rate 도달 시 즉시 메인 공정 진입
             "reach_main_on_rate": True,
-
-            # 모든 step 종료 후 dep.rate 미도달 시 정책
-            # "extra_ramp" | "stop"
             "after_last_step_policy": "extra_ramp",
-
-            # 추가 ramp 정책
             "extra_ramp": {
                 "enabled": True,
                 "max_adc": 300.0,
-                "step_max": 50.0,     # 동적 증가폭 상한(100 이하)
+                "step_max": 50.0,
                 "interval_s": 5.0,
             },
-        }
 
+            # DAC / ramp
+            "ramp_step_dac": 100,
+            "ramp_seg1_max_dac": 700,
+            "ramp_interval_seg1_s": 10.0,
+            "ramp_seg2_max_dac": 2000,
+            "ramp_interval_seg2_s": 30.0,
+            "ramp_interval_after_seg2_s": 30.0,
+
+            # ignite
+            "ignite_dac": 2000,
+            "ignite_rate_min": 0.1,
+            "ignite_timeout_s": 300.0,
+
+            # pre-hold
+            "pre_rate": 0.4,
+            "pre_hold_s": 120.0,
+            "pre_hold_adjust_interval_s": 10.0,
+            "pre_drop_ratio": 0.50,
+            "pre_drop_count": 3,
+
+            # DAC adjust
+            "dac_adjust_interval_s": 10.0,
+            "fine_step_dac": 10,
+
+            # shortage
+            "material_shortage_dac": 2000,
+            "material_shortage_rate_max": 0.0,
+            "material_shortage_time_s": 10.0,
+
+            # dep.rate 판단
+            "rate_filter_window": 5,
+            "rate_stable_sec": 3.0,
+            "rate_drop_ratio": 0.50,
+            "rate_drop_count": 3,
+        }
 
     def _normalize_process_config(self, cfg: Any) -> dict[str, Any]:
         """
         dialog / json / 임시 dict 어떤 형태로 와도
-        최소한 engine/controller로 넘길 수 있는 표준 형태로 맞춘다.
+        process_config 전체를 표준 형태로 맞춘다.
         """
+        def _as_int(src: dict[str, Any], name: str, default_val: int,
+                    min_v: int | None = None, max_v: int | None = None) -> int:
+            try:
+                v = int(src.get(name, default_val))
+            except Exception:
+                v = int(default_val)
+            if min_v is not None:
+                v = max(min_v, v)
+            if max_v is not None:
+                v = min(max_v, v)
+            return v
+
+        def _as_float(src: dict[str, Any], name: str, default_val: float,
+                    min_v: float | None = None, max_v: float | None = None) -> float:
+            try:
+                v = float(src.get(name, default_val))
+            except Exception:
+                v = float(default_val)
+            if min_v is not None:
+                v = max(min_v, v)
+            if max_v is not None:
+                v = min(max_v, v)
+            return v
+
         default = self._default_process_config()
         src = dict(cfg or {})
 
@@ -1062,9 +1096,14 @@ class ProcessWindow(QWidget):
         for item in list(raw_steps)[:10]:
             try:
                 target_adc = max(0.0, float((item or {}).get("target_adc", 0.0)))
+            except Exception:
+                target_adc = 0.0
+
+            try:
                 delay_s = max(0.0, float((item or {}).get("delay_s", 0.0)))
             except Exception:
-                continue
+                delay_s = 0.0
+
             steps.append({
                 "target_adc": target_adc,
                 "delay_s": delay_s,
@@ -1073,30 +1112,87 @@ class ProcessWindow(QWidget):
         if not steps:
             steps = list(default["ramp_steps"])
 
-        step_count = int(src.get("step_count", len(steps)) or len(steps))
+        step_count = src.get("step_count", len(steps))
+        try:
+            step_count = int(step_count)
+        except Exception:
+            step_count = len(steps)
+
         step_count = max(1, min(10, step_count))
         steps = steps[:step_count]
 
-        extra_ramp_src = dict(src.get("extra_ramp") or default["extra_ramp"])
-        extra_ramp = {
-            "enabled": bool(extra_ramp_src.get("enabled", True)),
-            "max_adc": max(0.0, float(extra_ramp_src.get("max_adc", 300.0) or 0.0)),
-            "step_max": min(100.0, max(1.0, float(extra_ramp_src.get("step_max", 50.0) or 50.0))),
-            "interval_s": max(0.1, float(extra_ramp_src.get("interval_s", 5.0) or 5.0)),
-        }
+        extra_src = dict(src.get("extra_ramp") or default["extra_ramp"])
+
+        try:
+            extra_enabled = bool(extra_src.get("enabled", True))
+        except Exception:
+            extra_enabled = True
+
+        try:
+            extra_max_adc = max(0.0, float(extra_src.get("max_adc", 300.0) or 0.0))
+        except Exception:
+            extra_max_adc = 300.0
+
+        try:
+            extra_step_max = float(extra_src.get("step_max", 50.0) or 50.0)
+        except Exception:
+            extra_step_max = 50.0
+        extra_step_max = min(100.0, max(1.0, extra_step_max))
+
+        try:
+            extra_interval_s = float(extra_src.get("interval_s", 5.0) or 5.0)
+        except Exception:
+            extra_interval_s = 5.0
+        extra_interval_s = max(0.1, extra_interval_s)
 
         policy = str(src.get("after_last_step_policy", "extra_ramp") or "extra_ramp").strip().lower()
         if policy not in {"extra_ramp", "stop"}:
             policy = "extra_ramp"
+
+        if policy != "extra_ramp":
+            extra_enabled = False
 
         return {
             "step_count": len(steps),
             "ramp_steps": steps,
             "reach_main_on_rate": bool(src.get("reach_main_on_rate", True)),
             "after_last_step_policy": policy,
-            "extra_ramp": extra_ramp,
-        }
+            "extra_ramp": {
+                "enabled": extra_enabled,
+                "max_adc": extra_max_adc,
+                "step_max": extra_step_max,
+                "interval_s": extra_interval_s,
+            },
 
+            "ramp_step_dac": _as_int(src, "ramp_step_dac", 100, 1),
+            "ramp_seg1_max_dac": _as_int(src, "ramp_seg1_max_dac", 700, 1),
+            "ramp_interval_seg1_s": _as_float(src, "ramp_interval_seg1_s", 10.0, 0.1),
+            "ramp_seg2_max_dac": _as_int(src, "ramp_seg2_max_dac", 2000, 1),
+            "ramp_interval_seg2_s": _as_float(src, "ramp_interval_seg2_s", 30.0, 0.1),
+            "ramp_interval_after_seg2_s": _as_float(src, "ramp_interval_after_seg2_s", 30.0, 0.1),
+
+            "ignite_dac": _as_int(src, "ignite_dac", 2000, 0),
+            "ignite_rate_min": _as_float(src, "ignite_rate_min", 0.1, 0.0),
+            "ignite_timeout_s": _as_float(src, "ignite_timeout_s", 300.0, 1.0),
+
+            "pre_rate": _as_float(src, "pre_rate", 0.4, 0.0),
+            "pre_hold_s": _as_float(src, "pre_hold_s", 120.0, 0.0),
+            "pre_hold_adjust_interval_s": _as_float(src, "pre_hold_adjust_interval_s", 10.0, 0.1),
+            "pre_drop_ratio": _as_float(src, "pre_drop_ratio", 0.50, 0.01, 1.0),
+            "pre_drop_count": _as_int(src, "pre_drop_count", 3, 1),
+
+            "dac_adjust_interval_s": _as_float(src, "dac_adjust_interval_s", 10.0, 0.1),
+            "fine_step_dac": _as_int(src, "fine_step_dac", 10, 1),
+
+            "material_shortage_dac": _as_int(src, "material_shortage_dac", 2000, 0),
+            "material_shortage_rate_max": _as_float(src, "material_shortage_rate_max", 0.0, 0.0),
+            "material_shortage_time_s": _as_float(src, "material_shortage_time_s", 10.0, 0.0),
+
+            "rate_filter_window": _as_int(src, "rate_filter_window", 5, 1, 21),
+            "rate_stable_sec": _as_float(src, "rate_stable_sec", 3.0, 0.0),
+            "rate_drop_ratio": _as_float(src, "rate_drop_ratio", 0.50, 0.01, 1.0),
+            "rate_drop_count": _as_int(src, "rate_drop_count", 3, 1, 20),
+        }
 
     def _open_process_config_dialog(self) -> None:
         """
@@ -1573,42 +1669,6 @@ class ProcessWindow(QWidget):
                         "Material1/Material2가 서로 다릅니다. 동일하게 맞춰주세요.",
                     )
                     return None
-
-                # ✅ (추가) ramp 파라미터 동일성 검사
-                diff_keys: list[str] = []
-                for k in getattr(self, "_RAMP_KEYS", ()):
-                    v1 = (self._material_1 or {}).get(k, None)
-                    v2 = (self._material_2 or {}).get(k, None)
-
-                    # 둘 다 없으면 OK(구버전 JSON 등)
-                    if v1 is None and v2 is None:
-                        continue
-                    # 한쪽만 있으면 불일치
-                    if (v1 is None) != (v2 is None):
-                        diff_keys.append(k)
-                        continue
-
-                    try:
-                        if k in getattr(self, "_RAMP_FLOAT_KEYS", set()):
-                            if abs(float(v1) - float(v2)) > 1e-9:
-                                diff_keys.append(k)
-                        else:
-                            if int(float(v1)) != int(float(v2)):
-                                diff_keys.append(k)
-                    except Exception:
-                        if v1 != v2:
-                            diff_keys.append(k)
-
-                if diff_keys:
-                    QMessageBox.warning(
-                        self,
-                        "Input",
-                        "Power1+Power2 동시 사용은 '동일 Ramp 설정' 가정입니다.\n"
-                        "Material1/Material2의 ramp 파라미터가 서로 다릅니다:\n"
-                        + ", ".join(diff_keys),
-                    )
-                    return None
-                
         else:
             base_mat = self._material_1 if p1 else self._material_2
 
@@ -1616,12 +1676,15 @@ class ProcessWindow(QWidget):
         den = float((base_mat or {}).get("density_g_cm3", 0.0) or 0.0)
         zf = float((base_mat or {}).get("z_factor", 0.0) or 0.0)
 
-        # ✅ (추가) base_mat에서 ramp 파라미터 묶어서 run_cfg로 전달
-        ramp_cfg: dict[str, Any] = {}
-        for k in getattr(self, "_RAMP_KEYS", ()):
-            v = (base_mat or {}).get(k, None)
-            if v is not None:
-                ramp_cfg[k] = v
+        proc_cfg = self._normalize_process_config(getattr(self, "_process_cfg", None))
+
+        # ✅ 임시 호환용:
+        #    기존 controller/runtime가 run_cfg["ramp"]를 읽는 코드가 남아 있을 수 있으므로
+        #    material이 아니라 process_config 기준으로 bridge 한다.
+        legacy_ramp_cfg: dict[str, Any] = {}
+        for k in getattr(self, "_PROCESS_CFG_KEYS", ()):
+            if k in proc_cfg:
+                legacy_ramp_cfg[k] = proc_cfg.get(k)
 
         if not mat_name:
             QMessageBox.warning(self, "Input", "Material 이름이 비어있습니다. Material을 다시 선택하세요.")
@@ -1645,6 +1708,12 @@ class ProcessWindow(QWidget):
             QMessageBox.warning(self, "Input", "Process Config의 step이 비어 있습니다.")
             return None
 
+        # ✅ 임시 호환용 bridge
+        legacy_ramp_cfg: dict[str, Any] = {}
+        for k in getattr(self, "_PROCESS_CFG_KEYS", ()):
+            if k in proc_cfg:
+                legacy_ramp_cfg[k] = proc_cfg.get(k)
+
         cfg: dict[str, Any] = {
             "process_name": pname,
 
@@ -1655,8 +1724,10 @@ class ProcessWindow(QWidget):
             "density": den,
             "z_factor": zf,
 
-            # 기존 material catalog 기반 ramp 정보
-            "ramp": ramp_cfg,
+            # ✅ 더 이상 material 기반 ramp가 아니다.
+            #    다음 단계에서 controller가 process_config만 보게 바꿀 예정이므로
+            #    지금은 호환용으로만 유지
+            "ramp": legacy_ramp_cfg,
 
             "target_rate": float(target_rate),
             "target_thickness": float(target_thk),
@@ -1665,7 +1736,6 @@ class ProcessWindow(QWidget):
             "material_1": self._material_1,
             "material_2": self._material_2,
 
-            # ✅ 신규 process config
             "adc_control_mode": "adc",
             "process_config": proc_cfg,
             "ramp_steps": list(steps),

@@ -2,27 +2,20 @@
 """
 process/safety.py
 
-현재 engine.py의 legacy 안전정지 시퀀스를 ProcessStep 리스트로 분리한 모듈.
+engine 안전정지 정책을 ProcessStep 리스트로 정의하는 모듈.
 
 목표
-- engine.py 안의 하드코딩 안전정지 순서를 safety.py로 이동
-- 기존 engine 동작과 "완전히 동일한 순서/동작" 유지
-- 나중에 safety plan을 바꾸고 싶을 때 engine.py가 아니라 이 파일만 수정
+- 종료 정책/순서를 safety.py 한 곳에서 관리
+- engine.py는 safety plan의 실행만 담당
+- DAC 종료는 즉시 0이 아니라 ramp-down marker로 정의
+- STOP / ABORT / ESTOP 정책을 분리 가능하게 유지
 
-현재 legacy 엔진 시퀀스(기존과 동일):
-1) MAIN_SHUTTER_SW  -> OFF
-2) DAC_POWER_1      -> 0
-3) DAC_POWER_2      -> 0
-4) SHUTTER_1_SW     -> OFF
-5) SHUTTER_2_SW     -> OFF
-6) POWER_1_SW       -> OFF
-7) POWER_2_SW       -> OFF
-8) FTM_SW           -> OFF
-
-주의
-- 본 파일의 default plan은 의도적으로 STOP/ABORT를 동일하게 둔다.
-- 이유: 현재 engine.py는 STOP / ERROR / EVAP_DONE 모두 같은 하드코딩 시퀀스를 사용하고 있기 때문.
-- 즉, "기존과 완전히 동일"이 이번 목표다.
+기본 정책:
+1) MAIN_SHUTTER close
+2) SHUTTER_1 / SHUTTER_2 close
+3) DAC pair ramp-down marker
+4) POWER_1 / POWER_2 off
+5) FTM off
 """
 
 from __future__ import annotations
@@ -99,8 +92,19 @@ class SafetyPlan:
 
 def _legacy_engine_shutdown_steps(*, prefix: str) -> List[ProcessStep]:
     """
-    기존 engine.py 하드코딩 안전정지 순서를 그대로 ProcessStep으로 생성.
-    순서가 가장 중요하므로 절대 바꾸지 않는다.
+    engine 안전정지 기본 순서를 ProcessStep으로 생성.
+
+    현재 정책:
+    1) MAIN_SHUTTER close
+    2) SHUTTER_1/2 close
+    3) DAC pair ramp-down (dynamic action marker)
+    4) POWER_1/2 off
+    5) FTM off
+
+    주의:
+    - DAC ramp-down은 현재 DAC 값을 알아야 하므로
+    여기서는 marker step만 정의하고,
+    실제 실행은 engine.py가 담당한다.
     """
     return [
         ProcessStep(
@@ -108,66 +112,63 @@ def _legacy_engine_shutdown_steps(*, prefix: str) -> List[ProcessStep]:
             type=StepType.PLC_WRITE_COIL,
             coil="MAIN_SHUTTER_SW",
             on=False,
-            meta={"reason": "legacy_engine_safety"},
-        ),
-        ProcessStep(
-            name=f"{prefix}_DAC1_0",
-            type=StepType.PLC_WRITE_REG,
-            reg="DAC_POWER_1",
-            value=0,
-            meta={"reason": "legacy_engine_safety"},
-        ),
-        ProcessStep(
-            name=f"{prefix}_DAC2_0",
-            type=StepType.PLC_WRITE_REG,
-            reg="DAC_POWER_2",
-            value=0,
-            meta={"reason": "legacy_engine_safety"},
+            meta={"reason": "engine_safety_v2"},
         ),
         ProcessStep(
             name=f"{prefix}_SHUTTER_1_CLOSE",
             type=StepType.PLC_WRITE_COIL,
             coil="SHUTTER_1_SW",
             on=False,
-            meta={"reason": "legacy_engine_safety"},
+            meta={"reason": "engine_safety_v2"},
         ),
         ProcessStep(
             name=f"{prefix}_SHUTTER_2_CLOSE",
             type=StepType.PLC_WRITE_COIL,
             coil="SHUTTER_2_SW",
             on=False,
-            meta={"reason": "legacy_engine_safety"},
+            meta={"reason": "engine_safety_v2"},
+        ),
+        ProcessStep(
+            name=f"{prefix}_RAMP_DOWN_DAC_PAIR",
+            type=StepType.LOG,
+            message="[SAFETY] DAC pair ramp-down",
+            meta={
+                "reason": "engine_safety_v2",
+                "action": "ramp_down_dac_pair",
+                "step_dac": 100,
+                "interval_s": 1.0,
+            },
         ),
         ProcessStep(
             name=f"{prefix}_PWR1_OFF",
             type=StepType.PLC_WRITE_COIL,
             coil="POWER_1_SW",
             on=False,
-            meta={"reason": "legacy_engine_safety"},
+            meta={"reason": "engine_safety_v2"},
         ),
         ProcessStep(
             name=f"{prefix}_PWR2_OFF",
             type=StepType.PLC_WRITE_COIL,
             coil="POWER_2_SW",
             on=False,
-            meta={"reason": "legacy_engine_safety"},
+            meta={"reason": "engine_safety_v2"},
         ),
         ProcessStep(
             name=f"{prefix}_FTM_OFF",
             type=StepType.PLC_WRITE_COIL,
             coil="FTM_SW",
             on=False,
-            meta={"reason": "legacy_engine_safety"},
+            meta={"reason": "engine_safety_v2"},
         ),
     ]
 
 
 def default_safety_plan() -> SafetyPlan:
     """
-    현재 engine.py의 legacy 동작을 그대로 보존하는 기본 safety plan.
+    engine 기본 safety plan.
 
-    - STOP  : legacy engine과 동일
-    - ABORT : legacy engine과 동일
+    - STOP  : shutter close -> DAC pair ramp-down -> power off
+    - ABORT : shutter close -> DAC pair ramp-down -> power off
     - ESTOP : 엔진 강제동작 최소(로그만)
     """
     stop_steps = _legacy_engine_shutdown_steps(prefix="STOP")
@@ -178,7 +179,7 @@ def default_safety_plan() -> SafetyPlan:
             name="ESTOP_LOG_ONLY",
             type=StepType.LOG,
             message="[SAFETY] ESTOP requested: engine does not force actions (hardware/PLC interlock first)",
-            meta={"reason": "legacy_engine_safety"},
+            meta={"reason": "engine_safety_v2"},
         )
     ]
 
@@ -187,9 +188,9 @@ def default_safety_plan() -> SafetyPlan:
         abort_steps=abort_steps,
         estop_steps=estop_steps,
         meta={
-            "version": 1,
-            "mode": "legacy_engine_exact",
-            "note": "STOP/ABORT follow current engine.py hardcoded shutdown sequence exactly",
+            "version": 2,
+            "mode": "engine_safety_rampdown_v1",
+            "note": "STOP/ABORT use safety plan with DAC pair ramp-down marker before power-off",
         },
     )
     return plan
@@ -201,8 +202,9 @@ def default_safety_plan() -> SafetyPlan:
 
 def build_engine_safe_shutdown_steps() -> List[ProcessStep]:
     """
-    현재 engine.py가 쓰던 legacy 안전정지 순서를 그대로 반환.
-    - STOP / ERROR / EVAP_DONE 모두 동일 시퀀스를 쓰던 기존 구조 보존용
+    engine 기본 안전정지 step 리스트를 반환.
+    - STOP / ERROR / EVAP_DONE 등에서 공통으로 사용할 수 있는 기본 안전정지 정책
+    - DAC 종료는 marker step으로 정의되며 실제 실행은 engine.py가 담당
     """
     return _legacy_engine_shutdown_steps(prefix="LEGACY")
 
@@ -210,7 +212,7 @@ def build_engine_safe_shutdown_steps() -> List[ProcessStep]:
 def build_safety_steps(mode: StopMode, plan: Optional[SafetyPlan] = None) -> List[ProcessStep]:
     """
     StopMode에 따라 실행할 안전정지 step 리스트 반환.
-    현재 default plan은 STOP/ABORT가 legacy engine과 동일하다.
+    현재 default plan은 STOP/ABORT에 DAC pair ramp-down marker를 포함한다.
     """
     plan = plan or default_safety_plan()
 

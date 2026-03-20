@@ -57,20 +57,12 @@ class ProcessWindow(QWidget):
     #    source(material)에서 가져오는 값이 아니라,
     #    process_config에서 유지/전달할 값들이다.
     _PROCESS_CFG_KEYS = (
-        "ramp_step_dac",
         "ramp_seg1_max_dac",
         "ramp_interval_seg1_s",
         "ramp_seg2_max_dac",
         "ramp_interval_seg2_s",
         "ramp_interval_after_seg2_s",
-        "ignite_dac",
-        "ignite_rate_min",
-        "ignite_timeout_s",
         "pre_rate",
-        "pre_hold_s",
-        "pre_hold_adjust_interval_s",
-        "pre_drop_ratio",
-        "pre_drop_count",
         "dac_adjust_interval_s",
         "fine_step_dac",
         "material_shortage_dac",
@@ -1023,24 +1015,14 @@ class ProcessWindow(QWidget):
             },
 
             # DAC / ramp
-            "ramp_step_dac": 100,
             "ramp_seg1_max_dac": 700,
             "ramp_interval_seg1_s": 10.0,
             "ramp_seg2_max_dac": 2000,
             "ramp_interval_seg2_s": 30.0,
             "ramp_interval_after_seg2_s": 30.0,
 
-            # ignite
-            "ignite_dac": 2000,
-            "ignite_rate_min": 0.1,
-            "ignite_timeout_s": 300.0,
-
-            # pre-hold
+            # pre-rate
             "pre_rate": 0.4,
-            "pre_hold_s": 120.0,
-            "pre_hold_adjust_interval_s": 10.0,
-            "pre_drop_ratio": 0.50,
-            "pre_drop_count": 3,
 
             # DAC adjust
             "dac_adjust_interval_s": 10.0,
@@ -1164,22 +1146,13 @@ class ProcessWindow(QWidget):
                 "interval_s": extra_interval_s,
             },
 
-            "ramp_step_dac": _as_int(src, "ramp_step_dac", 100, 1),
             "ramp_seg1_max_dac": _as_int(src, "ramp_seg1_max_dac", 700, 1),
             "ramp_interval_seg1_s": _as_float(src, "ramp_interval_seg1_s", 10.0, 0.1),
             "ramp_seg2_max_dac": _as_int(src, "ramp_seg2_max_dac", 2000, 1),
             "ramp_interval_seg2_s": _as_float(src, "ramp_interval_seg2_s", 30.0, 0.1),
             "ramp_interval_after_seg2_s": _as_float(src, "ramp_interval_after_seg2_s", 30.0, 0.1),
 
-            "ignite_dac": _as_int(src, "ignite_dac", 2000, 0),
-            "ignite_rate_min": _as_float(src, "ignite_rate_min", 0.1, 0.0),
-            "ignite_timeout_s": _as_float(src, "ignite_timeout_s", 300.0, 1.0),
-
             "pre_rate": _as_float(src, "pre_rate", 0.4, 0.0),
-            "pre_hold_s": _as_float(src, "pre_hold_s", 120.0, 0.0),
-            "pre_hold_adjust_interval_s": _as_float(src, "pre_hold_adjust_interval_s", 10.0, 0.1),
-            "pre_drop_ratio": _as_float(src, "pre_drop_ratio", 0.50, 0.01, 1.0),
-            "pre_drop_count": _as_int(src, "pre_drop_count", 3, 1),
 
             "dac_adjust_interval_s": _as_float(src, "dac_adjust_interval_s", 10.0, 0.1),
             "fine_step_dac": _as_int(src, "fine_step_dac", 10, 1),

@@ -17,7 +17,9 @@ from PySide6.QtWidgets import (
     QLabel,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSpinBox,
+    QTabWidget,
     QTableWidget,
     QVBoxLayout,
     QWidget,
@@ -27,29 +29,10 @@ from PySide6.QtWidgets import (
 
 class ProcessConfigDialog(QDialog):
     """
-    Evaporator Process 전용 Config Dialog
+    Evaporator process config dialog.
 
-    기능:
-    - step 개수: 1 ~ 10
-    - 각 step:
-        * target_adc
-        * delay_s
-    - 공통 정책:
-        * dep.rate 도달 시 즉시 메인 공정 진입
-        * 마지막 step 후 정책(extra_ramp / stop)
-        * extra ramp 설정(enabled / max_adc / step_max / interval_s)
-
-    - DAC / ramp 세부 설정:
-        * ramp_step_dac
-        * ramp_seg1_max_dac / ramp_interval_seg1_s
-        * ramp_seg2_max_dac / ramp_interval_seg2_s
-        * ramp_interval_after_seg2_s
-
-    - ignite / pre-hold 설정
-    - shortage 판단 설정
-    - dep.rate 필터/유지시간 설정
-
-    get_config() -> dict 형태를 반환한다.
+    Provides step ramp, policy, DAC tuning, and rate/shortage judge settings.
+    get_config() returns a normalized config dictionary.
     """
 
     MAX_STEPS = 10
@@ -59,8 +42,8 @@ class ProcessConfigDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Process Config")
         self.setModal(True)
-        self.resize(900, 760)
-        self.setMinimumSize(900, 760)
+        self.resize(900, 700)
+        self.setMinimumSize(860, 620)
 
         self._initial_config = self._normalize_config(initial_config or self._default_config())
 
@@ -68,7 +51,7 @@ class ProcessConfigDialog(QDialog):
         self._load_config(self._initial_config)
 
     # =========================================================
-    # 기본/정규화
+    # defaults / normalize
     # =========================================================
     def _default_config(self) -> dict[str, Any]:
         return {
@@ -89,24 +72,14 @@ class ProcessConfigDialog(QDialog):
             },
 
             # DAC / ramp
-            "ramp_step_dac": 100,
             "ramp_seg1_max_dac": 700,
             "ramp_interval_seg1_s": 10.0,
             "ramp_seg2_max_dac": 2000,
             "ramp_interval_seg2_s": 30.0,
             "ramp_interval_after_seg2_s": 30.0,
 
-            # ignite
-            "ignite_dac": 2000,
-            "ignite_rate_min": 0.1,
-            "ignite_timeout_s": 300.0,
-
-            # pre-hold
+            # pre-rate
             "pre_rate": 0.4,
-            "pre_hold_s": 120.0,
-            "pre_hold_adjust_interval_s": 10.0,
-            "pre_drop_ratio": 0.50,
-            "pre_drop_count": 3,
 
             # DAC adjust
             "dac_adjust_interval_s": 10.0,
@@ -117,7 +90,7 @@ class ProcessConfigDialog(QDialog):
             "material_shortage_rate_max": 0.0,
             "material_shortage_time_s": 10.0,
 
-            # dep.rate 판단
+            # dep.rate judge
             "rate_filter_window": 5,
             "rate_stable_sec": 3.0,
             "rate_drop_ratio": 0.50,
@@ -222,22 +195,13 @@ class ProcessConfigDialog(QDialog):
                 "interval_s": interval_s,
             },
 
-            "ramp_step_dac": _as_int("ramp_step_dac", 100, 1),
             "ramp_seg1_max_dac": _as_int("ramp_seg1_max_dac", 700, 1),
             "ramp_interval_seg1_s": _as_float("ramp_interval_seg1_s", 10.0, 0.1),
             "ramp_seg2_max_dac": _as_int("ramp_seg2_max_dac", 2000, 1),
             "ramp_interval_seg2_s": _as_float("ramp_interval_seg2_s", 30.0, 0.1),
             "ramp_interval_after_seg2_s": _as_float("ramp_interval_after_seg2_s", 30.0, 0.1),
 
-            "ignite_dac": _as_int("ignite_dac", 2000, 0),
-            "ignite_rate_min": _as_float("ignite_rate_min", 0.1, 0.0),
-            "ignite_timeout_s": _as_float("ignite_timeout_s", 300.0, 1.0),
-
             "pre_rate": _as_float("pre_rate", 0.4, 0.0),
-            "pre_hold_s": _as_float("pre_hold_s", 120.0, 0.0),
-            "pre_hold_adjust_interval_s": _as_float("pre_hold_adjust_interval_s", 10.0, 0.1),
-            "pre_drop_ratio": _as_float("pre_drop_ratio", 0.50, 0.01, 1.0),
-            "pre_drop_count": _as_int("pre_drop_count", 3, 1),
 
             "dac_adjust_interval_s": _as_float("dac_adjust_interval_s", 10.0, 0.1),
             "fine_step_dac": _as_int("fine_step_dac", 10, 1),
@@ -253,29 +217,47 @@ class ProcessConfigDialog(QDialog):
         }
 
     # =========================================================
-    # UI 생성
+    # UI build
     # =========================================================
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(12, 12, 12, 12)
-        root.setSpacing(10)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(8)
 
-        # -------------------------
-        # 상단 설명
-        # -------------------------
+        tabs = QTabWidget(self)
+        root.addWidget(tabs, 1)
+
+        def _make_tab_with_scroll() -> tuple[QWidget, QVBoxLayout]:
+            tab = QWidget(self)
+            tab_layout = QVBoxLayout(tab)
+            tab_layout.setContentsMargins(0, 0, 0, 0)
+            tab_layout.setSpacing(0)
+
+            scroll = QScrollArea(tab)
+            scroll.setWidgetResizable(True)
+
+            body = QWidget(scroll)
+            body_layout = QVBoxLayout(body)
+            body_layout.setContentsMargins(6, 6, 6, 6)
+            body_layout.setSpacing(8)
+            scroll.setWidget(body)
+
+            tab_layout.addWidget(scroll)
+            return tab, body_layout
+
+        step_tab, step_root = _make_tab_with_scroll()
+        adv_tab, adv_root = _make_tab_with_scroll()
+        tabs.addTab(step_tab, "Step / Policy")
+        tabs.addTab(adv_tab, "Advanced")
+
         desc = QLabel(
-            "Ramp Step은 최대 10개까지 설정할 수 있습니다.\n"
-            "각 step은 목표 ADC와 도달 후 대기시간(delay)을 의미합니다.\n"
-            "공정 중 dep.rate 도달 시 메인 공정 진입 여부와 마지막 step 이후 정책도 설정합니다."
+            "Step 기반 ramp를 먼저 진행하고, dep.rate 도달 시 main 공정으로 진입합니다.\n"
+            "Step/정책은 첫 탭에서, 세부 DAC tuning과 rate 판단은 Advanced 탭에서 설정하세요."
         )
         desc.setWordWrap(True)
-        root.addWidget(desc)
+        step_root.addWidget(desc)
 
-        # -------------------------
-        # Step Count
-        # -------------------------
         top_box = QGroupBox("Step Settings")
-        top_box.setMinimumHeight(320)
         top_layout = QVBoxLayout(top_box)
 
         step_count_row = QHBoxLayout()
@@ -291,12 +273,8 @@ class ProcessConfigDialog(QDialog):
         step_count_row.addWidget(self.stepCountSpin)
         step_count_row.addStretch(1)
         step_count_row.addWidget(self.btnFillIncrement)
-
         top_layout.addLayout(step_count_row)
 
-        # -------------------------
-        # Step Table
-        # -------------------------
         self.stepTable = QTableWidget(self.MAX_STEPS, 2, self)
         self.stepTable.setHorizontalHeaderLabels(["Target ADC", "Delay (s)"])
         self.stepTable.verticalHeader().setVisible(True)
@@ -309,9 +287,8 @@ class ProcessConfigDialog(QDialog):
         hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         hh.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
 
-        # Step 5까지는 기본으로 보이도록 최소 높이 확보
         self.stepTable.verticalHeader().setDefaultSectionSize(34)
-        visible_rows = 5
+        visible_rows = 4
         table_min_h = (
             self.stepTable.horizontalHeader().sizeHint().height()
             + self.stepTable.verticalHeader().defaultSectionSize() * visible_rows
@@ -326,15 +303,11 @@ class ProcessConfigDialog(QDialog):
             self.stepTable.setCellWidget(row, 1, self._make_delay_spin())
 
         top_layout.addWidget(self.stepTable)
-        root.addWidget(top_box, 1)
+        step_root.addWidget(top_box)
 
-        # -------------------------
-        # 공통 옵션
-        # -------------------------
-        common_box = QGroupBox("Common Policy")
+        common_box = QGroupBox("Main Entry Policy")
         common_layout = QFormLayout(common_box)
-
-        self.reachMainOnRateCheck = QCheckBox("dep.rate 도달 시 즉시 메인 공정 진입")
+        self.reachMainOnRateCheck = QCheckBox("dep.rate 도달 시 즉시 main 공정 진입")
         common_layout.addRow(self.reachMainOnRateCheck)
 
         self.afterLastStepPolicyCombo = QComboBox()
@@ -342,15 +315,10 @@ class ProcessConfigDialog(QDialog):
         self.afterLastStepPolicyCombo.addItem("Stop Process", "stop")
         self.afterLastStepPolicyCombo.currentIndexChanged.connect(self._update_extra_ramp_enabled)
         common_layout.addRow("After Last Step", self.afterLastStepPolicyCombo)
+        step_root.addWidget(common_box)
 
-        root.addWidget(common_box)
-
-        # -------------------------
-        # Extra Ramp
-        # -------------------------
-        extra_box = QGroupBox("Extra Ramp")
+        extra_box = QGroupBox("Extra Ramp Policy")
         extra_layout = QGridLayout(extra_box)
-
         self.extraRampEnabledCheck = QCheckBox("Enable Extra Ramp")
         self.extraRampEnabledCheck.toggled.connect(self._update_extra_ramp_enabled)
         extra_layout.addWidget(self.extraRampEnabledCheck, 0, 0, 1, 2)
@@ -359,105 +327,69 @@ class ProcessConfigDialog(QDialog):
         self.extraMaxAdcSpin = self._make_adc_spin(maximum=9999.0, decimals=1)
         extra_layout.addWidget(self.extraMaxAdcSpin, 1, 1)
 
-        extra_layout.addWidget(QLabel("Dynamic Step Max"), 2, 0)
-        self.extraStepMaxSpin = self._make_adc_spin(maximum=100.0, decimals=1)
-        self.extraStepMaxSpin.setMinimum(1.0)
-        extra_layout.addWidget(self.extraStepMaxSpin, 2, 1)
-
-        extra_layout.addWidget(QLabel("Interval (s)"), 3, 0)
+        extra_layout.addWidget(QLabel("Interval (s)"), 2, 0)
         self.extraIntervalSpin = self._make_delay_spin(maximum=9999.0, decimals=1)
         self.extraIntervalSpin.setMinimum(0.1)
-        extra_layout.addWidget(self.extraIntervalSpin, 3, 1)
+        extra_layout.addWidget(self.extraIntervalSpin, 2, 1)
+        step_root.addWidget(extra_box)
+        step_root.addStretch(1)
 
-        root.addWidget(extra_box)
+        dac_box = QGroupBox("DAC Ramp Tuning")
+        dac_form = QFormLayout(dac_box)
+        self.extraStepMaxSpin = self._make_adc_spin(maximum=100.0, decimals=1)
+        self.extraStepMaxSpin.setMinimum(1.0)
 
-        ramp_box = QGroupBox("Ramp Detail")
-        ramp_form = QFormLayout(ramp_box)
-
-        self.rampStepDacSpin = self._make_int_spin(minimum=1, maximum=5000, step=10)
         self.rampSeg1MaxDacSpin = self._make_int_spin(minimum=1, maximum=9999, step=10)
         self.rampSeg1IntervalSpin = self._make_delay_spin(maximum=9999.0, decimals=1)
         self.rampSeg1IntervalSpin.setMinimum(0.1)
-
         self.rampSeg2MaxDacSpin = self._make_int_spin(minimum=1, maximum=9999, step=10)
         self.rampSeg2IntervalSpin = self._make_delay_spin(maximum=9999.0, decimals=1)
         self.rampSeg2IntervalSpin.setMinimum(0.1)
-
         self.rampAfterSeg2IntervalSpin = self._make_delay_spin(maximum=9999.0, decimals=1)
         self.rampAfterSeg2IntervalSpin.setMinimum(0.1)
-
-        ramp_form.addRow("DAC Step", self.rampStepDacSpin)
-        ramp_form.addRow("Seg1 Max DAC", self.rampSeg1MaxDacSpin)
-        ramp_form.addRow("Seg1 Interval (s)", self.rampSeg1IntervalSpin)
-        ramp_form.addRow("Seg2 Max DAC", self.rampSeg2MaxDacSpin)
-        ramp_form.addRow("Seg2 Interval (s)", self.rampSeg2IntervalSpin)
-        ramp_form.addRow("After Seg2 Interval (s)", self.rampAfterSeg2IntervalSpin)
-
-        root.addWidget(ramp_box)
-
-        ignite_box = QGroupBox("Ignite / Pre-Hold")
-        ignite_form = QFormLayout(ignite_box)
-
-        self.igniteDacSpin = self._make_int_spin(minimum=0, maximum=9999, step=10)
-        self.igniteRateMinSpin = self._make_adc_spin(maximum=999.0, decimals=2)
-        self.igniteTimeoutSpin = self._make_delay_spin(maximum=99999.0, decimals=1)
-
-        self.preRateSpin = self._make_adc_spin(maximum=999.0, decimals=2)
-        self.preHoldSpin = self._make_delay_spin(maximum=99999.0, decimals=1)
-        self.preHoldAdjustIntervalSpin = self._make_delay_spin(maximum=99999.0, decimals=1)
-        self.preDropRatioSpin = self._make_adc_spin(maximum=1.0, decimals=2)
-        self.preDropRatioSpin.setRange(0.01, 1.0)
-        self.preDropCountSpin = self._make_int_spin(minimum=1, maximum=20, step=1)
-
-        ignite_form.addRow("Ignite DAC", self.igniteDacSpin)
-        ignite_form.addRow("Ignite Rate Min (Å/s)", self.igniteRateMinSpin)
-        ignite_form.addRow("Ignite Timeout (s)", self.igniteTimeoutSpin)
-
-        ignite_form.addRow("Pre Rate (Å/s)", self.preRateSpin)
-        ignite_form.addRow("Pre Hold (s)", self.preHoldSpin)
-        ignite_form.addRow("Pre Hold Adjust Interval (s)", self.preHoldAdjustIntervalSpin)
-        ignite_form.addRow("Pre Drop Ratio", self.preDropRatioSpin)
-        ignite_form.addRow("Pre Drop Count", self.preDropCountSpin)
-
-        root.addWidget(ignite_box)
-
-        shortage_box = QGroupBox("Shortage / DAC Adjust")
-        shortage_form = QFormLayout(shortage_box)
-
         self.dacAdjustIntervalSpin = self._make_delay_spin(maximum=99999.0, decimals=1)
         self.fineStepDacSpin = self._make_int_spin(minimum=1, maximum=1000, step=1)
 
+        dac_form.addRow("Dynamic Step Max", self.extraStepMaxSpin)
+        dac_form.addRow("Seg1 Max DAC", self.rampSeg1MaxDacSpin)
+        dac_form.addRow("Seg1 Interval (s)", self.rampSeg1IntervalSpin)
+        dac_form.addRow("Seg2 Max DAC", self.rampSeg2MaxDacSpin)
+        dac_form.addRow("Seg2 Interval (s)", self.rampSeg2IntervalSpin)
+        dac_form.addRow("After Seg2 Interval (s)", self.rampAfterSeg2IntervalSpin)
+        dac_form.addRow("DAC Adjust Interval (s)", self.dacAdjustIntervalSpin)
+        dac_form.addRow("Fine Step DAC", self.fineStepDacSpin)
+        adv_root.addWidget(dac_box)
+
+        pre_box = QGroupBox("Pre Rate")
+        pre_form = QFormLayout(pre_box)
+        self.preRateSpin = self._make_adc_spin(maximum=999.0, decimals=2)
+        pre_form.addRow("Pre Rate (A/s)", self.preRateSpin)
+        adv_root.addWidget(pre_box)
+
+        shortage_box = QGroupBox("Material Shortage Guard")
+        shortage_form = QFormLayout(shortage_box)
         self.shortageDacSpin = self._make_int_spin(minimum=0, maximum=9999, step=10)
         self.shortageRateMaxSpin = self._make_adc_spin(maximum=999.0, decimals=2)
         self.shortageTimeSpin = self._make_delay_spin(maximum=99999.0, decimals=1)
-
-        shortage_form.addRow("DAC Adjust Interval (s)", self.dacAdjustIntervalSpin)
-        shortage_form.addRow("Fine Step DAC", self.fineStepDacSpin)
         shortage_form.addRow("Shortage DAC", self.shortageDacSpin)
-        shortage_form.addRow("Shortage Rate Max (Å/s)", self.shortageRateMaxSpin)
+        shortage_form.addRow("Shortage Rate Max (횇/s)", self.shortageRateMaxSpin)
         shortage_form.addRow("Shortage Time (s)", self.shortageTimeSpin)
-
-        root.addWidget(shortage_box)
+        adv_root.addWidget(shortage_box)
 
         rate_box = QGroupBox("Rate Filter / Judge")
         rate_form = QFormLayout(rate_box)
-
         self.rateFilterWindowSpin = self._make_int_spin(minimum=1, maximum=21, step=2)
         self.rateStableSecSpin = self._make_delay_spin(maximum=60.0, decimals=1)
         self.rateDropRatioSpin = self._make_adc_spin(maximum=1.0, decimals=2)
         self.rateDropRatioSpin.setRange(0.01, 1.0)
         self.rateDropCountSpin = self._make_int_spin(minimum=1, maximum=20, step=1)
-
         rate_form.addRow("Rate Filter Window", self.rateFilterWindowSpin)
         rate_form.addRow("Rate Stable Sec", self.rateStableSecSpin)
         rate_form.addRow("Rate Drop Ratio", self.rateDropRatioSpin)
         rate_form.addRow("Rate Drop Count", self.rateDropCountSpin)
+        adv_root.addWidget(rate_box)
+        adv_root.addStretch(1)
 
-        root.addWidget(rate_box)
-
-        # -------------------------
-        # 버튼
-        # -------------------------
         btns = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
             Qt.Orientation.Horizontal,
@@ -500,7 +432,7 @@ class ProcessConfigDialog(QDialog):
         return w
 
     # =========================================================
-    # 로드 / 반영
+    # load / apply
     # =========================================================
     def _load_config(self, cfg: dict[str, Any]) -> None:
         cfg = self._normalize_config(cfg)
@@ -533,22 +465,13 @@ class ProcessConfigDialog(QDialog):
         self.extraStepMaxSpin.setValue(float(extra.get("step_max", 50.0) or 50.0))
         self.extraIntervalSpin.setValue(float(extra.get("interval_s", 5.0) or 5.0))
 
-        self.rampStepDacSpin.setValue(int(cfg.get("ramp_step_dac", 100)))
         self.rampSeg1MaxDacSpin.setValue(int(cfg.get("ramp_seg1_max_dac", 700)))
         self.rampSeg1IntervalSpin.setValue(float(cfg.get("ramp_interval_seg1_s", 10.0)))
         self.rampSeg2MaxDacSpin.setValue(int(cfg.get("ramp_seg2_max_dac", 2000)))
         self.rampSeg2IntervalSpin.setValue(float(cfg.get("ramp_interval_seg2_s", 30.0)))
         self.rampAfterSeg2IntervalSpin.setValue(float(cfg.get("ramp_interval_after_seg2_s", 30.0)))
 
-        self.igniteDacSpin.setValue(int(cfg.get("ignite_dac", 2000)))
-        self.igniteRateMinSpin.setValue(float(cfg.get("ignite_rate_min", 0.1)))
-        self.igniteTimeoutSpin.setValue(float(cfg.get("ignite_timeout_s", 300.0)))
-
         self.preRateSpin.setValue(float(cfg.get("pre_rate", 0.4)))
-        self.preHoldSpin.setValue(float(cfg.get("pre_hold_s", 120.0)))
-        self.preHoldAdjustIntervalSpin.setValue(float(cfg.get("pre_hold_adjust_interval_s", 10.0)))
-        self.preDropRatioSpin.setValue(float(cfg.get("pre_drop_ratio", 0.5)))
-        self.preDropCountSpin.setValue(int(cfg.get("pre_drop_count", 3)))
 
         self.dacAdjustIntervalSpin.setValue(float(cfg.get("dac_adjust_interval_s", 10.0)))
         self.fineStepDacSpin.setValue(int(cfg.get("fine_step_dac", 10)))
@@ -580,7 +503,6 @@ class ProcessConfigDialog(QDialog):
         extra_enabled = bool(self.extraRampEnabledCheck.isChecked()) and (policy == "extra_ramp")
 
         self.extraMaxAdcSpin.setEnabled(extra_enabled)
-        self.extraStepMaxSpin.setEnabled(extra_enabled)
         self.extraIntervalSpin.setEnabled(extra_enabled)
         self.extraRampEnabledCheck.setEnabled(policy == "extra_ramp")
 
@@ -595,13 +517,10 @@ class ProcessConfigDialog(QDialog):
         return w
 
     # =========================================================
-    # 편의 기능
+    # convenience
     # =========================================================
     def _on_auto_fill_clicked(self) -> None:
-        """
-        현재 Step 1 값을 기준으로
-        뒤 step들을 완만하게 증가하도록 자동 채운다.
-        """
+        """Auto-fill step rows based on Step 1 target/delay."""
         count = int(self.stepCountSpin.value())
         if count <= 1:
             return
@@ -610,10 +529,10 @@ class ProcessConfigDialog(QDialog):
         first_delay = self._cell_delay_spin(0).value()
 
         if first_adc <= 0:
-            QMessageBox.information(self, "Auto Fill", "Step 1의 Target ADC를 먼저 입력하세요.")
+            QMessageBox.information(self, "Auto Fill", "Enter Step 1 Target ADC first.")
             return
 
-        # 기본 증가폭은 50, 단 100 초과 금지 컨셉과 맞게 유지
+        # Keep incremental fill conservative.
         increment = min(50.0, max(10.0, first_adc * 0.2))
 
         current = first_adc
@@ -623,7 +542,7 @@ class ProcessConfigDialog(QDialog):
             self._cell_delay_spin(row).setValue(first_delay)
 
     # =========================================================
-    # 반환
+    # output
     # =========================================================
     def get_config(self) -> dict[str, Any]:
         count = int(self.stepCountSpin.value())
@@ -652,22 +571,13 @@ class ProcessConfigDialog(QDialog):
                 "interval_s": float(self.extraIntervalSpin.value()),
             },
 
-            "ramp_step_dac": int(self.rampStepDacSpin.value()),
             "ramp_seg1_max_dac": int(self.rampSeg1MaxDacSpin.value()),
             "ramp_interval_seg1_s": float(self.rampSeg1IntervalSpin.value()),
             "ramp_seg2_max_dac": int(self.rampSeg2MaxDacSpin.value()),
             "ramp_interval_seg2_s": float(self.rampSeg2IntervalSpin.value()),
             "ramp_interval_after_seg2_s": float(self.rampAfterSeg2IntervalSpin.value()),
 
-            "ignite_dac": int(self.igniteDacSpin.value()),
-            "ignite_rate_min": float(self.igniteRateMinSpin.value()),
-            "ignite_timeout_s": float(self.igniteTimeoutSpin.value()),
-
             "pre_rate": float(self.preRateSpin.value()),
-            "pre_hold_s": float(self.preHoldSpin.value()),
-            "pre_hold_adjust_interval_s": float(self.preHoldAdjustIntervalSpin.value()),
-            "pre_drop_ratio": float(self.preDropRatioSpin.value()),
-            "pre_drop_count": int(self.preDropCountSpin.value()),
 
             "dac_adjust_interval_s": float(self.dacAdjustIntervalSpin.value()),
             "fine_step_dac": int(self.fineStepDacSpin.value()),
@@ -691,49 +601,40 @@ class ProcessConfigDialog(QDialog):
         steps = cfg.get("ramp_steps") or []
 
         if not steps:
-            QMessageBox.warning(self, "Process Config", "최소 1개의 step이 필요합니다.")
-            return
-        
-        if cfg["ramp_step_dac"] <= 0:
-            QMessageBox.warning(self, "Process Config", "DAC Step은 1 이상이어야 합니다.")
+            QMessageBox.warning(self, "Process Config", "At least one step is required.")
             return
 
         if cfg["ramp_seg2_max_dac"] < cfg["ramp_seg1_max_dac"]:
-            QMessageBox.warning(self, "Process Config", "Seg2 Max DAC는 Seg1 Max DAC보다 작을 수 없습니다.")
+            QMessageBox.warning(self, "Process Config", "Seg2 Max DAC must be >= Seg1 Max DAC.")
             return
-
-        if not (0.0 < cfg["pre_drop_ratio"] <= 1.0):
-            QMessageBox.warning(self, "Process Config", "Pre Drop Ratio는 0 초과 1 이하이어야 합니다.")
-            return
-
         if cfg["rate_filter_window"] < 1:
-            QMessageBox.warning(self, "Process Config", "Rate Filter Window는 1 이상이어야 합니다.")
+            QMessageBox.warning(self, "Process Config", "Rate Filter Window must be >= 1.")
             return
 
         if not (0.0 < cfg["rate_drop_ratio"] <= 1.0):
-            QMessageBox.warning(self, "Process Config", "Rate Drop Ratio는 0 초과 1 이하이어야 합니다.")
+            QMessageBox.warning(self, "Process Config", "Rate Drop Ratio must be in (0, 1].")
             return
 
-        # step target_adc 오름차순 체크
+        # step target_adc ascending check
         last_adc = -1.0
         for idx, step in enumerate(steps, start=1):
             adc = float(step.get("target_adc", 0.0) or 0.0)
             delay_s = float(step.get("delay_s", 0.0) or 0.0)
 
             if adc <= 0:
-                QMessageBox.warning(self, "Process Config", f"Step {idx}의 Target ADC는 0보다 커야 합니다.")
+                QMessageBox.warning(self, "Process Config", f"Step {idx} Target ADC must be > 0.")
                 return
 
             if delay_s < 0:
-                QMessageBox.warning(self, "Process Config", f"Step {idx}의 Delay는 0 이상이어야 합니다.")
+                QMessageBox.warning(self, "Process Config", f"Step {idx} Delay must be >= 0.")
                 return
 
             if last_adc >= 0 and adc < last_adc:
                 QMessageBox.warning(
                     self,
                     "Process Config",
-                    f"Step {idx}의 Target ADC가 이전 step보다 작습니다.\n"
-                    "step 순서는 일반적으로 오름차순으로 입력하는 것이 안전합니다.",
+                    f"Step {idx} Target ADC is lower than the previous step.\n"
+                    "Use non-decreasing Target ADC values.",
                 )
                 return
 
@@ -745,7 +646,7 @@ class ProcessConfigDialog(QDialog):
                 QMessageBox.warning(
                     self,
                     "Process Config",
-                    "After Last Step 정책이 Extra Ramp인데, Extra Ramp Enable이 꺼져 있습니다.",
+                    "After Last Step is extra_ramp, but Extra Ramp is disabled.",
                 )
                 return
 
@@ -754,13 +655,13 @@ class ProcessConfigDialog(QDialog):
             interval_s = float(extra.get("interval_s", 0.0) or 0.0)
 
             if max_adc <= 0:
-                QMessageBox.warning(self, "Process Config", "Extra Ramp의 Max ADC는 0보다 커야 합니다.")
+                QMessageBox.warning(self, "Process Config", "Extra Ramp Max ADC must be > 0.")
                 return
             if not (1.0 <= step_max <= 100.0):
-                QMessageBox.warning(self, "Process Config", "Extra Ramp의 Dynamic Step Max는 1 ~ 100 범위여야 합니다.")
+                QMessageBox.warning(self, "Process Config", "Extra Ramp Dynamic Step Max must be 1~100.")
                 return
             if interval_s <= 0:
-                QMessageBox.warning(self, "Process Config", "Extra Ramp의 Interval은 0보다 커야 합니다.")
+                QMessageBox.warning(self, "Process Config", "Extra Ramp Interval must be > 0.")
                 return
 
             last_step_adc = float(steps[-1].get("target_adc", 0.0) or 0.0)
@@ -768,7 +669,7 @@ class ProcessConfigDialog(QDialog):
                 QMessageBox.warning(
                     self,
                     "Process Config",
-                    "Extra Ramp의 Max ADC는 마지막 Step의 Target ADC보다 작을 수 없습니다.",
+                    "Extra Ramp Max ADC must be >= last step Target ADC.",
                 )
                 return
 

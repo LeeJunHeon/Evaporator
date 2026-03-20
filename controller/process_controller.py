@@ -71,10 +71,11 @@ class ProcessController(QObject):
         super().__init__(parent)
 
         self.plc = plc
-        self.stm = stm
-        self.acs = acs
+        self.stm = None
+        self.acs = None
         self.turbovac = turbovac
         self.log = log
+        self._bound_signal_keys: set[tuple[int, str, int]] = set()
 
         self._recipe: Optional[ProcessRecipe] = None
         self._recipe_path: Optional[Path] = None
@@ -97,38 +98,51 @@ class ProcessController(QObject):
 
         # --- STM/ACS runtime device signal bind ---
         try:
-            self._rebind_stm_device(self.stm, emit_log=False)
+            self._rebind_stm_device(stm, emit_log=False)
         except Exception:
             pass
 
         try:
-            self._rebind_acs_device(self.acs, emit_log=False)
+            self._rebind_acs_device(acs, emit_log=False)
         except Exception:
             pass
 
+    def _signal_bind_key(self, obj: Any, signal_name: str, slot: Any) -> tuple[int, str, int]:
+        return (id(obj), signal_name, id(slot))
+
     def _safe_disconnect(self, obj: Any, signal_name: str, slot: Any) -> None:
-        if obj is None or not hasattr(obj, signal_name):
+        if obj is None:
+            return
+        key = self._signal_bind_key(obj, signal_name, slot)
+        if key not in self._bound_signal_keys:
+            return
+        if not hasattr(obj, signal_name):
+            self._bound_signal_keys.discard(key)
             return
         try:
             getattr(obj, signal_name).disconnect(slot)
         except Exception:
             pass
+        finally:
+            self._bound_signal_keys.discard(key)
 
     def _safe_connect(self, obj: Any, signal_name: str, slot: Any) -> None:
         if obj is None or not hasattr(obj, signal_name):
             return
+        key = self._signal_bind_key(obj, signal_name, slot)
+        if key in self._bound_signal_keys:
+            return
         sig = getattr(obj, signal_name)
         try:
-            sig.disconnect(slot)
-        except Exception:
-            pass
-        try:
             sig.connect(slot)
+            self._bound_signal_keys.add(key)
         except Exception:
             pass
 
     def _rebind_stm_device(self, stm: Optional[Any], *, emit_log: bool = True) -> None:
         old = getattr(self, "stm", None)
+        if old is stm:
+            return
 
         if old is not None:
             self._safe_disconnect(old, "sig_io_trace", self._on_stm_io_trace)
@@ -148,6 +162,8 @@ class ProcessController(QObject):
 
     def _rebind_acs_device(self, acs: Optional[Any], *, emit_log: bool = True) -> None:
         old = getattr(self, "acs", None)
+        if old is acs:
+            return
 
         if old is not None:
             self._safe_disconnect(old, "sig_io_trace", self._on_acs_io_trace)
@@ -472,22 +488,13 @@ class ProcessController(QObject):
             "extra_ramp": dict(proc_policy["extra_ramp"]),
             "last_step_target_adc": last_step_adc,
 
-            "ramp_step_dac": _cfg_int("ramp_step_dac", 100),
             "ramp_seg1_max_dac": _cfg_int("ramp_seg1_max_dac", 700),
             "ramp_interval_seg1_s": _cfg_float("ramp_interval_seg1_s", 10.0),
             "ramp_seg2_max_dac": _cfg_int("ramp_seg2_max_dac", 2000),
             "ramp_interval_seg2_s": _cfg_float("ramp_interval_seg2_s", 30.0),
             "ramp_interval_after_seg2_s": _cfg_float("ramp_interval_after_seg2_s", 30.0),
 
-            "ignite_dac": _cfg_int("ignite_dac", 2000),
-            "ignite_rate_min": _cfg_float("ignite_rate_min", 0.1),
-            "ignite_timeout_s": _cfg_float("ignite_timeout_s", 300.0),
-
             "pre_rate": _cfg_float("pre_rate", 0.4),
-            "pre_hold_s": _cfg_float("pre_hold_s", 120.0),
-            "pre_hold_adjust_interval_s": _cfg_float("pre_hold_adjust_interval_s", 10.0),
-            "pre_drop_ratio": _cfg_float("pre_drop_ratio", 0.50),
-            "pre_drop_count": _cfg_int("pre_drop_count", 3),
 
             "dac_adjust_interval_s": _cfg_float("dac_adjust_interval_s", 10.0),
             "fine_step_dac": _cfg_int("fine_step_dac", 10),

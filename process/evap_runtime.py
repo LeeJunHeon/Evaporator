@@ -22,6 +22,7 @@ EVAP 전용 증착 runtime 로직.
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass, field
 from typing import Optional, List
@@ -429,12 +430,17 @@ def _load_runtime_process_config(meta: dict, *, step_name: str) -> dict:
                 f"(prev={last_adc}, current={target_adc})"
             )
 
-        # 신규 EvapStep 필드 파싱 (없으면 기본값)
+        # 신규 EvapStep 필드 파싱 (없으면 기본값, 누락 키는 _missing_keys로 추적)
+        _missing_keys: list[str] = []
         try:
+            if "dac_step" not in item:
+                _missing_keys.append("dac_step")
             dac_step = max(1, int(item.get("dac_step", 10) or 10))
         except Exception:
             dac_step = 10
         try:
+            if "dac_interval_sec" not in item:
+                _missing_keys.append("dac_interval_sec")
             dac_interval_sec = max(0.1, float(item.get("dac_interval_sec", 30.0) or 30.0))
         except Exception:
             dac_interval_sec = 30.0
@@ -470,6 +476,8 @@ def _load_runtime_process_config(meta: dict, *, step_name: str) -> dict:
                 "rate_low_action": rate_low_action,
                 "boost_dac_step": boost_dac_step,
                 "boost_max_count": boost_max_count,
+                # 누락 키 추적 (진단 로그용, 공정 로직에 영향 없음)
+                "missing_keys": _missing_keys,
             }
         )
         last_adc = target_adc
@@ -605,7 +613,12 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         0.1,
         float(meta.get("adc_none_abort_s", meta.get("sensor_none_abort_s", 5.0)) or 5.0),
     )
-    
+
+    # ADC 초기 안정화 대기 파라미터 (meta override 가능)
+    adc_settle_threshold    = float(meta.get("adc_settle_threshold", 2.0))
+    adc_settle_stable_count = max(1, int(meta.get("adc_settle_stable_count", 3)))
+    adc_settle_timeout_s    = max(1.0, float(meta.get("adc_settle_timeout_s", 60.0)))
+
     if adc_control_mode != "adc":
         _raise_engine_failed(step.name, f"EVAP: unsupported adc_control_mode={adc_control_mode}")
 
@@ -952,6 +965,79 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
     engine._emit_status(message=f"EVAP ADC step ramp 시작: steps={len(ramp_steps)}", force=True)
     apply_dac()
 
+    # 3-a) ADC 초기 안정화 대기
+    #      공정 시작 직후 하드웨어 ADC 스파이크가 EMA에 남아 있는 동안 ramp를 시작하면
+    #      target_adc 도달 판정이 오동작할 수 있으므로, ADC가 threshold 미만으로
+    #      adc_settle_stable_count 회 연속 확인될 때까지 대기한다.
+    _settle_log = logging.getLogger(__name__)
+    engine._emit_status(
+        message=(
+            f"EVAP: ADC 안정화 대기 시작 "
+            f"(threshold={adc_settle_threshold:.1f} / "
+            f"stable_count={adc_settle_stable_count} / "
+            f"timeout={adc_settle_timeout_s:.0f}s)"
+        ),
+        force=True,
+    )
+    _settle_start_m   = time.monotonic()
+    _settle_stable_cnt = 0
+    _settle_next_ui_m = _settle_start_m
+
+    while True:
+        engine._check_stop_pause(recipe, step)
+        engine._tick_emit(recipe, step)
+
+        _s_adc_total, _, _ = _read_selected_adc_total(
+            engine, use_p1, use_p2, power1_feedback_adc2=power1_feedback_adc2
+        )
+
+        now_m     = time.monotonic()
+        elapsed_s = now_m - _settle_start_m
+        adc_str   = f"{_s_adc_total:.1f}" if _s_adc_total is not None else "N/A"
+
+        if _s_adc_total is not None and float(_s_adc_total) < float(adc_settle_threshold):
+            _settle_stable_cnt += 1
+        else:
+            _settle_stable_cnt = 0
+
+        if now_m >= _settle_next_ui_m:
+            engine._emit_status(
+                message=(
+                    f"ADC 안정화 대기 중 | filtered_adc={adc_str} / "
+                    f"threshold={adc_settle_threshold:.1f} | "
+                    f"경과 {elapsed_s:.1f}s / 최대 {adc_settle_timeout_s:.0f}s"
+                ),
+                force=True,
+            )
+            _settle_next_ui_m = now_m + 1.0
+
+        if _settle_stable_cnt >= adc_settle_stable_count:
+            engine._emit_status(
+                message=(
+                    f"EVAP: ADC 안정화 완료 "
+                    f"(stable {_settle_stable_cnt}회 연속 / 경과 {elapsed_s:.1f}s)"
+                ),
+                force=True,
+            )
+            break
+
+        if elapsed_s >= float(adc_settle_timeout_s):
+            _settle_log.warning(
+                "EVAP: ADC 안정화 대기 timeout (%.0fs) — ramp 강제 진입 (filtered_adc=%s)",
+                adc_settle_timeout_s,
+                adc_str,
+            )
+            engine._emit_status(
+                message=(
+                    f"[WARN] EVAP: ADC 안정화 timeout {adc_settle_timeout_s:.0f}s 초과 "
+                    f"— ramp 강제 진입 (filtered_adc={adc_str})"
+                ),
+                force=True,
+            )
+            break
+
+        time.sleep(0.1)
+
     entered_main_from_step = False
     # MODIFIED: rate drop 감지는 main shutter open 이후에만 활성화
     rate_drop_enabled: bool = False
@@ -1000,6 +1086,34 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
             ),
             force=True,
         )
+
+        # 수정 2: 신규 키 누락 시 진단 로그 (기본값 사용 여부를 사용자에게 명시)
+        _step_log = logging.getLogger(__name__)
+        _missing = step_cfg.get("missing_keys") or []
+        if "dac_step" in _missing:
+            _step_log.warning(
+                "EVAP STEP %d: dac_step 키 없음 → 기본값 10 사용. 레시피를 Config에서 다시 저장하세요.",
+                step_no,
+            )
+            engine._emit_status(
+                message=(
+                    f"[WARN] STEP {step_no}: dac_step 키 없음 → 기본값 10 사용. "
+                    "레시피를 Config에서 다시 저장하세요."
+                ),
+                force=True,
+            )
+        if "dac_interval_sec" in _missing:
+            _step_log.warning(
+                "EVAP STEP %d: dac_interval_sec 키 없음 → 기본값 30.0s 사용. 레시피를 Config에서 다시 저장하세요.",
+                step_no,
+            )
+            engine._emit_status(
+                message=(
+                    f"[WARN] STEP {step_no}: dac_interval_sec 키 없음 → 기본값 30.0s 사용. "
+                    "레시피를 Config에서 다시 저장하세요."
+                ),
+                force=True,
+            )
 
         # (A) current_adc(EMA 필터값)가 step.target_adc 미만인 동안 DAC 증분
         #     dac_interval_sec마다 dac_step씩 올림 (ADC 도달 판정은 EMA값 기준)

@@ -352,6 +352,8 @@ class ProcessConfigDialog(QDialog):
         hh.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         hh.setSectionResizeMode(_COL_ACTION, QHeaderView.ResizeMode.Fixed)
         hh.resizeSection(_COL_ACTION, 110)
+        hh.setStretchLastSection(False)
+        self.stepTable.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.stepTable.verticalHeader().setDefaultSectionSize(36)
 
         for row in range(self.MAX_STEPS):
@@ -364,10 +366,9 @@ class ProcessConfigDialog(QDialog):
             self.stepTable.horizontalHeader().sizeHint().height()
             + self.stepTable.verticalHeader().defaultSectionSize() * self.MAX_STEPS
             + self.stepTable.frameWidth() * 2
-            + 10
+            + 2
         )
-        self.stepTable.setMinimumHeight(table_h)
-        self.stepTable.setMaximumHeight(table_h + 20)
+        self.stepTable.setFixedHeight(table_h)
 
         step_box_layout.addWidget(self.stepTable)
         step_root.addWidget(step_box)
@@ -553,12 +554,13 @@ class ProcessConfigDialog(QDialog):
         self._refresh_row_bg(row)
 
     def _on_action_changed(self, row: int) -> None:
-        """Low rate action 변경 시 Boost 컬럼 활성/비활성."""
+        """Low rate action 변경 시 Boost 컬럼 활성/비활성 + 배경색 동기화."""
         combo = self._row_combo(row)
         action = str(combo.currentData() or "next_step")
         boost_enabled = (action == "boost_dac")
         self.stepTable.cellWidget(row, _COL_BOOST_DAC).setEnabled(boost_enabled)
         self.stepTable.cellWidget(row, _COL_BOOST_MAX).setEnabled(boost_enabled)
+        self._refresh_row_bg(row)
 
     def _update_extra_ramp_enabled(self) -> None:
         policy = self.afterLastStepPolicyCombo.currentData()
@@ -648,19 +650,39 @@ class ProcessConfigDialog(QDialog):
             self._refresh_row_bg(row)
 
     def _refresh_row_bg(self, row: int) -> None:
-        """행 배경색 동기화 (하이라이트 / 비활성 / 일반)."""
-        is_active   = (self._active_step == row)
-        is_enabled  = self._row_enabled_chk(row).isChecked()
+        """행 배경색 동기화 — 우선순위:
+        1. is_active  → 전체 노란색(#FFE664)
+        2. not enabled → 전체 회색(#E6E6E6)
+        3. Boost 컬럼이고 action != boost_dac → 회색(#E6E6E6)
+        4. 나머지 → 기본("")
+        """
+        is_active  = (self._active_step == row)
+        is_enabled = self._row_enabled_chk(row).isChecked()
+        action     = str(self._row_combo(row).currentData() or "next_step")
+        boost_grey = (action != "boost_dac")
 
         for col in range(len(_COL_HEADERS)):
             w = self.stepTable.cellWidget(row, col)
-            if w is not None:
-                if is_active:
-                    w.setStyleSheet("background-color: #FFE664;")
-                elif not is_enabled:
-                    w.setStyleSheet("background-color: #E6E6E6;")
+            if w is None:
+                continue
+
+            if is_active:
+                color = "#FFE664"
+            elif not is_enabled:
+                color = "#E6E6E6"
+            elif col in (_COL_BOOST_DAC, _COL_BOOST_MAX) and boost_grey:
+                color = "#E6E6E6"
+            else:
+                color = ""
+
+            if col == _COL_ENABLED:
+                # 체크박스는 margin-left 스타일을 함께 유지
+                if color:
+                    w.setStyleSheet(f"QCheckBox {{ margin-left: 18px; background-color: {color}; }}")
                 else:
-                    w.setStyleSheet("")
+                    w.setStyleSheet("QCheckBox { margin-left: 18px; }")
+            else:
+                w.setStyleSheet(f"background-color: {color};" if color else "")
 
     # =========================================================
     # step 수집

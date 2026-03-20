@@ -506,14 +506,11 @@ class ProcessController(QObject):
         return {
             "use_power1": power["use_power1"],
             "use_power2": power["use_power2"],
-            "temp_force_power2_sw": power["temp_force_power2_sw"],
             "power1_feedback_adc2": power["power1_feedback_adc2"],
-            "source_shutter_coils": list(power["source_shutter_coils"]),
         }
 
     def _build_material_runtime_meta(self, material_cfg: dict[str, Any]) -> dict[str, Any]:
         return {
-            "material_name": material_cfg["material_name"],
             "density": material_cfg["density"],
             "z_factor": material_cfg["z_factor"],
             "target_rate": material_cfg["target_rate"],
@@ -529,8 +526,8 @@ class ProcessController(QObject):
         return {
             "dac_max": 4000,
             "sensor_none_abort_s": 5.0,
+            "adc_none_abort_s": 5.0,
 
-            "ramp_step_dac": int(process_config["ramp_step_dac"]),
             "ramp_seg1_max_dac": int(process_config["ramp_seg1_max_dac"]),
             "ramp_seg2_max_dac": int(process_config["ramp_seg2_max_dac"]),
             "ramp_interval_seg1_s": float(process_config["ramp_interval_seg1_s"]),
@@ -538,13 +535,9 @@ class ProcessController(QObject):
             "ramp_interval_after_seg2_s": float(process_config["ramp_interval_after_seg2_s"]),
             "fine_step_dac": int(process_config["fine_step_dac"]),
 
-            "ignite_dac": int(process_config["ignite_dac"]),
-            "ignite_trigger_rate_max": 0.0,
-            "ignite_rate_min": float(process_config["ignite_rate_min"]),
-            "ignite_timeout_s": float(process_config["ignite_timeout_s"]),
-
             # 기존 로직과의 호환용
             "rate_tol_ratio": float(run_cfg.get("rate_tol_ratio", 0.05) or 0.05),
+            "target_ramp_stable_hits": int(run_cfg.get("target_ramp_stable_hits", 3) or 3),
             "target_stable_hits": int(run_cfg.get("target_stable_hits", 5) or 5),
             "target_stable_interval_s": float(run_cfg.get("target_stable_interval_s", 1.0) or 1.0),
 
@@ -555,24 +548,15 @@ class ProcessController(QObject):
             "rate_drop_count": int(process_config["rate_drop_count"]),
 
             "pre_rate": float(process_config["pre_rate"]),
-            "pre_hold_s": float(process_config["pre_hold_s"]),
-            "pre_hold_mode": "fixed",
-            "pre_hold_adjust_interval_s": float(process_config["pre_hold_adjust_interval_s"]),
-            "pre_drop_ratio": float(process_config["pre_drop_ratio"]),
-            "pre_drop_count": int(process_config["pre_drop_count"]),
             "dac_adjust_interval_s": float(process_config["dac_adjust_interval_s"]),
-
-            "stuck_dac_guard": 2000,
-            "stuck_rate_abs": 0.05,
-            "stuck_time_s": 60.0,
 
             "material_shortage_dac": int(process_config["material_shortage_dac"]),
             "material_shortage_rate_max": float(process_config["material_shortage_rate_max"]),
             "material_shortage_time_s": float(process_config["material_shortage_time_s"]),
 
             "zero_mode": "B",
-            "wait_after_ftm_on_s": 1.5,
             "adc_control_mode": str(run_cfg.get("adc_control_mode", "adc") or "adc"),
+            "tune_timeout_s": float(run_cfg.get("tune_timeout_s", 120.0) or 120.0),
         }
 
     def _build_process_runtime_meta(self, process_config: dict[str, Any]) -> dict[str, Any]:
@@ -580,44 +564,13 @@ class ProcessController(QObject):
 
         return {
             "process_config": {
-                "step_count": process_config["step_count"],
                 "ramp_steps": process_config["ramp_steps"],
                 "reach_main_on_rate": process_config["reach_main_on_rate"],
                 "after_last_step_policy": process_config["after_last_step_policy"],
                 "extra_ramp": dict(process_config["extra_ramp"]),
-
-                "ramp_step_dac": int(process_config["ramp_step_dac"]),
-                "ramp_seg1_max_dac": int(process_config["ramp_seg1_max_dac"]),
-                "ramp_interval_seg1_s": float(process_config["ramp_interval_seg1_s"]),
-                "ramp_seg2_max_dac": int(process_config["ramp_seg2_max_dac"]),
-                "ramp_interval_seg2_s": float(process_config["ramp_interval_seg2_s"]),
-                "ramp_interval_after_seg2_s": float(process_config["ramp_interval_after_seg2_s"]),
-
-                "ignite_dac": int(process_config["ignite_dac"]),
-                "ignite_rate_min": float(process_config["ignite_rate_min"]),
-                "ignite_timeout_s": float(process_config["ignite_timeout_s"]),
-
-                "pre_rate": float(process_config["pre_rate"]),
-                "pre_hold_s": float(process_config["pre_hold_s"]),
-                "pre_hold_adjust_interval_s": float(process_config["pre_hold_adjust_interval_s"]),
-                "pre_drop_ratio": float(process_config["pre_drop_ratio"]),
-                "pre_drop_count": int(process_config["pre_drop_count"]),
-
-                "dac_adjust_interval_s": float(process_config["dac_adjust_interval_s"]),
-                "fine_step_dac": int(process_config["fine_step_dac"]),
-
-                "material_shortage_dac": int(process_config["material_shortage_dac"]),
-                "material_shortage_rate_max": float(process_config["material_shortage_rate_max"]),
-                "material_shortage_time_s": float(process_config["material_shortage_time_s"]),
-
-                "rate_filter_window": int(process_config["rate_filter_window"]),
-                "rate_stable_sec": float(process_config["rate_stable_sec"]),
-                "rate_drop_ratio": float(process_config["rate_drop_ratio"]),
-                "rate_drop_count": int(process_config["rate_drop_count"]),
             },
 
             "ramp_steps": process_config["ramp_steps"],
-            "step_count": process_config["step_count"],
             "reach_main_on_rate": process_config["reach_main_on_rate"],
             "after_last_step_policy": process_config["after_last_step_policy"],
             "extra_ramp": dict(process_config["extra_ramp"]),
@@ -672,15 +625,14 @@ class ProcessController(QObject):
             except Exception:
                 raise ValueError(f"ramp 설정값 변환 실패: {k}={v!r}")
 
-        _apply("ramp_step_dac", lambda x: int(float(x)))
         _apply("ramp_seg1_max_dac", lambda x: int(float(x)))
         _apply("ramp_seg2_max_dac", lambda x: int(float(x)))
-        _apply("ignite_dac", lambda x: int(float(x)))
         _apply("fine_step_dac", lambda x: int(float(x)))
         _apply("material_shortage_dac", lambda x: int(float(x)))
         _apply("rate_filter_window", lambda x: int(float(x)))
-        _apply("pre_drop_count", lambda x: int(float(x)))
         _apply("rate_drop_count", lambda x: int(float(x)))
+        _apply("target_ramp_stable_hits", lambda x: int(float(x)))
+        _apply("target_stable_hits", lambda x: int(float(x)))
 
         _apply("ramp_interval_seg1_s", float)
         seg2_over = _apply("ramp_interval_seg2_s", float)
@@ -688,13 +640,9 @@ class ProcessController(QObject):
         if seg2_over and not after_over:
             _set_meta("ramp_interval_after_seg2_s", float(meta["ramp_interval_seg2_s"]))
 
-        _apply("ignite_rate_min", float)
-        _apply("ignite_timeout_s", float)
-
         _apply("pre_rate", float)
-        _apply("pre_hold_s", float)
-        _apply("pre_hold_adjust_interval_s", float)
-        _apply("pre_drop_ratio", float)
+        _apply("rate_tol_ratio", float)
+        _apply("target_stable_interval_s", float)
 
         _apply("dac_adjust_interval_s", float)
 
@@ -736,7 +684,7 @@ class ProcessController(QObject):
             ProcessStep(
                 name="WAIT_FTM_STM",
                 type=StepType.WAIT_SECONDS,
-                seconds=float(meta["wait_after_ftm_on_s"]),
+                seconds=float(meta.get("wait_after_ftm_on_s", 1.5)),
                 message="FTM/STM 안정화 대기",
             )
         )
@@ -785,20 +733,30 @@ class ProcessController(QObject):
 
             # 실제 실행 메타 일부 snapshot
             "effective_runtime": {
-                "ramp_step_dac": runtime_meta.get("ramp_step_dac"),
                 "ramp_seg1_max_dac": runtime_meta.get("ramp_seg1_max_dac"),
                 "ramp_seg2_max_dac": runtime_meta.get("ramp_seg2_max_dac"),
                 "ramp_interval_seg1_s": runtime_meta.get("ramp_interval_seg1_s"),
                 "ramp_interval_seg2_s": runtime_meta.get("ramp_interval_seg2_s"),
                 "ramp_interval_after_seg2_s": runtime_meta.get("ramp_interval_after_seg2_s"),
-                "ignite_dac": runtime_meta.get("ignite_dac"),
-                "ignite_rate_min": runtime_meta.get("ignite_rate_min"),
-                "ignite_timeout_s": runtime_meta.get("ignite_timeout_s"),
                 "fine_step_dac": runtime_meta.get("fine_step_dac"),
+                "pre_rate": runtime_meta.get("pre_rate"),
+                "dac_adjust_interval_s": runtime_meta.get("dac_adjust_interval_s"),
+                "rate_tol_ratio": runtime_meta.get("rate_tol_ratio"),
+                "target_ramp_stable_hits": runtime_meta.get("target_ramp_stable_hits"),
+                "target_stable_hits": runtime_meta.get("target_stable_hits"),
+                "target_stable_interval_s": runtime_meta.get("target_stable_interval_s"),
+                "rate_filter_window": runtime_meta.get("rate_filter_window"),
+                "rate_stable_sec": runtime_meta.get("rate_stable_sec"),
+                "rate_drop_ratio": runtime_meta.get("rate_drop_ratio"),
+                "rate_drop_count": runtime_meta.get("rate_drop_count"),
                 "material_shortage_dac": runtime_meta.get("material_shortage_dac"),
                 "material_shortage_rate_max": runtime_meta.get("material_shortage_rate_max"),
                 "material_shortage_time_s": runtime_meta.get("material_shortage_time_s"),
-                "wait_after_ftm_on_s": runtime_meta.get("wait_after_ftm_on_s"),
+                "dac_max": runtime_meta.get("dac_max"),
+                "sensor_none_abort_s": runtime_meta.get("sensor_none_abort_s"),
+                "adc_none_abort_s": runtime_meta.get("adc_none_abort_s"),
+                "zero_mode": runtime_meta.get("zero_mode"),
+                "tune_timeout_s": runtime_meta.get("tune_timeout_s"),
             },
         }
         

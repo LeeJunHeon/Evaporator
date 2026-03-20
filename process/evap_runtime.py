@@ -276,6 +276,130 @@ def _dynamic_dac_step_from_adc_gap(
 # --------------------------------------------------------
 # EVAP deposition control
 # --------------------------------------------------------
+def _load_runtime_process_config(meta: dict, *, step_name: str) -> dict:
+    """
+    controller가 만든 runtime meta에서 process 관련 설정을 읽는다.
+
+    현재는 backward compatibility를 위해
+    - meta["process_config"]
+    - top-level alias(meta["ramp_steps"], meta["after_last_step_policy"] ...)
+    둘 다 허용한다.
+    단, 값 검증은 strict 하게 한다.
+    """
+    process_config = dict(meta.get("process_config") or {})
+
+    raw_ramp_steps = meta.get("ramp_steps", None)
+    if raw_ramp_steps is None:
+        raw_ramp_steps = process_config.get("ramp_steps")
+
+    if not isinstance(raw_ramp_steps, list) or not raw_ramp_steps:
+        _raise_engine_failed(step_name, "EVAP: process_config.ramp_steps is empty")
+
+    if len(raw_ramp_steps) > 10:
+        _raise_engine_failed(
+            step_name,
+            f"EVAP: process_config.ramp_steps supports up to 10 steps only (got={len(raw_ramp_steps)})"
+        )
+
+    ramp_steps: list[dict[str, float]] = []
+    last_adc = -1.0
+
+    for idx, item in enumerate(raw_ramp_steps, start=1):
+        if not isinstance(item, dict):
+            _raise_engine_failed(step_name, f"EVAP: ramp_steps[{idx}] must be dict")
+
+        try:
+            target_adc = float(item.get("target_adc", 0.0) or 0.0)
+            delay_s = float(item.get("delay_s", 0.0) or 0.0)
+        except Exception:
+            _raise_engine_failed(step_name, f"EVAP: ramp_steps[{idx}] value conversion failed")
+
+        if target_adc <= 0:
+            _raise_engine_failed(step_name, f"EVAP: ramp_steps[{idx}].target_adc must be > 0")
+        if delay_s < 0:
+            _raise_engine_failed(step_name, f"EVAP: ramp_steps[{idx}].delay_s must be >= 0")
+
+        if last_adc >= 0 and target_adc < last_adc:
+            _raise_engine_failed(
+                step_name,
+                f"EVAP: ramp_steps[{idx}].target_adc must be non-decreasing "
+                f"(prev={last_adc}, current={target_adc})"
+            )
+
+        ramp_steps.append(
+            {
+                "step_no": idx,
+                "target_adc": target_adc,
+                "delay_s": delay_s,
+            }
+        )
+        last_adc = target_adc
+
+    reach_main_on_rate = bool(
+        meta.get("reach_main_on_rate", process_config.get("reach_main_on_rate", True))
+    )
+
+    policy_raw = meta.get(
+        "after_last_step_policy",
+        process_config.get("after_last_step_policy", "extra_ramp"),
+    )
+    after_last_step_policy = str(policy_raw or "extra_ramp").strip().lower()
+    if after_last_step_policy not in {"extra_ramp", "stop"}:
+        _raise_engine_failed(
+            step_name,
+            f"EVAP: invalid after_last_step_policy={after_last_step_policy!r}"
+        )
+
+    extra_ramp_raw = meta.get("extra_ramp", process_config.get("extra_ramp", {}))
+    if extra_ramp_raw is None:
+        extra_ramp_raw = {}
+    if not isinstance(extra_ramp_raw, dict):
+        _raise_engine_failed(step_name, "EVAP: extra_ramp config must be dict")
+
+    try:
+        extra_ramp_enabled = bool(extra_ramp_raw.get("enabled", True))
+        extra_ramp_max_adc = float(
+            extra_ramp_raw.get("max_adc", meta.get("last_step_target_adc", last_adc)) or last_adc
+        )
+        extra_ramp_step_cap = float(
+            extra_ramp_raw.get("step_max", meta.get("adc_dynamic_step_cap", 50.0)) or 50.0
+        )
+        extra_ramp_interval_s = float(
+            extra_ramp_raw.get("interval_s", 5.0) or 5.0
+        )
+    except Exception:
+        _raise_engine_failed(step_name, "EVAP: extra_ramp config value conversion failed")
+
+    if extra_ramp_max_adc < last_adc:
+        _raise_engine_failed(
+            step_name,
+            f"EVAP: extra_ramp.max_adc must be >= last_step_target_adc "
+            f"(last={last_adc}, max_adc={extra_ramp_max_adc})"
+        )
+
+    if not (1.0 <= extra_ramp_step_cap <= 100.0):
+        _raise_engine_failed(
+            step_name,
+            f"EVAP: extra_ramp.step_max must be in [1, 100] (got={extra_ramp_step_cap})"
+        )
+
+    if extra_ramp_interval_s < 0.1:
+        _raise_engine_failed(
+            step_name,
+            f"EVAP: extra_ramp.interval_s must be >= 0.1 (got={extra_ramp_interval_s})"
+        )
+
+    return {
+        "process_config": process_config,
+        "ramp_steps": ramp_steps,
+        "reach_main_on_rate": reach_main_on_rate,
+        "after_last_step_policy": after_last_step_policy,
+        "extra_ramp_enabled": extra_ramp_enabled,
+        "extra_ramp_max_adc": extra_ramp_max_adc,
+        "extra_ramp_step_cap": extra_ramp_step_cap,
+        "extra_ramp_interval_s": extra_ramp_interval_s,
+    }
+
 def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep) -> None:
     """
     EVAP 증착 제어(ADC step 기반)
@@ -332,57 +456,22 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
     # -------------------------------------------------
     adc_control_mode = str(meta.get("adc_control_mode", "adc") or "adc").strip().lower()
 
-    process_config = dict(meta.get("process_config") or {})
-    raw_ramp_steps = list(meta.get("ramp_steps") or process_config.get("ramp_steps") or [])
+    proc_cfg = _load_runtime_process_config(meta, step_name=step.name)
 
-    reach_main_on_rate = bool(
-        meta.get("reach_main_on_rate", process_config.get("reach_main_on_rate", True))
+    process_config = dict(proc_cfg["process_config"])
+    ramp_steps = list(proc_cfg["ramp_steps"])
+    reach_main_on_rate = bool(proc_cfg["reach_main_on_rate"])
+    after_last_step_policy = str(proc_cfg["after_last_step_policy"])
+    extra_ramp_enabled = bool(proc_cfg["extra_ramp_enabled"])
+    extra_ramp_max_adc = float(proc_cfg["extra_ramp_max_adc"])
+    extra_ramp_step_cap = float(proc_cfg["extra_ramp_step_cap"])
+    extra_ramp_interval_s = float(proc_cfg["extra_ramp_interval_s"])
+
+    adc_none_abort_s = max(
+        0.1,
+        float(meta.get("adc_none_abort_s", meta.get("sensor_none_abort_s", 5.0)) or 5.0),
     )
-
-    after_last_step_policy = str(
-        meta.get("after_last_step_policy", process_config.get("after_last_step_policy", "extra_ramp"))
-        or "extra_ramp"
-    ).strip().lower()
-    if after_last_step_policy not in {"extra_ramp", "stop"}:
-        after_last_step_policy = "extra_ramp"
-
-    extra_ramp_cfg = dict(meta.get("extra_ramp") or process_config.get("extra_ramp") or {})
-    extra_ramp_enabled = bool(extra_ramp_cfg.get("enabled", True))
-    extra_ramp_max_adc = float(
-        extra_ramp_cfg.get("max_adc", meta.get("last_step_target_adc", 0.0)) or 0.0
-    )
-    extra_ramp_step_cap = float(
-        extra_ramp_cfg.get("step_max", meta.get("adc_dynamic_step_cap", 50.0)) or 50.0
-    )
-    extra_ramp_step_cap = min(100.0, max(1.0, extra_ramp_step_cap))
-    extra_ramp_interval_s = max(0.1, float(extra_ramp_cfg.get("interval_s", 5.0) or 5.0))
-
-    adc_none_abort_s = max(0.1, float(meta.get("adc_none_abort_s", 5.0) or 5.0))
-
-    ramp_steps: list[dict[str, float]] = []
-    for idx, item in enumerate(raw_ramp_steps[:10], start=1):
-        if not isinstance(item, dict):
-            continue
-
-        try:
-            target_adc = float(item.get("target_adc", 0.0) or 0.0)
-            delay_s_step = float(item.get("delay_s", 0.0) or 0.0)
-        except Exception:
-            continue
-
-        if target_adc <= 0:
-            continue
-        if delay_s_step < 0:
-            delay_s_step = 0.0
-
-        ramp_steps.append(
-            {
-                "step_no": idx,
-                "target_adc": target_adc,
-                "delay_s": delay_s_step,
-            }
-        )
-
+    
     if adc_control_mode != "adc":
         _raise_engine_failed(step.name, f"EVAP: unsupported adc_control_mode={adc_control_mode}")
 

@@ -301,6 +301,8 @@ class ProcessController(QObject):
             raise ValueError("extra_ramp 설정 형식이 올바르지 않습니다. dict 형태여야 합니다.")
 
         enabled = bool(extra_src.get("enabled", True))
+        if policy != "extra_ramp":
+            enabled = False
 
         try:
             max_adc = float(extra_src.get("max_adc", last_step_adc) or last_step_adc)

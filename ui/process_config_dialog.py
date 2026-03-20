@@ -314,20 +314,34 @@ class ProcessConfigDialog(QDialog):
         tabs.addTab(adv_tab,  "Advanced")
 
         # ----- Step 탭 -----
-        desc = QLabel(
-            "5행 고정 step 테이블. 활성화 체크박스로 사용할 step을 선택하세요.\n"
-            "Low rate action = 'Boost DAC' 선택 시 Boost DAC step / Boost Max 필드가 활성화됩니다.\n"
-            "저장 버튼을 누르면 현재 레시피에 반영됩니다."
-        )
-        desc.setWordWrap(True)
-        step_root.addWidget(desc)
-
         # EvapStep 테이블
         step_box = QGroupBox("Step Settings (최대 5 step)")
         step_box_layout = QVBoxLayout(step_box)
 
         self.stepTable = QTableWidget(self.MAX_STEPS, len(_COL_HEADERS), self)
         self.stepTable.setHorizontalHeaderLabels(_COL_HEADERS)
+
+        _COL_TOOLTIPS = [
+            "이 step 활성화 여부. 체크 해제 시 해당 step은 공정에서 제외됩니다.",
+            "목표 ADC 피드백 값 (EMA 필터 적용 기준).\n이 값에 도달할 때까지 DAC을 올립니다.",
+            "한 번에 올리는 DAC 증분.\n예) 20이면 Interval마다 DAC을 20씩 증가시킵니다.",
+            "DAC을 올리는 주기 (초).\n예) 30이면 30초마다 DAC step씩 증가합니다.",
+            "Target ADC 도달 후 dep.rate을 관찰하는 대기 시간 (초).\n이 시간 동안 dep.rate을 측정해 Min rate과 비교합니다.",
+            "정상 판정 최소 dep.rate (Å/s).\n이 값 이상이면 다음 step으로 진행합니다.",
+            "Wait 후에도 dep.rate이 Min rate 미만일 때의 동작.\n\n"
+            "다음 step: 그냥 다음으로 진행 (초기 가열 구간처럼 아직 rate이 나오지 않는 게 정상인 구간에 적합)\n"
+            "Boost DAC: DAC을 소폭 추가로 올리며 재시도 (Boost 설정 값 사용)\n"
+            "즉시 정지: 물질 소진으로 판정하고 안전 정지",
+            "Low rate action = Boost DAC 선택 시 추가로 올리는 DAC 증분.\nBoost DAC이 아닌 경우 비활성화됩니다.",
+            "Boost 최대 시도 횟수.\n모두 소진한 후에도 dep.rate이 Min rate 미만이면 소진 판정 후 안전 정지합니다.",
+        ]
+        for col, tip in enumerate(_COL_TOOLTIPS):
+            item = self.stepTable.horizontalHeaderItem(col)
+            if item is None:
+                item = QTableWidgetItem(_COL_HEADERS[col])
+                self.stepTable.setHorizontalHeaderItem(col, item)
+            item.setToolTip(tip)
+
         self.stepTable.verticalHeader().setVisible(True)
         self.stepTable.setAlternatingRowColors(False)
         self.stepTable.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -356,15 +370,6 @@ class ProcessConfigDialog(QDialog):
         self.stepTable.setMaximumHeight(table_h + 20)
 
         step_box_layout.addWidget(self.stepTable)
-
-        # 저장 버튼
-        save_row = QHBoxLayout()
-        save_row.addStretch(1)
-        self.btnSaveSteps = QPushButton("저장 (레시피 반영)", self)
-        self.btnSaveSteps.clicked.connect(self._on_save_steps_clicked)
-        save_row.addWidget(self.btnSaveSteps)
-        step_box_layout.addLayout(save_row)
-
         step_root.addWidget(step_box)
 
         # Policy
@@ -456,13 +461,11 @@ class ProcessConfigDialog(QDialog):
     # =========================================================
     def _build_step_row(self, row: int) -> None:
         """한 행 전체 위젯 생성 + combo changeEvent 연결."""
-        # 활성화 체크박스 (가운데 정렬용 컨테이너)
-        chk_widget = QWidget(self)
-        chk_layout = QHBoxLayout(chk_widget)
-        chk_layout.setContentsMargins(0, 0, 0, 0)
-        chk = QCheckBox(chk_widget)
-        chk_layout.addWidget(chk, alignment=Qt.AlignmentFlag.AlignCenter)
-        self.stepTable.setCellWidget(row, _COL_ENABLED, chk_widget)
+        # 활성화 체크박스 — 컨테이너 없이 직접 배치 (컨테이너가 클릭 이벤트를 가로채는 버그 방지)
+        chk = QCheckBox(self)
+        chk.setStyleSheet("QCheckBox { margin-left: 18px; }")
+        chk.stateChanged.connect(lambda _s, r=row: self._on_enabled_changed(r))
+        self.stepTable.setCellWidget(row, _COL_ENABLED, chk)
 
         self.stepTable.setCellWidget(row, _COL_TARGET_ADC, self._make_double_spin(0.0, 9999.0, step=10.0))
         self.stepTable.setCellWidget(row, _COL_DAC_STEP,   self._make_int_spin(1, 9999, step=5))
@@ -513,8 +516,9 @@ class ProcessConfigDialog(QDialog):
     # step 행 접근자
     # =========================================================
     def _row_enabled_chk(self, row: int) -> QCheckBox:
-        container = self.stepTable.cellWidget(row, _COL_ENABLED)
-        return container.findChild(QCheckBox)
+        w = self.stepTable.cellWidget(row, _COL_ENABLED)
+        assert isinstance(w, QCheckBox), f"row={row} _COL_ENABLED is not QCheckBox"
+        return w
 
     def _row_spin(self, row: int, col: int) -> QDoubleSpinBox:
         w = self.stepTable.cellWidget(row, col)
@@ -534,6 +538,20 @@ class ProcessConfigDialog(QDialog):
     # =========================================================
     # 이벤트 핸들러
     # =========================================================
+    def _on_enabled_changed(self, row: int) -> None:
+        """활성화 체크박스 변경 시 해당 행 위젯 전체 활성/비활성 처리."""
+        enabled = self._row_enabled_chk(row).isChecked()
+        for col in (_COL_TARGET_ADC, _COL_DAC_STEP, _COL_INTERVAL,
+                    _COL_WAIT, _COL_MIN_RATE, _COL_ACTION,
+                    _COL_BOOST_DAC, _COL_BOOST_MAX):
+            w = self.stepTable.cellWidget(row, col)
+            if w is not None:
+                w.setEnabled(enabled)
+        if enabled:
+            # Boost 컬럼은 action 선택에 따라 다시 판정
+            self._on_action_changed(row)
+        self._refresh_row_bg(row)
+
     def _on_action_changed(self, row: int) -> None:
         """Low rate action 변경 시 Boost 컬럼 활성/비활성."""
         combo = self._row_combo(row)
@@ -541,17 +559,6 @@ class ProcessConfigDialog(QDialog):
         boost_enabled = (action == "boost_dac")
         self.stepTable.cellWidget(row, _COL_BOOST_DAC).setEnabled(boost_enabled)
         self.stepTable.cellWidget(row, _COL_BOOST_MAX).setEnabled(boost_enabled)
-
-    def _on_save_steps_clicked(self) -> None:
-        """저장 버튼 → 현재 step 테이블 값을 내부 config에 반영 (dialog를 닫지 않음)."""
-        steps = self._collect_steps()
-        if steps is None:
-            return
-        # 현재 config에 반영만 하고 닫지 않음 (사용자가 미리 저장 가능)
-        self._initial_config = dict(self._initial_config)
-        self._initial_config["ramp_steps"] = steps
-        self._initial_config["step_count"] = len(steps)
-        QMessageBox.information(self, "저장", f"{len(steps)}개 step이 반영됐습니다. OK를 누르면 최종 적용됩니다.")
 
     def _update_extra_ramp_enabled(self) -> None:
         policy = self.afterLastStepPolicyCombo.currentData()

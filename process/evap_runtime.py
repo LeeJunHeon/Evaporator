@@ -30,6 +30,12 @@ from process.models import ProcessRecipe, ProcessStep
 # MODIFIED: Dep.rate 급증 스파이크 판정 임계값 (단일 샘플에서 이전 값 대비 이 값 이상 양의 급증 시 무시)
 RATE_SPIKE_UP_THRESHOLD: float = 30.0
 
+# MODIFIED: IIR 필터 기본값 (meta로 override 가능)
+_DEFAULT_IIR_ALPHA = 0.3        # 0 < alpha <= 1.0  (1.0 = 필터 없음), thermal evap 권장
+
+# MODIFIED: Slew Rate 기본값 (meta로 override 가능)
+_DEFAULT_MAX_SLEW_DAC_PER_SEC = 200   # DAC units/s, 초당 200 DAC = rate 10 Å/s 이하에서 안전 수준
+
 
 def _raise_engine_failed(step_name: str, detail: str) -> None:
     """
@@ -134,6 +140,49 @@ def _evap_apply_dac(engine, use_p1: bool, use_p2: bool, dac: int, *, tag: str) -
     if use_p2:
         engine._plc_write_reg("DAC_POWER_2", dac, tag=f"{tag}_CH2")
         engine._last_dac_power_2 = dac
+
+
+class EvapPI:
+    """
+    MODIFIED: 증착 rate PI 제어기
+    - Ramp-up 구간에서는 사용 안 함 (기존 +step 방식 유지)
+    - fine_tune / shutter_delay / main_loop 에서만 사용
+    - Anti-windup: DAC 포화 시 적분 누적 차단
+    """
+
+    def __init__(self, kp: float, ki: float, dac_min: int = 0, dac_max: int = 4000):
+        self.kp = kp
+        self.ki = ki
+        self.dac_min = dac_min
+        self.dac_max = dac_max
+        self._integral: float = 0.0
+        self._last_t: Optional[float] = None
+
+    def reset(self) -> None:
+        self._integral = 0.0
+        self._last_t = None
+
+    def compute(self, current_dac: int, target_rate: float, actual_rate: float) -> int:
+        now = time.monotonic()
+        dt = (now - self._last_t) if self._last_t is not None else 1.0
+        dt = max(0.01, min(dt, 5.0))   # 이상치 방지
+        self._last_t = now
+
+        err = target_rate - actual_rate
+
+        # Anti-windup: DAC가 포화 중이면 같은 방향의 적분 차단
+        at_max = current_dac >= self.dac_max
+        at_min = current_dac <= self.dac_min
+        if not (at_max and err > 0) and not (at_min and err < 0):
+            self._integral += err * dt
+
+        # 적분 클램프 (과도한 windup 방지)
+        integral_limit = (self.dac_max - self.dac_min) / max(self.ki, 1e-9) * 0.5
+        self._integral = max(-integral_limit, min(integral_limit, self._integral))
+
+        delta = self.kp * err + self.ki * self._integral
+        new_dac = int(current_dac + delta)
+        return int(max(self.dac_min, min(self.dac_max, new_dac)))
 
 
 def _evap_adjust_dac(
@@ -467,6 +516,21 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
     if adc_control_mode != "adc":
         _raise_engine_failed(step.name, f"EVAP: unsupported adc_control_mode={adc_control_mode}")
 
+    # MODIFIED: IIR 필터 파라미터 (meta로 override)
+    # iir_alpha = 0.3: thermal evap 권장. 1.0이면 필터 없음
+    iir_alpha = float(meta.get("iir_alpha", _DEFAULT_IIR_ALPHA))
+    iir_alpha = max(0.01, min(1.0, iir_alpha))
+
+    # MODIFIED: PI 제어 파라미터 (meta로 override)
+    # pi_kp = 5.0: 낮게 시작해서 올림 (SQC-310 방식)
+    # pi_ki = 0.5: thermal evap I값 4~10s 기준에서 시작
+    pi_kp = float(meta.get("pi_kp", 5.0))
+    pi_ki = float(meta.get("pi_ki", 0.5))
+
+    # MODIFIED: Slew Rate (meta로 override)
+    # max_slew_dac_per_sec = 200: 초당 200 DAC = rate 10 Å/s 이하에서 안전 수준
+    max_slew = float(meta.get("max_slew_dac_per_sec", _DEFAULT_MAX_SLEW_DAC_PER_SEC))
+
     # --- 공정 파라미터(기본값은 요구사항 기준) ---
     pre_rate = float(meta.get("pre_rate", 0.4) or 0.4)    # Å/s
 
@@ -541,6 +605,15 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
     # MODIFIED: 스파이크 필터용 직전 유효 rate 추적 (mutable holder)
     _last_valid_rate: list[Optional[float]] = [None]
 
+    # MODIFIED: IIR 필터 상태 (mutable container for closure)
+    _iir_prev: list[float] = [0.0]
+
+    def _apply_iir(raw: float) -> float:
+        """MODIFIED: IIR 저역통과 필터. filtered = alpha * raw + (1-alpha) * prev"""
+        filtered = iir_alpha * float(raw) + (1.0 - iir_alpha) * _iir_prev[0]
+        _iir_prev[0] = filtered
+        return filtered
+
     def _update_filtered_rate(rt_raw: float) -> float:
         # MODIFIED: 급증 스파이크 필터 — 이전 유효값 대비 RATE_SPIKE_UP_THRESHOLD 이상
         # 양의 방향으로 순간 급증하면 해당 샘플을 무시하고 이전 값 유지
@@ -577,8 +650,9 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
             rt = engine._get_rate()
             if rt is not None:
                 rt_raw = float(rt)
-                _update_filtered_rate(rt_raw)
-                shortage_start_ts = _material_shortage_guard(rt_raw, shortage_start_ts, where=where)
+                rt_iir = _apply_iir(rt_raw)   # MODIFIED: IIR 필터 적용
+                _update_filtered_rate(rt_iir)
+                shortage_start_ts = _material_shortage_guard(rt_iir, shortage_start_ts, where=where)
 
             now = time.monotonic()
             remain = end_t - now
@@ -623,10 +697,11 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
             rt = engine._get_rate()
             if rt is not None:
                 rt_raw = float(rt)
-                rt_filtered = _update_filtered_rate(rt_raw)
+                rt_iir = _apply_iir(rt_raw)                    # MODIFIED: IIR 필터 적용
+                rt_filtered = _update_filtered_rate(rt_iir)    # 이동평균은 IIR 출력에 적용
 
-                # ✅ 모든 공정 구간에서 material shortage 감시
-                shortage_start_ts = _material_shortage_guard(rt_raw, shortage_start_ts, where=where)
+                # ✅ 모든 공정 구간에서 material shortage 감시 (IIR 필터 적용 값 기준)
+                shortage_start_ts = _material_shortage_guard(rt_iir, shortage_start_ts, where=where)
 
                 return rt_raw, rt_filtered
 
@@ -733,7 +808,7 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         pending_dac_min_interval_s = 0.0
 
     def maybe_apply_dac(new_dac: int, *, min_interval_s: float) -> bool:
-        """DAC 변경은 너무 잦지 않게(min_interval_s) 제한."""
+        """DAC 변경은 너무 잦지 않게(min_interval_s) 제한. PI 경로에서 slew rate 적용."""
         nonlocal dac, pending_dac, pending_dac_min_interval_s, last_dac_apply_m
         new_dac = int(new_dac)
         if new_dac == int(dac):
@@ -744,6 +819,12 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         wait_s = float(min_interval_s)
         now_m = time.monotonic()
         if (now_m - float(last_dac_apply_m)) >= wait_s:
+            # MODIFIED: Slew Rate 제한 (PI 경로에만 적용)
+            elapsed = now_m - float(last_dac_apply_m)
+            max_delta = int(max_slew * elapsed)
+            delta = new_dac - int(dac)
+            if max_delta > 0 and abs(delta) > max_delta:
+                new_dac = int(dac) + int(max_delta * (1 if delta > 0 else -1))
             dac = new_dac
             apply_dac()
             return True
@@ -758,10 +839,19 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         if pending_dac is None:
             return False
 
-        if (time.monotonic() - float(last_dac_apply_m)) < float(pending_dac_min_interval_s):
+        now_m = time.monotonic()
+        if (now_m - float(last_dac_apply_m)) < float(pending_dac_min_interval_s):
             return False
 
-        dac = int(pending_dac)
+        # MODIFIED: Slew Rate 제한 (pending 적용 시에도 PI 경로 slew 적용)
+        elapsed = now_m - float(last_dac_apply_m)
+        max_delta = int(max_slew * elapsed)
+        new_dac = int(pending_dac)
+        delta = new_dac - int(dac)
+        if max_delta > 0 and abs(delta) > max_delta:
+            new_dac = int(dac) + int(max_delta * (1 if delta > 0 else -1))
+        pending_dac = new_dac  # slew clamp 후 적용
+        dac = new_dac
         apply_dac()
         return True
 
@@ -969,8 +1059,12 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
 
     engine._emit_status(message="STEP 기반 ADC ramp 완료 → fine tune 진입", force=True)
 
+    # MODIFIED: PI 제어기 초기화 (fine_tune 진입 전 리셋)
+    _pi = EvapPI(kp=pi_kp, ki=pi_ki, dac_min=0, dac_max=dac_max)
+    _pi.reset()
+
     # 6) target_rate ±5% band 안으로 fine tune
-    engine._emit_status(message=f"EVAP fine tune: tol=±{rate_tol_ratio*100:.1f}% / stable_hits={target_stable_hits}")
+    engine._emit_status(message=f"EVAP fine tune: tol=±{rate_tol_ratio*100:.1f}% / stable_hits={target_stable_hits} / PI(kp={pi_kp},ki={pi_ki})")
     t_tune0 = time.monotonic()
     tune_timeout_s = float(meta.get("tune_timeout_s", 120.0) or 120.0)
 
@@ -990,15 +1084,8 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         if (time.monotonic() - t_tune0) > tune_timeout_s:
             _raise_engine_failed(step.name, f"EVAP: target_rate fine tune timeout {tune_timeout_s}s (rt={rt_raw:.3f})")
 
-        new_dac = _evap_adjust_dac(
-            dac=dac,
-            rate=rt_raw,
-            target_rate=target_rate,
-            tol_ratio=rate_tol_ratio,
-            step_up=fine_step_dac,
-            step_dn=fine_step_dac,
-            dac_max=dac_max,
-        )
+        # MODIFIED: PI 제어기로 DAC 조정 (fine_tune)
+        new_dac = _pi.compute(dac, target_rate, rt_filtered)
 
         # ✅ 미세조정도 구간 템포(10s/30s)보다 빠르게 못 움직이게
         maybe_apply_dac(new_dac, min_interval_s=_dac_min_interval_by_dac(max(int(dac), int(new_dac))))
@@ -1033,15 +1120,8 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
                     f"th={target_rate*rate_drop_ratio:.3f}"
                 )
 
-            new_dac = _evap_adjust_dac(
-                dac=dac,
-                rate=rt_raw,
-                target_rate=target_rate,
-                tol_ratio=rate_tol_ratio,
-                step_up=fine_step_dac,
-                step_dn=fine_step_dac,
-                dac_max=dac_max,
-            )
+            # MODIFIED: PI 제어기로 DAC 조정 (shutter_delay)
+            new_dac = _pi.compute(dac, target_rate, rt_filtered)
             maybe_apply_dac(new_dac, min_interval_s=_dac_min_interval_by_dac(max(int(dac), int(new_dac))))
 
             nowm = time.monotonic()
@@ -1114,16 +1194,8 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         else:
             drop_hits = 0
 
-        # rate 유지
-        new_dac = _evap_adjust_dac(
-            dac=dac,
-            rate=rt_raw,
-            target_rate=target_rate,
-            tol_ratio=rate_tol_ratio,
-            step_up=fine_step_dac,
-            step_dn=fine_step_dac,
-            dac_max=dac_max,
-        )
+        # MODIFIED: PI 제어기로 DAC 조정 (main_loop)
+        new_dac = _pi.compute(dac, target_rate, rt_filtered)
         maybe_apply_dac(new_dac, min_interval_s=_dac_min_interval_by_dac(max(int(dac), int(new_dac))))
 
         remain_th = max(0.0, float(target_th) - float(dep_th))

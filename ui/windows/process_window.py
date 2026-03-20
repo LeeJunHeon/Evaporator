@@ -72,6 +72,11 @@ class ProcessWindow(QWidget):
         "rate_stable_sec",
         "rate_drop_ratio",
         "rate_drop_count",
+        # MODIFIED: 신규 제어 파라미터
+        "iir_alpha",             # IIR 필터 (0.3 권장)
+        "pi_kp",                 # PI 비례 게인 (5.0 권장)
+        "pi_ki",                 # PI 적분 게인 (0.5 권장)
+        "max_slew_dac_per_sec",  # Slew Rate (200 권장)
     )
 
     def __init__(self):
@@ -986,6 +991,12 @@ class ProcessWindow(QWidget):
 
         self._apply_material(channel, data)
 
+        # MODIFIED: 선택 물질에 제어 파라미터가 있으면 process_cfg에 반영
+        for key in ("iir_alpha", "pi_kp", "pi_ki", "max_slew_dac_per_sec"):
+            val = getattr(sel, key, None)
+            if val is not None:
+                self._process_cfg[key] = val
+
     def _apply_material(self, channel: int, data: dict[str, Any]) -> None:
         mat = str(data.get("material", "")).strip()
 
@@ -1038,6 +1049,12 @@ class ProcessWindow(QWidget):
             "rate_stable_sec": 3.0,
             "rate_drop_ratio": 0.50,
             "rate_drop_count": 3,
+
+            # MODIFIED: 신규 제어 파라미터 기본값
+            "iir_alpha": 0.3,            # thermal evap 권장. 1.0이면 필터 없음
+            "pi_kp": 5.0,                # 낮게 시작해서 올림 (SQC-310 방식)
+            "pi_ki": 0.5,                # thermal evap I값 4~10s 기준에서 시작
+            "max_slew_dac_per_sec": 200.0,  # 초당 200 DAC = rate 10 Å/s 이하에서 안전 수준
         }
 
     def _normalize_process_config(self, cfg: Any) -> dict[str, Any]:
@@ -1165,6 +1182,12 @@ class ProcessWindow(QWidget):
             "rate_stable_sec": _as_float(src, "rate_stable_sec", 3.0, 0.0),
             "rate_drop_ratio": _as_float(src, "rate_drop_ratio", 0.50, 0.01, 1.0),
             "rate_drop_count": _as_int(src, "rate_drop_count", 3, 1, 20),
+
+            # MODIFIED: 신규 제어 파라미터
+            "iir_alpha": _as_float(src, "iir_alpha", 0.3, 0.01, 1.0),
+            "pi_kp": _as_float(src, "pi_kp", 5.0, 0.0),
+            "pi_ki": _as_float(src, "pi_ki", 0.5, 0.0),
+            "max_slew_dac_per_sec": _as_float(src, "max_slew_dac_per_sec", 200.0, 1.0),
         }
 
     def _open_process_config_dialog(self) -> None:

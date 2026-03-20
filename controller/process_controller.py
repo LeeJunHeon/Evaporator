@@ -659,6 +659,12 @@ class ProcessController(QObject):
         _apply("rate_stable_sec", float)
         _apply("rate_drop_ratio", float)
 
+        # MODIFIED: 신규 제어 파라미터
+        _apply("iir_alpha", float)
+        _apply("pi_kp", float)
+        _apply("pi_ki", float)
+        _apply("max_slew_dac_per_sec", float)
+
     def _build_evap_steps(
         self,
         *,

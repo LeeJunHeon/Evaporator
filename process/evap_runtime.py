@@ -27,6 +27,9 @@ from typing import Optional
 
 from process.models import ProcessRecipe, ProcessStep
 
+# MODIFIED: Dep.rate 급증 스파이크 판정 임계값 (단일 샘플에서 이전 값 대비 이 값 이상 양의 급증 시 무시)
+RATE_SPIKE_UP_THRESHOLD: float = 30.0
+
 
 def _raise_engine_failed(step_name: str, detail: str) -> None:
     """
@@ -535,8 +538,20 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
     shortage_start_ts: Optional[float] = None
     rate_filter_samples: list[float] = []
 
+    # MODIFIED: 스파이크 필터용 직전 유효 rate 추적 (mutable holder)
+    _last_valid_rate: list[Optional[float]] = [None]
+
     def _update_filtered_rate(rt_raw: float) -> float:
+        # MODIFIED: 급증 스파이크 필터 — 이전 유효값 대비 RATE_SPIKE_UP_THRESHOLD 이상
+        # 양의 방향으로 순간 급증하면 해당 샘플을 무시하고 이전 값 유지
         rt_value = float(rt_raw)
+        prev = _last_valid_rate[0]
+        if prev is not None and (rt_value - prev) > RATE_SPIKE_UP_THRESHOLD:
+            # 스파이크 감지: 이전 유효값으로 대체 (필터 샘플에도 스파이크 대신 prev 입력)
+            rt_value = prev
+        else:
+            _last_valid_rate[0] = rt_value
+
         rate_filter_samples.append(rt_value)
         over = len(rate_filter_samples) - int(rate_filter_window)
         if over > 0:

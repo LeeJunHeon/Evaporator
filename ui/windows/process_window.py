@@ -1247,6 +1247,7 @@ class ProcessWindow(QWidget):
             parent=host,
             power_title="ADC",
             power_default_range=adc_range,
+            fixed_power_range=(0.0, 200.0),  # MODIFIED: ADC Y축 0~200 고정 (자동 스케일 비활성화)
         )
         lay.addWidget(self._plot)
 
@@ -1271,9 +1272,19 @@ class ProcessWindow(QWidget):
         dac1, dac2 = self._read_plc_power_dac_pair()
         adc1, adc2 = self._read_plc_power_actual_pair()
 
-        # ✅ 그래프는 이제 ADC 기준
-        graph_power = self._sum_selected_pair(adc1, adc2)
-        graph_power = self._clamp_nonneg(graph_power)
+        # MODIFIED: 하드웨어 채널 매핑 — Power1 단독 사용 시 ADC2가 실제 feedback
+        # Power1 선택 시: ADC2 값을 그래프/표시에 사용 (ADC1은 노이즈)
+        use1, use2 = self._selected_power_flags()
+        if use1 and not use2:
+            # Power1 only → feedback/display는 ADC2
+            graph_power = self._clamp_nonneg(adc2)
+            display_adc1 = adc2   # actualPower1 칸에도 ADC2 값 표시
+            display_adc2 = adc2
+        else:
+            # Power2 단독 또는 Power1+Power2 동시 → 기존 로직
+            graph_power = self._sum_selected_pair(adc1, adc2)
+            graph_power = self._clamp_nonneg(graph_power)
+            display_adc1, display_adc2 = adc1, adc2
 
         if graph_power is not None:
             self._last_power = graph_power
@@ -1296,8 +1307,8 @@ class ProcessWindow(QWidget):
         # ✅ 신규 DAC 표시
         self._update_dac_power_ui(dac1, dac2)
 
-        # ✅ 기존 actualPower = ADC 표시
-        self._update_actual_power_ui(adc1, adc2)
+        # MODIFIED: actualPower 표시 — Power1 단독 시 ADC2 값으로 표시
+        self._update_actual_power_ui(display_adc1, display_adc2)
 
         # ✅ 그래프는 ADC 기준으로 append
         if self._plot is not None:

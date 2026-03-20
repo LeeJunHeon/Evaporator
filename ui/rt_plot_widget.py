@@ -125,12 +125,15 @@ class DepositionPlotWidget(QWidget):
         window_seconds: float = 150.0,
         power_title: str = "ADC",
         power_default_range: tuple[float, float] = (0.0, 300.0),
+        fixed_power_range: Optional[tuple[float, float]] = None,  # MODIFIED: 고정 Y축 범위 (설정 시 자동 스케일 비활성화)
     ):
         super().__init__(parent)
         self._max_points = int(max_points)
         self._window_s = float(window_seconds)
         self._power_title = str(power_title)
         self._p_def_min, self._p_def_max = float(power_default_range[0]), float(power_default_range[1])
+        # MODIFIED: 고정 Y축 범위 저장 (None이면 auto-scale 유지)
+        self._fixed_power_range = fixed_power_range
 
         self._t0: Optional[float] = None
         self._last_t: float = 0.0
@@ -355,6 +358,14 @@ class DepositionPlotWidget(QWidget):
 
 
     def _update_power_axis_for_range(self, x1: float, x2: float) -> None:
+        # MODIFIED: 고정 Y축 범위가 설정되어 있으면 auto-scale을 비활성화하고 고정값 사용
+        if self._fixed_power_range is not None:
+            y_min = float(self._fixed_power_range[0])
+            y_max = float(self._fixed_power_range[1])
+            self._ax_power.setRange(y_min, y_max)
+            self._apply_power_label_format(y_max)
+            return
+
         if not self._power_buf:
             self._ax_power.setRange(self._p_def_min, self._p_def_max)
             self._apply_power_label_format(self._p_def_max)
@@ -382,8 +393,13 @@ class DepositionPlotWidget(QWidget):
         self._ax_rate.setRange(0.0, 1.0)
         self._ax_rate.setLabelFormat("%.3f")
 
-        self._ax_power.setRange(self._p_def_min, self._p_def_max)
-        self._apply_power_label_format(self._p_def_max)
+        # MODIFIED: 고정 범위가 있으면 그것을 사용, 없으면 기본 범위
+        if self._fixed_power_range is not None:
+            self._ax_power.setRange(float(self._fixed_power_range[0]), float(self._fixed_power_range[1]))
+            self._apply_power_label_format(float(self._fixed_power_range[1]))
+        else:
+            self._ax_power.setRange(self._p_def_min, self._p_def_max)
+            self._apply_power_label_format(self._p_def_max)
 
     def _update_axes(self, t_now: float) -> None:
         # ✅ 라이브 팔로우
@@ -533,6 +549,10 @@ class DepositionPlotWidget(QWidget):
             pass
 
     def set_power_default_range(self, y_min: float, y_max: float) -> None:
+        # MODIFIED: 고정 범위가 설정되어 있으면 default range 변경을 무시
+        if self._fixed_power_range is not None:
+            return
+
         try:
             y_min = float(y_min)
             y_max = float(y_max)

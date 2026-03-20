@@ -30,6 +30,54 @@ from devices.stm100 import STM100, STM100ProtocolError, STM100ValueUnavailableEr
 
 
 # ============================================================
+# STM io_trace 포맷 헬퍼
+# ============================================================
+
+def _format_stm_io_trace(d: dict) -> str:
+    """
+    STM100 TX/RX trace dict → 사람이 읽기 쉬운 로그 문자열.
+
+    TX=V / RX=A092.6   → "[STM] 증착률: 0.926 Å/s"
+    TX=U / RX=A5926441 → "[STM] 누적 두께: 592.6 Å"
+    파싱 실패 시 raw 출력 (WARNING 레벨 표시)
+    """
+    tx = str(d.get("tx", "")).strip().upper()
+    rx = str(d.get("rx", "")).strip()
+    ok = bool(d.get("ok", True))
+
+    # dep.rate: TX=V, RX=A<value> (값은 1/1000 Å/s 단위)
+    if tx == "V":
+        try:
+            if rx.startswith("A") or rx.startswith("a"):
+                val = float(rx[1:])
+                rate = val / 100.0  # STM100은 0.01 Å/s 단위
+                return f"[STM] 증착률: {rate:.3f} Å/s"
+        except Exception:
+            pass
+        level = "WARNING" if ok else "ERROR"
+        return f"[STM][{level}] 증착률 파싱 실패 — tx={tx!r} rx={rx!r}"
+
+    # 두께: TX=U, RX=A<value> (값은 0.1 Å 단위)
+    if tx == "U":
+        try:
+            if rx.startswith("A") or rx.startswith("a"):
+                val = float(rx[1:])
+                thickness = val / 10.0  # 0.1 Å 단위 → Å
+                return f"[STM] 누적 두께: {thickness:.1f} Å"
+        except Exception:
+            pass
+        level = "WARNING" if ok else "ERROR"
+        return f"[STM][{level}] 두께 파싱 실패 — tx={tx!r} rx={rx!r}"
+
+    # 기타 명령: raw 출력
+    if not ok:
+        detail = str(d.get("detail", "")).strip()
+        return f"[STM] TX={tx!r} → ERROR: rx={rx!r} {detail}".strip()
+
+    return f"[STM] TX={tx!r} → RX={rx!r}"
+
+
+# ============================================================
 # Snapshot
 # ============================================================
 
@@ -330,11 +378,17 @@ class STMServiceWorker(QThread):
         """
         devices/stm100.py에서 io_trace_cb로 올라오는 통신 trace를
         STMServiceWorker 시그널로 밖으로 전달.
+        "msg" 필드에 사람이 읽기 쉬운 요약 문자열을 추가해서 emit.
         """
         try:
             d2 = dict(d or {})
             d2.setdefault("dev", "STM100")
             d2.setdefault("ts", time.time())
+            # 인간 가독형 메시지 추가 (수신측에서 d["msg"] 로 표시 가능)
+            try:
+                d2["msg"] = _format_stm_io_trace(d2)
+            except Exception:
+                d2["msg"] = f"[STM] tx={d2.get('tx')!r} rx={d2.get('rx')!r}"
             self.sig_io_trace.emit(d2)
         except Exception:
             pass

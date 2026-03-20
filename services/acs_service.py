@@ -30,6 +30,58 @@ from devices.acs2000 import ACS2000
 
 
 # ============================================================
+# ACS io_trace 포맷 헬퍼
+# ============================================================
+
+def _fmt_pressure_human(pressure: float) -> str:
+    """
+    지수 표기 압력을 사람이 읽기 쉬운 형태로 변환.
+    예) 4.26e-06 → "4.26 × 10⁻⁶ Torr"
+    """
+    _SUP = {"0":"⁰","1":"¹","2":"²","3":"³","4":"⁴","5":"⁵","6":"⁶","7":"⁷","8":"⁸","9":"⁹","-":"⁻"}
+
+    try:
+        p = float(pressure)
+        if p == 0.0:
+            return "0 Torr"
+        import math
+        exp = int(math.floor(math.log10(abs(p))))
+        mantissa = p / (10.0 ** exp)
+        sup_str = "".join(_SUP.get(c, c) for c in str(exp))
+        return f"{mantissa:.2f} × 10{sup_str} Torr"
+    except Exception:
+        return f"{pressure:.3e} Torr"
+
+
+def _format_acs_io_trace(d: dict) -> str:
+    """
+    ACS2000 io_trace dict → 사람이 읽기 쉬운 로그 문자열.
+    pressure 필드가 있으면 "[ACS] 챔버 압력: X × 10ⁿ Torr" 형태로 출력.
+    """
+    ok = bool(d.get("ok", True))
+    pressure = d.get("pressure", None)
+
+    if pressure is not None:
+        try:
+            p = float(pressure)
+            human = _fmt_pressure_human(p)
+            if not ok:
+                return f"[ACS] 챔버 압력(오류): {human}"
+            return f"[ACS] 챔버 압력: {human}"
+        except Exception:
+            pass
+
+    # pressure 없으면 raw 출력
+    tx = d.get("tx", "")
+    rx = d.get("rx", "")
+    token = d.get("token", "")
+    detail = d.get("detail", "")
+    if not ok:
+        return f"[ACS] 통신 오류 — token={token!r} tx={tx!r} rx={rx!r} {detail}".strip()
+    return f"[ACS] token={token!r} rx={rx!r}"
+
+
+# ============================================================
 # Snapshot
 # ============================================================
 
@@ -233,11 +285,17 @@ class ACSServiceWorker(QThread):
         """
         devices/acs2000.py에서 io_trace_cb로 올라오는 trace를
         서비스 시그널로 밖에 전달.
+        "msg" 필드에 사람이 읽기 쉬운 요약 문자열을 추가해서 emit.
         """
         try:
             d2 = dict(d or {})
             d2.setdefault("dev", "ACS2000")
             d2.setdefault("ts", time.time())
+            # 인간 가독형 메시지 추가
+            try:
+                d2["msg"] = _format_acs_io_trace(d2)
+            except Exception:
+                d2["msg"] = f"[ACS] pressure={d2.get('pressure')}"
             self.sig_io_trace.emit(d2)
         except Exception:
             pass

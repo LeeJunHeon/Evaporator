@@ -23,9 +23,64 @@ EVAP 전용 증착 runtime 로직.
 from __future__ import annotations
 
 import time
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import Optional, List
 
 from process.models import ProcessRecipe, ProcessStep
+
+
+# ============================================================
+# EvapStep 데이터클래스 (ADC 기준 최대 5스텝)
+# ============================================================
+
+@dataclass
+class EvapStep:
+    """
+    ADC 기준 증착 ramp-up 단계 하나를 정의하는 데이터클래스.
+
+    필드:
+        target_adc       : 이 ADC 값에 도달할 때까지 DAC을 올림
+        dac_step         : 한 번에 올리는 DAC 증분 (int)
+        dac_interval_sec : DAC 증분 주기 (초)
+        rate_wait_sec    : target ADC 도달 후 dep.rate 관찰 대기 시간 (초)
+        min_dep_rate     : 정상 판정 최소 dep.rate (Å/s). 이상이면 다음 step
+        rate_low_action  : dep.rate 낮을 때 동작
+                           "next_step" — 그냥 다음 step으로 진행
+                           "boost_dac" — boost_dac_step씩 올리며 rate_wait_sec 대기 (boost_max_count회)
+                                         모두 소진 시 소진 판정 후 안전 정지
+                           "stop"      — 즉시 소진 판정 후 안전 정지
+        boost_dac_step   : boost_dac 선택 시 추가 DAC 증분
+        boost_max_count  : boost 최대 시도 횟수
+
+    레거시 호환:
+        기존 ramp_steps[{target_adc, delay_s}] 포맷에서 자동 변환됨.
+        delay_s → rate_wait_sec 으로 매핑, 나머지는 기본값 사용.
+
+    마이그레이션 방법 (기존 레시피 JSON):
+        기존:
+            "ramp_steps": [{"target_adc": 100.0, "delay_s": 5.0}]
+        신규:
+            "ramp_steps": [
+                {
+                    "target_adc": 100.0,
+                    "dac_step": 10,
+                    "dac_interval_sec": 30.0,
+                    "rate_wait_sec": 5.0,
+                    "min_dep_rate": 0.1,
+                    "rate_low_action": "next_step"
+                }
+            ]
+        delay_s가 있으면 rate_wait_sec으로 자동 변환됨. 새 필드가 없으면 기본값 사용.
+    """
+
+    target_adc: float
+    dac_step: int = 10
+    dac_interval_sec: float = 30.0
+    rate_wait_sec: float = 0.0
+    min_dep_rate: float = 0.1
+    rate_low_action: str = "next_step"   # "next_step" | "boost_dac" | "stop"
+    boost_dac_step: int = 0
+    boost_max_count: int = 0
 
 # MODIFIED: Dep.rate 급증 스파이크 판정 임계값 (단일 샘플에서 이전 값 대비 이 값 이상 양의 급증 시 무시)
 RATE_SPIKE_UP_THRESHOLD: float = 30.0
@@ -347,7 +402,7 @@ def _load_runtime_process_config(meta: dict, *, step_name: str) -> dict:
             f"EVAP: process_config.ramp_steps supports up to 10 steps only (got={len(raw_ramp_steps)})"
         )
 
-    ramp_steps: list[dict[str, float]] = []
+    ramp_steps: list[dict] = []
     last_adc = -1.0
 
     for idx, item in enumerate(raw_ramp_steps, start=1):
@@ -356,14 +411,16 @@ def _load_runtime_process_config(meta: dict, *, step_name: str) -> dict:
 
         try:
             target_adc = float(item.get("target_adc", 0.0) or 0.0)
-            delay_s = float(item.get("delay_s", 0.0) or 0.0)
+            # 레거시: delay_s → rate_wait_sec 자동 변환
+            legacy_delay_s = float(item.get("delay_s", 0.0) or 0.0)
+            rate_wait_sec = float(item.get("rate_wait_sec", legacy_delay_s) or 0.0)
         except Exception:
             _raise_engine_failed(step_name, f"EVAP: ramp_steps[{idx}] value conversion failed")
 
         if target_adc <= 0:
             _raise_engine_failed(step_name, f"EVAP: ramp_steps[{idx}].target_adc must be > 0")
-        if delay_s < 0:
-            _raise_engine_failed(step_name, f"EVAP: ramp_steps[{idx}].delay_s must be >= 0")
+        if rate_wait_sec < 0:
+            _raise_engine_failed(step_name, f"EVAP: ramp_steps[{idx}].rate_wait_sec must be >= 0")
 
         if last_adc >= 0 and target_adc < last_adc:
             _raise_engine_failed(
@@ -372,11 +429,47 @@ def _load_runtime_process_config(meta: dict, *, step_name: str) -> dict:
                 f"(prev={last_adc}, current={target_adc})"
             )
 
+        # 신규 EvapStep 필드 파싱 (없으면 기본값)
+        try:
+            dac_step = max(1, int(item.get("dac_step", 10) or 10))
+        except Exception:
+            dac_step = 10
+        try:
+            dac_interval_sec = max(0.1, float(item.get("dac_interval_sec", 30.0) or 30.0))
+        except Exception:
+            dac_interval_sec = 30.0
+        try:
+            min_dep_rate = max(0.0, float(item.get("min_dep_rate", 0.1) or 0.0))
+        except Exception:
+            min_dep_rate = 0.1
+
+        rate_low_action = str(item.get("rate_low_action", "next_step") or "next_step").strip().lower()
+        if rate_low_action not in {"next_step", "boost_dac", "stop"}:
+            rate_low_action = "next_step"
+
+        try:
+            boost_dac_step = max(0, int(item.get("boost_dac_step", 0) or 0))
+        except Exception:
+            boost_dac_step = 0
+        try:
+            boost_max_count = max(0, int(item.get("boost_max_count", 0) or 0))
+        except Exception:
+            boost_max_count = 0
+
         ramp_steps.append(
             {
                 "step_no": idx,
                 "target_adc": target_adc,
-                "delay_s": delay_s,
+                # 레거시 호환
+                "delay_s": rate_wait_sec,
+                # EvapStep 신규 필드
+                "dac_step": dac_step,
+                "dac_interval_sec": dac_interval_sec,
+                "rate_wait_sec": rate_wait_sec,
+                "min_dep_rate": min_dep_rate,
+                "rate_low_action": rate_low_action,
+                "boost_dac_step": boost_dac_step,
+                "boost_max_count": boost_max_count,
             }
         )
         last_adc = target_adc
@@ -887,19 +980,31 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         step_reach_hits = 0
         step_drop_low_start_ts = None
 
-        step_no = int(step_cfg["step_no"])
-        step_target_adc = float(step_cfg["target_adc"])
-        step_delay_s = float(step_cfg["delay_s"])
+        step_no           = int(step_cfg["step_no"])
+        step_target_adc   = float(step_cfg["target_adc"])
+        # EvapStep 필드 (없으면 레거시 기본값)
+        step_dac_step       = int(step_cfg.get("dac_step", 10))
+        step_dac_interval   = float(step_cfg.get("dac_interval_sec", 30.0))
+        step_rate_wait      = float(step_cfg.get("rate_wait_sec", step_cfg.get("delay_s", 0.0)))
+        step_min_dep_rate   = float(step_cfg.get("min_dep_rate", 0.1))
+        step_low_action     = str(step_cfg.get("rate_low_action", "next_step"))
+        step_boost_dac_step = int(step_cfg.get("boost_dac_step", 0))
+        step_boost_max      = int(step_cfg.get("boost_max_count", 0))
 
         engine._emit_status(
             message=(
                 f"STEP {step_no}/{len(ramp_steps)} 시작 | "
-                f"target_adc={step_target_adc:.1f} | delay={step_delay_s:.1f}s"
+                f"target_adc={step_target_adc:.1f} | "
+                f"dac_step={step_dac_step} | interval={step_dac_interval:.1f}s | "
+                f"rate_wait={step_rate_wait:.1f}s | min_rate={step_min_dep_rate:.2f}"
             ),
             force=True,
         )
 
-        # (A) target_adc까지 ramp
+        # (A) current_adc(EMA 필터값)가 step.target_adc 미만인 동안 DAC 증분
+        #     dac_interval_sec마다 dac_step씩 올림 (ADC 도달 판정은 EMA값 기준)
+        _last_dac_ramp_m = time.monotonic()
+
         while True:
             rt_raw, rt_filtered = read_rate_or_abort(where=f"step{step_no}_ramp")
 
@@ -918,42 +1023,40 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
                     f"(adc={adc_total:.1f}/{step_target_adc:.1f}, rate={rt_raw:.3f})"
                 )
 
-            dac_inc = _dynamic_dac_step_from_adc_gap(
-                adc_total,
-                step_target_adc,
-                step_cap=meta.get("adc_dynamic_step_cap", 50.0),
-            )
-
-            dac = min(dac_max, dac + int(dac_inc))
-            apply_dac()
+            # dac_interval_sec마다 dac_step씩 증분 (EvapStep 방식)
+            now_m = time.monotonic()
+            if (now_m - _last_dac_ramp_m) >= step_dac_interval:
+                dac = min(dac_max, dac + step_dac_step)
+                apply_dac()
+                _last_dac_ramp_m = now_m
 
             engine._emit_status(
                 message=(
                     f"STEP {step_no}/{len(ramp_steps)} RAMP | "
                     f"ADC={adc_total:.1f}/{step_target_adc:.1f} | "
-                    f"DAC={dac} | rate={rt_raw:.3f} Å/s | +{int(dac_inc)}"
+                    f"DAC={dac} | rate={rt_raw:.3f} Å/s"
                 ),
                 force=True,
             )
 
-            _ramp_sleep_by_dac(dac, where=f"step{step_no}_ramp_sleep")
+            _sleep_with_checks(min(1.0, step_dac_interval * 0.5), where=f"step{step_no}_ramp_sleep")
 
         if entered_main_from_step:
             break
 
-        # (B) target_adc 도달 후 step delay
-        if step_delay_s > 0:
-            end_m = time.monotonic() + float(step_delay_s)
+        # (B) target_adc 도달 후 rate_wait_sec 대기 + dep.rate 판정
+        if step_rate_wait > 0:
+            end_m = time.monotonic() + float(step_rate_wait)
             next_ui_m = time.monotonic()
 
             while True:
-                rt_raw, rt_filtered = read_rate_or_abort(where=f"step{step_no}_delay")
+                rt_raw, rt_filtered = read_rate_or_abort(where=f"step{step_no}_wait")
 
-                if _check_step_rate_state(rt_raw, rt_filtered, where=f"step{step_no}_delay"):
+                if _check_step_rate_state(rt_raw, rt_filtered, where=f"step{step_no}_wait"):
                     entered_main_from_step = True
                     break
 
-                adc_total, _, _ = read_adc_total_or_abort(where=f"step{step_no}_delay")
+                adc_total, _, _ = read_adc_total_or_abort(where=f"step{step_no}_wait")
                 remain_s = end_m - time.monotonic()
                 if remain_s <= 0:
                     break
@@ -962,7 +1065,7 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
                 if now_m >= next_ui_m:
                     engine._emit_status(
                         message=(
-                            f"STEP {step_no}/{len(ramp_steps)} HOLD | "
+                            f"STEP {step_no}/{len(ramp_steps)} WAIT | "
                             f"ADC={adc_total:.1f}/{step_target_adc:.1f} | "
                             f"DAC={dac} | rate={rt_raw:.3f} Å/s | "
                             f"남은 {engine._fmt_hms(remain_s, ceil=True)}"
@@ -971,7 +1074,67 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
                     )
                     next_ui_m = now_m + 1.0
 
-                _sleep_with_checks(min(0.1, max(0.0, remain_s)), where=f"step{step_no}_delay_sleep")
+                _sleep_with_checks(min(0.1, max(0.0, remain_s)), where=f"step{step_no}_wait_sleep")
+
+        if entered_main_from_step:
+            break
+
+        # (C) rate_wait 완료 후 dep.rate 판정 → rate_low_action 처리
+        rt_raw_now, rt_f_now = read_rate_or_abort(where=f"step{step_no}_rate_check")
+        rate_ok = (rt_f_now >= step_min_dep_rate)
+
+        if not rate_ok:
+            if step_low_action == "stop":
+                _raise_engine_failed(
+                    step.name,
+                    f"EVAP: STEP {step_no} rate 부족 → 소진 판정 정지 "
+                    f"(rt_f={rt_f_now:.3f} < min={step_min_dep_rate:.3f})"
+                )
+
+            elif step_low_action == "boost_dac" and step_boost_dac_step > 0 and step_boost_max > 0:
+                engine._emit_status(
+                    message=f"STEP {step_no} rate 부족 → boost_dac 시작 (최대 {step_boost_max}회)",
+                    force=True,
+                )
+                _boost_ok = False
+                for _bi in range(step_boost_max):
+                    dac = min(dac_max, dac + step_boost_dac_step)
+                    apply_dac()
+                    engine._emit_status(
+                        message=f"STEP {step_no} BOOST {_bi+1}/{step_boost_max} | DAC={dac}",
+                        force=True,
+                    )
+                    # boost 후 rate_wait_sec 대기
+                    if step_rate_wait > 0:
+                        _sleep_with_checks(step_rate_wait, where=f"step{step_no}_boost_wait")
+                    else:
+                        _sleep_with_checks(3.0, where=f"step{step_no}_boost_wait")
+
+                    _rt_r, _rt_f = read_rate_or_abort(where=f"step{step_no}_boost_check")
+                    if _rt_f >= step_min_dep_rate:
+                        engine._emit_status(
+                            message=f"STEP {step_no} BOOST 성공 (rate={_rt_f:.3f})",
+                            force=True,
+                        )
+                        _boost_ok = True
+                        break
+
+                if not _boost_ok:
+                    _raise_engine_failed(
+                        step.name,
+                        f"EVAP: STEP {step_no} boost {step_boost_max}회 소진 후 rate 미달 → 소진 판정 정지 "
+                        f"(rt_f={_rt_f:.3f} < min={step_min_dep_rate:.3f})"
+                    )
+
+            # rate_low_action == "next_step": 그냥 다음 step으로 진행 (아무것도 안 함)
+            else:
+                engine._emit_status(
+                    message=(
+                        f"STEP {step_no} rate 부족이지만 next_step 정책 → 다음 step으로 "
+                        f"(rt_f={rt_f_now:.3f} < min={step_min_dep_rate:.3f})"
+                    ),
+                    force=True,
+                )
 
         if entered_main_from_step:
             break

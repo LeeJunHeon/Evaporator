@@ -1093,7 +1093,29 @@ class ProcessEngine:
                 return None
 
         return _to_float(regs.get("POWER_READ_1")), _to_float(regs.get("POWER_READ_2"))
-    
+
+    def _get_power_read_raw_pair(self) -> tuple[Optional[float], Optional[float]]:
+        """
+        PLC snapshot.regs 에서 ADC 원본(POWER_READ_1_RAW/2_RAW)을 읽는다.
+        CSV adc1_raw/adc2_raw 컬럼용.
+        """
+        snap = self._get_plc_snapshot()
+        if snap is None:
+            return None, None
+        regs = getattr(snap, "regs", None)
+        if not isinstance(regs, dict):
+            return None, None
+
+        def _to_float(v: Any) -> Optional[float]:
+            if v is None:
+                return None
+            try:
+                return float(v)
+            except Exception:
+                return None
+
+        return _to_float(regs.get("POWER_READ_1_RAW")), _to_float(regs.get("POWER_READ_2_RAW"))
+
     def _get_power_read_pair_cached(self) -> tuple[Optional[float], Optional[float]]:
         """
         현재 snapshot 값이 있으면 캐시를 갱신하고,
@@ -1272,6 +1294,7 @@ class ProcessEngine:
     def _emit_telemetry(self, recipe: ProcessRecipe, step: ProcessStep) -> None:
         try:
             adc1, adc2 = self._get_power_read_pair_cached()
+            adc1_raw, adc2_raw = self._get_power_read_raw_pair()
 
             self.log.telemetry({
                 "step": (self._ui_last_message or self._current_step_name),
@@ -1280,7 +1303,9 @@ class ProcessEngine:
                 "dac1": (self._last_dac_power_1 if self._is_plc_ready() else None),
                 "dac2": (self._last_dac_power_2 if self._is_plc_ready() else None),
                 "adc1": adc1,
+                "adc1_raw": adc1_raw,
                 "adc2": adc2,
+                "adc2_raw": adc2_raw,
                 "dep.rate": self._get_rate(),
                 "thickness_A": self._get_thickness(),
             })
@@ -1356,6 +1381,7 @@ class ProcessEngine:
                 line += f" | {str(detail)}"
 
             adc1, adc2 = self._get_power_read_pair_cached()
+            adc1_raw, adc2_raw = self._get_power_read_raw_pair()
 
             self.log.telemetry({
                 "step": (self._ui_last_message or self._current_step_name),
@@ -1364,7 +1390,9 @@ class ProcessEngine:
                 "dac1": (self._last_dac_power_1 if self._is_plc_ready() else None),
                 "dac2": (self._last_dac_power_2 if self._is_plc_ready() else None),
                 "adc1": adc1,
+                "adc1_raw": adc1_raw,
                 "adc2": adc2,
+                "adc2_raw": adc2_raw,
                 "dep.rate": self._get_rate(),
                 "thickness_A": self._get_thickness(),
             })

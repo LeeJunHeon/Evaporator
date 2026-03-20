@@ -1013,7 +1013,13 @@ class ProcessWindow(QWidget):
             "ramp_steps": [
                 {
                     "target_adc": 100.0,
-                    "delay_s": 0.0,
+                    "dac_step": 10,
+                    "dac_interval_sec": 30.0,
+                    "rate_wait_sec": 0.0,
+                    "min_dep_rate": 0.1,
+                    "rate_low_action": "next_step",
+                    "boost_dac_step": 0,
+                    "boost_max_count": 0,
                 }
             ],
             "reach_main_on_rate": True,
@@ -1090,22 +1096,60 @@ class ProcessWindow(QWidget):
         src = dict(cfg or {})
 
         raw_steps = src.get("ramp_steps") or src.get("steps") or default["ramp_steps"]
-        steps: list[dict[str, float]] = []
+        steps: list[dict] = []
 
         for item in list(raw_steps)[:10]:
+            d = dict(item or {})
             try:
-                target_adc = max(0.0, float((item or {}).get("target_adc", 0.0)))
+                target_adc = max(0.0, float(d.get("target_adc", 0.0)))
             except Exception:
                 target_adc = 0.0
 
+            # backward compat: delay_s → rate_wait_sec
+            legacy_delay = d.get("delay_s", 0.0)
             try:
-                delay_s = max(0.0, float((item or {}).get("delay_s", 0.0)))
+                rate_wait_sec = max(0.0, float(d.get("rate_wait_sec", legacy_delay)))
             except Exception:
-                delay_s = 0.0
+                rate_wait_sec = 0.0
+
+            try:
+                dac_step = max(1, int(d.get("dac_step", 10)))
+            except Exception:
+                dac_step = 10
+
+            try:
+                dac_interval_sec = max(0.1, float(d.get("dac_interval_sec", 30.0)))
+            except Exception:
+                dac_interval_sec = 30.0
+
+            try:
+                min_dep_rate = max(0.0, float(d.get("min_dep_rate", 0.1)))
+            except Exception:
+                min_dep_rate = 0.1
+
+            rate_low_action = str(d.get("rate_low_action", "next_step") or "next_step").strip()
+            if rate_low_action not in {"next_step", "boost_dac", "stop"}:
+                rate_low_action = "next_step"
+
+            try:
+                boost_dac_step = max(0, int(d.get("boost_dac_step", 0)))
+            except Exception:
+                boost_dac_step = 0
+
+            try:
+                boost_max_count = max(0, int(d.get("boost_max_count", 0)))
+            except Exception:
+                boost_max_count = 0
 
             steps.append({
                 "target_adc": target_adc,
-                "delay_s": delay_s,
+                "dac_step": dac_step,
+                "dac_interval_sec": dac_interval_sec,
+                "rate_wait_sec": rate_wait_sec,
+                "min_dep_rate": min_dep_rate,
+                "rate_low_action": rate_low_action,
+                "boost_dac_step": boost_dac_step,
+                "boost_max_count": boost_max_count,
             })
 
         if not steps:
@@ -1225,7 +1269,7 @@ class ProcessWindow(QWidget):
 
         steps = self._process_cfg.get("ramp_steps") or []
         step_desc = ", ".join(
-            f"{idx+1}:{float(s.get('target_adc', 0.0)):.1f}/{float(s.get('delay_s', 0.0)):.1f}s"
+            f"{idx+1}:{float(s.get('target_adc', 0.0)):.1f}/{float(s.get('rate_wait_sec', s.get('delay_s', 0.0))):.1f}s"
             for idx, s in enumerate(steps)
         )
 

@@ -30,6 +30,118 @@ from config.plc_config import PLCSettings
 
 
 # ============================================================
+# ADC EMA (Exponential Moving Average) Filter
+# ============================================================
+
+class AdcEmaFilter:
+    """
+    채널별 ADC EMA 스무딩 필터.
+
+    filtered = alpha * raw + (1 - alpha) * prev
+    - alpha=0.2 (기본): 노이즈 감쇠 강함, 응답 약간 느림
+    - alpha=1.0: 필터 없음 (raw 그대로)
+    - 첫 샘플: 초기화 없이 raw 값을 prev로 사용(warm-up 튐 방지)
+    """
+
+    def __init__(self, alpha: float = 0.2) -> None:
+        self._alpha: float = max(0.01, min(1.0, float(alpha)))
+        self._prev: Optional[float] = None
+
+    def reset(self) -> None:
+        self._prev = None
+
+    def update(self, raw: float) -> float:
+        raw = float(raw)
+        if self._prev is None:
+            self._prev = raw
+            return raw
+        filtered = self._alpha * raw + (1.0 - self._alpha) * self._prev
+        self._prev = filtered
+        return filtered
+
+    @property
+    def alpha(self) -> float:
+        return self._alpha
+
+    @property
+    def prev(self) -> Optional[float]:
+        return self._prev
+
+
+# ============================================================
+# PLC 코일/레지스터 한글 설명 매핑
+# ============================================================
+
+_COIL_LABEL: Dict[str, str] = {
+    "R_P_SW":          "러핑 펌프",
+    "R_V_SW":          "러핑 밸브",
+    "F_V_SW":          "포어라인 밸브",
+    "M_V_SW":          "메인 게이트 밸브",
+    "V_V_SW":          "벤팅 밸브",
+    "TMP_SW":          "터보 분자 펌프",
+    "SHUTTER_1_SW":    "소스 셔터 1",
+    "SHUTTER_2_SW":    "소스 셔터 2",
+    "MAIN_SHUTTER_SW": "메인 셔터",
+    "POWER_1_SW":      "전원 1",
+    "POWER_2_SW":      "전원 2",
+    "FTM_SW":          "FTM(두께계) 전원",
+    "DOOR_SW":         "도어 잠금",
+    "AIR_SW":          "에어 공급",
+    "WATER_SW":        "냉각수 공급",
+    "GAUGE_1_SW":      "게이지 1",
+    "GAUGE_2_SW":      "게이지 2",
+}
+
+_DAC_FULL_SCALE: int = 4095   # DAC 풀스케일 코드 (12-bit)
+
+
+def _format_plc_cmd_trace(d: dict) -> str:
+    """
+    PLC cmd_trace dict → 사람이 읽기 쉬운 로그 문자열.
+
+    CmdWriteCoil  : "[PLC] 메인 셔터(MAIN_SHUTTER_SW) → ON  (tag: EVAP_MAIN_SHUTTER_OPEN)"
+    CmdWriteReg   : "[PLC] DAC CH1: 700 / 4095 (17.1%)"
+    ADC_READBACK  : "[PLC] ADC CH1: raw=523 / filtered=518.4"
+    """
+    event  = str(d.get("event", ""))
+    target = str(d.get("target", ""))
+    value  = d.get("value", "")
+    tag    = str(d.get("tag", "")).strip()
+    ok     = bool(d.get("ok", True))
+    # msg가 이미 있으면 재사용 (ADC_READBACK 등에서 미리 채운 것)
+    if d.get("msg"):
+        return str(d["msg"])
+
+    status = "" if ok else " [FAIL]"
+    tag_str = f"  (tag: {tag})" if tag else ""
+
+    if event == "CmdWriteCoil":
+        label = _COIL_LABEL.get(target, "")
+        label_str = f"{label}({target})" if label else target
+        val_str = "ON" if value else "OFF"
+        detail = str(d.get("detail", "")).strip()
+        extra = f" / {detail}" if detail else ""
+        return f"[PLC] {label_str} → {val_str}{extra}{status}{tag_str}"
+
+    if event == "CmdWriteReg":
+        t_upper = target.upper()
+        if t_upper in ("DAC_POWER_1", "DAC_POWER_2"):
+            ch = "1" if t_upper.endswith("_1") else "2"
+            try:
+                v = int(value)
+                pct = v / _DAC_FULL_SCALE * 100.0
+                return f"[PLC] DAC CH{ch}: {v} / {_DAC_FULL_SCALE} ({pct:.1f}%){status}{tag_str}"
+            except Exception:
+                pass
+        return f"[PLC] REG {target} = {value}{status}{tag_str}"
+
+    if event == "CmdSetDacCurrent":
+        return f"[PLC] DAC 전류 설정: CH{target.replace('DAC_CH','')} = {value} mA{status}{tag_str}"
+
+    return f"[PLC] {event} target={target} value={value}{status}{tag_str}"
+
+
+# ============================================================
 # Command definitions
 # ============================================================
 
@@ -120,6 +232,10 @@ class PlcServiceWorker(QThread):
         # 마지막 스냅샷(서비스가 조회할 수 있게)
         self._last_snapshot: Optional[PLCSnapshot] = None
         self._connected: bool = False
+
+        # ADC 채널별 EMA 필터 (alpha=0.2: 노이즈 감쇠 강함)
+        self._adc_ema_1: AdcEmaFilter = AdcEmaFilter(alpha=0.2)
+        self._adc_ema_2: AdcEmaFilter = AdcEmaFilter(alpha=0.2)
 
     def _publish_disconnected_snapshot(self) -> None:
         """
@@ -454,7 +570,7 @@ class PlcServiceWorker(QThread):
                     else:
                         detail = f"pulse_ms={int(cmd.pulse_ms)}"
 
-                self.sig_cmd_trace.emit({
+                trace_d = {
                     "ok": True,
                     "event": type(cmd).__name__,
                     "target": target,
@@ -462,7 +578,12 @@ class PlcServiceWorker(QThread):
                     "tag": getattr(cmd, "tag", ""),
                     "detail": detail,
                     "result": result,
-                })
+                }
+                try:
+                    trace_d["msg"] = _format_plc_cmd_trace(trace_d)
+                except Exception:
+                    pass
+                self.sig_cmd_trace.emit(trace_d)
             except Exception:
                 pass
 
@@ -510,7 +631,7 @@ class PlcServiceWorker(QThread):
                 else:
                     detail = f"ERR={e!r}"
 
-                self.sig_cmd_trace.emit({
+                fail_trace_d = {
                     "ok": False,
                     "event": type(cmd).__name__,
                     "target": target,
@@ -518,7 +639,12 @@ class PlcServiceWorker(QThread):
                     "tag": getattr(cmd, "tag", ""),
                     "detail": detail,
                     "result": None,
-                })
+                }
+                try:
+                    fail_trace_d["msg"] = _format_plc_cmd_trace(fail_trace_d)
+                except Exception:
+                    pass
+                self.sig_cmd_trace.emit(fail_trace_d)
             except Exception:
                 pass
 
@@ -648,20 +774,48 @@ class PlcServiceWorker(QThread):
         out["DAC_POWER_1"] = int(await plc.read_reg_name("DAC_POWER_1"))
         out["DAC_POWER_2"] = int(await plc.read_reg_name("DAC_POWER_2"))
 
-        # ✅ 실제 readback 값은 sanitize + scale
+        # ✅ 실제 readback 값은 sanitize + scale + EMA 필터
         raw1 = int(await plc.read_reg_name("POWER_READ_1"))
         raw2 = int(await plc.read_reg_name("POWER_READ_2"))
 
         adc1_scaled = self._sanitize_and_scale_power_read(raw1, scale=0.1)
-        # MODIFIED: ADC 1 노이즈 필터 — PLC 노이즈로 인한 0.x ~ 1.x 값을 0으로 처리
+        # ADC 1 노이즈 하한 필터 (PLC 노이즈로 인한 0.x ~ 1.x 값 차단)
         if adc1_scaled < self.ADC1_NOISE_THRESHOLD:
             adc1_scaled = 0.0
-        out["POWER_READ_1"] = adc1_scaled
+        # EMA 스무딩: HMI/엔진은 filtered 값만 사용
+        adc1_filtered = round(self._adc_ema_1.update(adc1_scaled), 2)
+        out["POWER_READ_1"] = adc1_filtered          # 엔진/HMI용 (스무딩됨)
+        out["POWER_READ_1_RAW"] = adc1_scaled        # CSV 로그용 원본
 
-        out["POWER_READ_2"] = self._sanitize_and_scale_power_read(
-            raw2,
-            scale=0.1,
-        )
+        adc2_scaled = self._sanitize_and_scale_power_read(raw2, scale=0.1)
+        adc2_filtered = round(self._adc_ema_2.update(adc2_scaled), 2)
+        out["POWER_READ_2"] = adc2_filtered          # 엔진/HMI용 (스무딩됨)
+        out["POWER_READ_2_RAW"] = adc2_scaled        # CSV 로그용 원본
+
+        # ADC readback trace (인간 가독형 로그)
+        try:
+            self.sig_cmd_trace.emit({
+                "ok": True,
+                "event": "ADC_READBACK",
+                "target": "ADC_CH1",
+                "value": adc1_filtered,
+                "tag": "POLL",
+                "detail": f"raw={adc1_scaled} / filtered={adc1_filtered}",
+                "msg": f"[PLC] ADC CH1: raw={adc1_scaled} / filtered={adc1_filtered}",
+                "result": adc1_filtered,
+            })
+            self.sig_cmd_trace.emit({
+                "ok": True,
+                "event": "ADC_READBACK",
+                "target": "ADC_CH2",
+                "value": adc2_filtered,
+                "tag": "POLL",
+                "detail": f"raw={adc2_scaled} / filtered={adc2_filtered}",
+                "msg": f"[PLC] ADC CH2: raw={adc2_scaled} / filtered={adc2_filtered}",
+                "result": adc2_filtered,
+            })
+        except Exception:
+            pass
 
         return out
     

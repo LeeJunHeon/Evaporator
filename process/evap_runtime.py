@@ -860,33 +860,19 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
     apply_dac()
 
     entered_main_from_step = False
+    # MODIFIED: rate drop 감지는 main shutter open 이후에만 활성화
+    rate_drop_enabled: bool = False
 
     def _check_step_rate_state(rt_raw: float, rt_filtered: float, *, where: str) -> bool:
+        """ramp/step/shutter_delay 구간에서 호출. rate drop 감지는 여기서 수행하지 않음."""
         nonlocal step_rate_peak, step_drop_hits, step_reach_hits, step_drop_low_start_ts
 
-        if float(rt_filtered) > step_rate_peak:
+        # MODIFIED: peak 갱신 조건 강화 — target_rate * 0.3 이상일 때만 peak로 인정
+        if float(rt_filtered) >= float(target_rate) * 0.3 and float(rt_filtered) > step_rate_peak:
             step_rate_peak = float(rt_filtered)
 
-        if step_rate_peak >= max(pre_rate, target_rate * 0.30):
-            drop_threshold = float(step_rate_peak) * float(rate_drop_ratio)
-            drop_met, step_drop_low_start_ts = _is_below_threshold_sustained(
-                float(rt_filtered),
-                drop_threshold,
-                step_drop_low_start_ts,
-            )
-            if drop_met:
-                step_drop_hits += 1
-                if step_drop_hits >= max(1, int(rate_drop_count)):
-                    _raise_engine_failed(
-                        step.name,
-                        f"EVAP: step 중 dep.rate 급감 감지({where}) "
-                        f"(rt_raw={rt_raw:.3f}, rt_f={rt_filtered:.3f}, peak={step_rate_peak:.3f}, "
-                        f"hits={step_drop_hits}/{rate_drop_count})"
-                    )
-            else:
-                step_drop_hits = 0
-        else:
-            step_drop_low_start_ts = None
+        # MODIFIED: rate drop 감지 제거 — ramp/step 구간에서는 false trigger 방지
+        # (main shutter open 이후 main_loop 에서만 rate_drop_enabled 플래그로 검사)
 
         reach_threshold = float(target_rate) * (1.0 - float(rate_tol_ratio))
         if reach_main_on_rate and float(rt_filtered) >= reach_threshold:
@@ -1160,6 +1146,10 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
 
     engine._emit_status(message=f"EVAP: thickness baseline th0={th0:.1f} Å")
 
+    # MODIFIED: main shutter open 직후부터 rate drop 감지 활성화
+    rate_drop_enabled = True
+    engine._emit_status(message="EVAP: rate drop 감지 활성화 (main shutter open)", force=True)
+
     # 9) 증착 루프
     drop_hits = 0
     main_drop_threshold = float(target_rate) * float(rate_drop_ratio)
@@ -1176,23 +1166,26 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         if dep_th < 0:
             dep_th = 0.0
 
-        # ✅ 급감 감지는 첫 샘플 baseline이 아니라 target_rate 기준으로 통일
-        main_drop_met, main_drop_low_start_ts = _is_below_threshold_sustained(
-            rt_filtered,
-            main_drop_threshold,
-            main_drop_low_start_ts,
-        )
-        if main_drop_met:
-            drop_hits += 1
-            if drop_hits >= max(1, int(rate_drop_count)):
-                _raise_engine_failed(
-                    step.name,
-                    f"EVAP: dep.rate 급감 감지 → 중단 "
-                    f"(rt_raw={rt_raw:.3f}, rt_f={rt_filtered:.3f}, "
-                    f"th={main_drop_threshold:.3f}, hits={drop_hits}/{rate_drop_count})"
-                )
+        # MODIFIED: rate drop 감지 — main shutter open 이후에만 활성화
+        if rate_drop_enabled:
+            main_drop_met, main_drop_low_start_ts = _is_below_threshold_sustained(
+                rt_filtered,
+                main_drop_threshold,
+                main_drop_low_start_ts,
+            )
+            if main_drop_met:
+                drop_hits += 1
+                if drop_hits >= max(1, int(rate_drop_count)):
+                    _raise_engine_failed(
+                        step.name,
+                        f"EVAP: dep.rate 급감 감지 → 중단 "
+                        f"(rt_raw={rt_raw:.3f}, rt_f={rt_filtered:.3f}, "
+                        f"th={main_drop_threshold:.3f}, hits={drop_hits}/{rate_drop_count})"
+                    )
+            else:
+                drop_hits = 0
         else:
-            drop_hits = 0
+            main_drop_low_start_ts = None
 
         # MODIFIED: PI 제어기로 DAC 조정 (main_loop)
         new_dac = _pi.compute(dac, target_rate, rt_filtered)

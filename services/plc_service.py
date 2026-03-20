@@ -632,6 +632,9 @@ class PlcServiceWorker(QThread):
 
         return round(float(signed) * float(scale), 1)
 
+    # MODIFIED: ADC 1 노이즈 임계값 — 이 값 미만이면 0으로 처리 (PLC 노이즈 차단)
+    ADC1_NOISE_THRESHOLD: float = 2.0
+
     async def _read_regs(self, plc: AsyncPLC) -> Dict[str, RegValue]:
         """
         EV에서 필요한 레지스터:
@@ -649,10 +652,12 @@ class PlcServiceWorker(QThread):
         raw1 = int(await plc.read_reg_name("POWER_READ_1"))
         raw2 = int(await plc.read_reg_name("POWER_READ_2"))
 
-        out["POWER_READ_1"] = self._sanitize_and_scale_power_read(
-            raw1,
-            scale=0.1,
-        )
+        adc1_scaled = self._sanitize_and_scale_power_read(raw1, scale=0.1)
+        # MODIFIED: ADC 1 노이즈 필터 — PLC 노이즈로 인한 0.x ~ 1.x 값을 0으로 처리
+        if adc1_scaled < self.ADC1_NOISE_THRESHOLD:
+            adc1_scaled = 0.0
+        out["POWER_READ_1"] = adc1_scaled
+
         out["POWER_READ_2"] = self._sanitize_and_scale_power_read(
             raw2,
             scale=0.1,

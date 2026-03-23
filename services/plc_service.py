@@ -233,9 +233,12 @@ class PlcServiceWorker(QThread):
         self._last_snapshot: Optional[PLCSnapshot] = None
         self._connected: bool = False
 
-        # ADC 채널별 EMA 필터 (alpha=0.2: 노이즈 감쇠 강함)
-        self._adc_ema_1: AdcEmaFilter = AdcEmaFilter(alpha=0.2)
-        self._adc_ema_2: AdcEmaFilter = AdcEmaFilter(alpha=0.2)
+        # ADC 채널별 EMA 필터 (alpha=0.5: 응답 빠름 + 적당한 노이즈 감쇠)
+        self._adc_ema_1: AdcEmaFilter = AdcEmaFilter(alpha=0.5)
+        self._adc_ema_2: AdcEmaFilter = AdcEmaFilter(alpha=0.5)
+
+        # 공정 실행 중일 때만 ADC readback trace를 emit
+        self._process_logging: bool = False
 
     def _publish_disconnected_snapshot(self) -> None:
         """
@@ -527,6 +530,12 @@ class PlcServiceWorker(QThread):
                 if rn in ("DAC_POWER_1", "DAC_POWER_2"):
                     ch = 1 if rn.endswith("_1") else 2
                     await plc.set_dac_power(ch, int(cmd.value))
+                    # DAC=0 쓰기 직후 해당 채널 EMA 리셋 (power-on 스파이크 방지)
+                    if int(cmd.value) == 0:
+                        if rn == "DAC_POWER_1":
+                            self._adc_ema_1.reset()
+                        else:
+                            self._adc_ema_2.reset()
                 else:
                     await plc.write_reg_name(rn, int(cmd.value))
                 result = True
@@ -792,30 +801,31 @@ class PlcServiceWorker(QThread):
         out["POWER_READ_2"] = adc2_filtered          # 엔진/HMI용 (스무딩됨)
         out["POWER_READ_2_RAW"] = adc2_scaled        # CSV 로그용 원본
 
-        # ADC readback trace (인간 가독형 로그)
-        try:
-            self.sig_cmd_trace.emit({
-                "ok": True,
-                "event": "ADC_READBACK",
-                "target": "ADC_CH1",
-                "value": adc1_filtered,
-                "tag": "POLL",
-                "detail": f"raw={adc1_scaled} / filtered={adc1_filtered}",
-                "msg": f"[PLC] ADC CH1: raw={adc1_scaled} / filtered={adc1_filtered}",
-                "result": adc1_filtered,
-            })
-            self.sig_cmd_trace.emit({
-                "ok": True,
-                "event": "ADC_READBACK",
-                "target": "ADC_CH2",
-                "value": adc2_filtered,
-                "tag": "POLL",
-                "detail": f"raw={adc2_scaled} / filtered={adc2_filtered}",
-                "msg": f"[PLC] ADC CH2: raw={adc2_scaled} / filtered={adc2_filtered}",
-                "result": adc2_filtered,
-            })
-        except Exception:
-            pass
+        # ADC readback trace — 공정 실행 중(_process_logging=True)에만 emit
+        if self._process_logging:
+            try:
+                self.sig_cmd_trace.emit({
+                    "ok": True,
+                    "event": "ADC_READBACK",
+                    "target": "ADC_CH1",
+                    "value": adc1_filtered,
+                    "tag": "POLL",
+                    "detail": f"raw={adc1_scaled} / filtered={adc1_filtered}",
+                    "msg": f"[PLC] ADC CH1: raw={adc1_scaled} / filtered={adc1_filtered}",
+                    "result": adc1_filtered,
+                })
+                self.sig_cmd_trace.emit({
+                    "ok": True,
+                    "event": "ADC_READBACK",
+                    "target": "ADC_CH2",
+                    "value": adc2_filtered,
+                    "tag": "POLL",
+                    "detail": f"raw={adc2_scaled} / filtered={adc2_filtered}",
+                    "msg": f"[PLC] ADC CH2: raw={adc2_scaled} / filtered={adc2_filtered}",
+                    "result": adc2_filtered,
+                })
+            except Exception:
+                pass
 
         return out
     
@@ -858,6 +868,10 @@ class PlcServiceWorker(QThread):
                         fut.set_exception(exc)
                 except Exception:
                     pass
+
+    def set_process_logging(self, enabled: bool) -> None:
+        """공정 실행 중 ADC readback trace emit 활성/비활성 전환."""
+        self._process_logging = bool(enabled)
 
     # -------------------------------
     # Worker state access
@@ -937,9 +951,13 @@ class PLCService(QObject):
 
     def is_running(self) -> bool:
         return bool(self._worker.isRunning())
-    
+
     def is_connected(self) -> bool:
         return self._worker.is_connected()
+
+    def set_process_logging(self, enabled: bool) -> None:
+        """공정 실행 중 ADC readback trace emit 활성/비활성 전환. 워커에 전파."""
+        self._worker.set_process_logging(enabled)
 
     def get_last_snapshot(self) -> Optional[PLCSnapshot]:
         return self._worker.get_last_snapshot()

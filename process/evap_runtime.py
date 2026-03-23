@@ -1155,6 +1155,16 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
 
             _sleep_with_checks(min(1.0, step_dac_interval * 0.5), where=f"step{step_no}_ramp_sleep")
 
+            # sleep 종료 직후 UI 갱신 (카운트다운 메시지에서 멈춰 보이는 현상 방지)
+            engine._emit_status(
+                message=(
+                    f"STEP {step_no}/{len(ramp_steps)} RAMP | "
+                    f"ADC={adc_total:.1f}/{step_target_adc:.1f} | "
+                    f"DAC={dac} | rate={rt_raw:.3f} Å/s"
+                ),
+                force=True,
+            )
+
         if entered_main_from_step:
             break
 

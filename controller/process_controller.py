@@ -234,7 +234,7 @@ class ProcessController(QObject):
     def get_recipe(self) -> Optional[ProcessRecipe]:
         return self._recipe
     
-    def _normalize_ramp_steps(self, run_cfg: dict[str, Any]) -> list[dict[str, float]]:
+    def _normalize_ramp_steps(self, run_cfg: dict[str, Any]) -> list[dict[str, Any]]:
         raw_steps = (
             run_cfg.get("ramp_steps")
             or (run_cfg.get("process_config") or {}).get("ramp_steps")
@@ -250,7 +250,7 @@ class ProcessController(QObject):
                 f"현재 최대 10개까지 지원합니다. (입력={len(raw_steps)})"
             )
 
-        steps: list[dict[str, float]] = []
+        steps: list[dict[str, Any]] = []
         last_adc = -1.0
 
         for idx, item in enumerate(raw_steps, start=1):
@@ -259,14 +259,17 @@ class ProcessController(QObject):
 
             try:
                 target_adc = float(item.get("target_adc", 0.0) or 0.0)
-                delay_s = float(item.get("delay_s", 0.0) or 0.0)
+                # 레거시 호환: delay_s → rate_wait_sec
+                legacy_delay = float(item.get("delay_s", 0.0) or 0.0)
+                delay_s = legacy_delay
+                rate_wait_sec = float(item.get("rate_wait_sec", legacy_delay) or 0.0)
             except Exception:
                 raise ValueError(f"Process Config step {idx} 값 변환에 실패했습니다.")
 
             if target_adc <= 0:
                 raise ValueError(f"Process Config step {idx}의 target_adc는 0보다 커야 합니다.")
-            if delay_s < 0:
-                raise ValueError(f"Process Config step {idx}의 delay_s는 0 이상이어야 합니다.")
+            if rate_wait_sec < 0:
+                raise ValueError(f"Process Config step {idx}의 rate_wait_sec는 0 이상이어야 합니다.")
 
             if last_adc >= 0 and target_adc < last_adc:
                 raise ValueError(
@@ -274,13 +277,44 @@ class ProcessController(QObject):
                     "step target_adc는 일반적으로 오름차순이어야 합니다."
                 )
 
-            steps.append(
-                {
-                    "step_no": idx,
-                    "target_adc": float(target_adc),
-                    "delay_s": float(delay_s),
-                }
-            )
+            try:
+                dac_step = max(1, int(item.get("dac_step", 10) or 10))
+            except Exception:
+                dac_step = 10
+            try:
+                dac_interval_sec = max(0.1, float(item.get("dac_interval_sec", 30.0) or 30.0))
+            except Exception:
+                dac_interval_sec = 30.0
+            try:
+                min_dep_rate = max(0.0, float(item.get("min_dep_rate", 0.1) or 0.0))
+            except Exception:
+                min_dep_rate = 0.1
+
+            rate_low_action = str(item.get("rate_low_action", "next_step") or "next_step").strip().lower()
+            if rate_low_action not in {"next_step", "boost_dac", "stop"}:
+                rate_low_action = "next_step"
+
+            try:
+                boost_dac_step = max(0, int(item.get("boost_dac_step", 0) or 0))
+            except Exception:
+                boost_dac_step = 0
+            try:
+                boost_max_count = max(0, int(item.get("boost_max_count", 0) or 0))
+            except Exception:
+                boost_max_count = 0
+
+            steps.append({
+                "step_no":          idx,
+                "target_adc":       float(target_adc),
+                "delay_s":          float(delay_s),
+                "rate_wait_sec":    float(rate_wait_sec),
+                "dac_step":         dac_step,
+                "dac_interval_sec": dac_interval_sec,
+                "min_dep_rate":     min_dep_rate,
+                "rate_low_action":  rate_low_action,
+                "boost_dac_step":   boost_dac_step,
+                "boost_max_count":  boost_max_count,
+            })
             last_adc = target_adc
 
         if not steps:
@@ -861,6 +895,9 @@ class ProcessController(QObject):
         w.finished.connect(self._on_worker_finished)
         w.finished.connect(w.deleteLater)
 
+        if hasattr(self.plc, "set_process_logging"):
+            self.plc.set_process_logging(True)
+
         self._ui_info("공정 시작 요청")
         w.start()
 
@@ -1017,6 +1054,9 @@ class ProcessController(QObject):
         """
         워커 스레드 종료 cleanup.
         """
+        if hasattr(self.plc, "set_process_logging"):
+            self.plc.set_process_logging(False)
+
         self._worker = None
         self._ui_info("공정 스레드 종료")
 

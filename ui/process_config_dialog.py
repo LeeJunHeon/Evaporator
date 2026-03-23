@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from PySide6.QtCore import Qt, QEvent
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QWheelEvent
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
@@ -209,8 +209,8 @@ class ProcessConfigDialog(QDialog):
 
         top_bar = QHBoxLayout()
         self.stepCountLabel = QLabel("")
-        self.addStepBtn = QPushButton("+ Step", self)
-        self.removeStepBtn = QPushButton("- Step", self)
+        self.addStepBtn = QPushButton("+ Step", step_box)
+        self.removeStepBtn = QPushButton("- Step", step_box)
         self.addStepBtn.clicked.connect(self._add_step_row_ui)
         self.removeStepBtn.clicked.connect(self._remove_last_step_row_ui)
 
@@ -231,7 +231,7 @@ class ProcessConfigDialog(QDialog):
         lbl_step = QLabel("Step")
         lbl_step.setFixedWidth(_STEP_LABEL_W)
         lbl_enabled = QLabel("활성화")
-        lbl_enabled.setFixedWidth(_STEP_LABEL_W)
+        lbl_enabled.setFixedWidth(_STEP_CHECK_W)
         lbl_target = QLabel("Target ADC")
         lbl_target.setFixedWidth(_STEP_TARGET_W)
         lbl_dac = QLabel("DAC step")

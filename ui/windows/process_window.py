@@ -53,32 +53,6 @@ def _append_text(widget: Any, text: str) -> None:
 # Process 창
 # ============================================================
 class ProcessWindow(QWidget):
-    # ✅ 공정 세부 파라미터 키 목록
-    #    source(material)에서 가져오는 값이 아니라,
-    #    process_config에서 유지/전달할 값들이다.
-    _PROCESS_CFG_KEYS = (
-        "ramp_seg1_max_dac",
-        "ramp_interval_seg1_s",
-        "ramp_seg2_max_dac",
-        "ramp_interval_seg2_s",
-        "ramp_interval_after_seg2_s",
-        "pre_rate",
-        "dac_adjust_interval_s",
-        "fine_step_dac",
-        "material_shortage_dac",
-        "material_shortage_rate_max",
-        "material_shortage_time_s",
-        "rate_filter_window",
-        "rate_stable_sec",
-        "rate_drop_ratio",
-        "rate_drop_count",
-        # MODIFIED: 신규 제어 파라미터
-        "iir_alpha",             # IIR 필터 (0.3 권장)
-        "pi_kp",                 # PI 비례 게인 (5.0 권장)
-        "pi_ki",                 # PI 적분 게인 (0.5 권장)
-        "max_slew_dac_per_sec",  # Slew Rate (200 권장)
-    )
-
     def __init__(self):
         super().__init__()
         self.ui = Ui_Form()
@@ -102,7 +76,6 @@ class ProcessWindow(QWidget):
         # ✅ Start preflight 상태
         self._start_worker: Optional[ProcessStartWorker] = None
         self._start_in_progress: bool = False
-        self._start_preflight_cancel_requested: bool = False
         self._pending_run_cfg: Optional[dict[str, Any]] = None
 
         # ✅ UI에 "실제로 connect된 STM 인스턴스" 추적용(경고/중복 connect 방지)
@@ -399,7 +372,6 @@ class ProcessWindow(QWidget):
             return
 
         self._pending_run_cfg = dict(run_cfg)
-        self._start_preflight_cancel_requested = False
         self._set_start_busy(True)
 
         cfg = STMPreflightConfig(
@@ -603,7 +575,10 @@ class ProcessWindow(QWidget):
         steps = proc_cfg.get("ramp_steps") or []
         if steps:
             step_desc = " | ".join(
-                f"S{idx+1}: ADC {float(s.get('target_adc', 0.0)):.1f}, Delay {float(s.get('delay_s', 0.0)):.1f}s"
+                f"S{idx+1}: ADC {float(s.get('target_adc', 0.0)):.1f}, "
+                f"DAC+{int(s.get('dac_step', 0))}, "
+                f"{float(s.get('dac_interval_sec', 0.0)):.1f}s, "
+                f"hold {float(s.get('hold_sec', 0.0)):.1f}s"
                 for idx, s in enumerate(steps)
             )
             _append_text(getattr(self.ui, "logWindow", None), f"[CFG] {step_desc}")
@@ -611,8 +586,9 @@ class ProcessWindow(QWidget):
         _append_text(
             getattr(self.ui, "logWindow", None),
             "[CFG] "
-            f"after_last_step_policy={proc_cfg.get('after_last_step_policy')} | "
-            f"extra_ramp={proc_cfg.get('extra_ramp')}"
+            f"dac_max={proc_cfg.get('dac_max')} | "
+            f"rate_tol_ratio={proc_cfg.get('rate_tol_ratio')} | "
+            f"fine_step_dac={proc_cfg.get('fine_step_dac')}"
         )
 
         # 2) run_id 생성
@@ -647,7 +623,6 @@ class ProcessWindow(QWidget):
             if worker is not None:
                 with contextlib.suppress(Exception):
                     worker.request_cancel()
-            self._start_preflight_cancel_requested = True
             _append_text(getattr(self.ui, "logWindow", None), "[UI] STM preflight 취소 요청")
             return
 
@@ -678,26 +653,6 @@ class ProcessWindow(QWidget):
 
         self._active_run_id = None
         self._active_recipe_name = ""
-
-    def _on_pause_clicked(self) -> None:
-        pc = self._process_controller
-        if pc is None:
-            return
-        try:
-            pc.pause()
-            _append_text(getattr(self.ui, "logWindow", None), "[UI] 일시정지 요청")
-        except Exception as e:
-            _append_text(getattr(self.ui, "logWindow", None), f"[PAUSE FAIL] {e!r}")
-
-    def _on_resume_clicked(self) -> None:
-        pc = self._process_controller
-        if pc is None:
-            return
-        try:
-            pc.resume()
-            _append_text(getattr(self.ui, "logWindow", None), "[UI] 재개 요청")
-        except Exception as e:
-            _append_text(getattr(self.ui, "logWindow", None), f"[RESUME FAIL] {e!r}")
 
     def _on_status(self, st: Any) -> None:
         # ✅ 그래프용 power 추출(기존 유지)
@@ -730,19 +685,9 @@ class ProcessWindow(QWidget):
         cfg = self._normalize_process_config(self._process_cfg)
 
         candidates: list[float] = []
-
         for step in cfg.get("ramp_steps") or []:
             try:
                 v = float((step or {}).get("target_adc", 0.0) or 0.0)
-                if v > 0:
-                    candidates.append(v)
-            except Exception:
-                pass
-
-        extra = dict(cfg.get("extra_ramp") or {})
-        if bool(extra.get("enabled", False)):
-            try:
-                v = float(extra.get("max_adc", 0.0) or 0.0)
                 if v > 0:
                     candidates.append(v)
             except Exception:
@@ -991,12 +936,6 @@ class ProcessWindow(QWidget):
 
         self._apply_material(channel, data)
 
-        # MODIFIED: 선택 물질에 제어 파라미터가 있으면 process_cfg에 반영
-        for key in ("iir_alpha", "pi_kp", "pi_ki", "max_slew_dac_per_sec"):
-            val = getattr(sel, key, None)
-            if val is not None:
-                self._process_cfg[key] = val
-
     def _apply_material(self, channel: int, data: dict[str, Any]) -> None:
         mat = str(data.get("material", "")).strip()
 
@@ -1015,59 +954,21 @@ class ProcessWindow(QWidget):
                     "target_adc": 100.0,
                     "dac_step": 10,
                     "dac_interval_sec": 30.0,
-                    "rate_wait_sec": 0.0,
-                    "min_dep_rate": 0.1,
-                    "rate_low_action": "next_step",
-                    "boost_dac_step": 0,
-                    "boost_max_count": 0,
+                    "hold_sec": 0.0,
                 }
             ],
-            "reach_main_on_rate": True,
-            "after_last_step_policy": "extra_ramp",
-            "extra_ramp": {
-                "enabled": True,
-                "max_adc": 300.0,
-                "step_max": 50.0,
-                "interval_s": 5.0,
-            },
-
-            # DAC / ramp
-            "ramp_seg1_max_dac": 700,
-            "ramp_interval_seg1_s": 10.0,
-            "ramp_seg2_max_dac": 2000,
-            "ramp_interval_seg2_s": 30.0,
-            "ramp_interval_after_seg2_s": 30.0,
-
-            # pre-rate
-            "pre_rate": 0.4,
-
-            # DAC adjust
-            "dac_adjust_interval_s": 10.0,
-            "fine_step_dac": 10,
-
-            # shortage
-            "material_shortage_dac": 2000,
-            "material_shortage_rate_max": 0.0,
-            "material_shortage_time_s": 10.0,
-
-            # dep.rate 판단
-            "rate_filter_window": 5,
+            "dac_max": 4000,
+            "rate_tol_ratio": 0.05,
             "rate_stable_sec": 3.0,
-            "rate_drop_ratio": 0.50,
-            "rate_drop_count": 3,
-
-            # MODIFIED: 신규 제어 파라미터 기본값
-            "iir_alpha": 0.3,            # thermal evap 권장. 1.0이면 필터 없음
-            "pi_kp": 5.0,                # 낮게 시작해서 올림 (SQC-310 방식)
-            "pi_ki": 0.5,                # thermal evap I값 4~10s 기준에서 시작
-            "max_slew_dac_per_sec": 200.0,  # 초당 200 DAC = rate 10 Å/s 이하에서 안전 수준
+            "hold_control_interval_s": 1.0,
+            "fine_step_dac": 10,
+            "rate_abort_ratio": 0.30,
+            "rate_abort_sec": 5.0,
+            "sensor_none_abort_s": 5.0,
+            "adc_none_abort_s": 5.0,
         }
 
     def _normalize_process_config(self, cfg: Any) -> dict[str, Any]:
-        """
-        dialog / json / 임시 dict 어떤 형태로 와도
-        process_config 전체를 표준 형태로 맞춘다.
-        """
         def _as_int(src: dict[str, Any], name: str, default_val: int,
                     min_v: int | None = None, max_v: int | None = None) -> int:
             try:
@@ -1095,8 +996,8 @@ class ProcessWindow(QWidget):
         default = self._default_process_config()
         src = dict(cfg or {})
 
-        raw_steps = src.get("ramp_steps") or src.get("steps") or default["ramp_steps"]
-        steps: list[dict] = []
+        raw_steps = src.get("ramp_steps") or default["ramp_steps"]
+        steps: list[dict[str, Any]] = []
 
         for item in list(raw_steps)[:10]:
             d = dict(item or {})
@@ -1104,13 +1005,6 @@ class ProcessWindow(QWidget):
                 target_adc = max(0.0, float(d.get("target_adc", 0.0)))
             except Exception:
                 target_adc = 0.0
-
-            # backward compat: delay_s → rate_wait_sec
-            legacy_delay = d.get("delay_s", 0.0)
-            try:
-                rate_wait_sec = max(0.0, float(d.get("rate_wait_sec", legacy_delay)))
-            except Exception:
-                rate_wait_sec = 0.0
 
             try:
                 dac_step = max(1, int(d.get("dac_step", 10)))
@@ -1123,33 +1017,16 @@ class ProcessWindow(QWidget):
                 dac_interval_sec = 30.0
 
             try:
-                min_dep_rate = max(0.0, float(d.get("min_dep_rate", 0.1)))
+                hold_src = d.get("hold_sec", d.get("delay_s", 0.0))   # delay_s만 호환 허용
+                hold_sec = max(0.0, float(hold_src))
             except Exception:
-                min_dep_rate = 0.1
-
-            rate_low_action = str(d.get("rate_low_action", "next_step") or "next_step").strip()
-            if rate_low_action not in {"next_step", "boost_dac", "stop"}:
-                rate_low_action = "next_step"
-
-            try:
-                boost_dac_step = max(0, int(d.get("boost_dac_step", 0)))
-            except Exception:
-                boost_dac_step = 0
-
-            try:
-                boost_max_count = max(0, int(d.get("boost_max_count", 0)))
-            except Exception:
-                boost_max_count = 0
+                hold_sec = 0.0
 
             steps.append({
                 "target_adc": target_adc,
                 "dac_step": dac_step,
                 "dac_interval_sec": dac_interval_sec,
-                "rate_wait_sec": rate_wait_sec,
-                "min_dep_rate": min_dep_rate,
-                "rate_low_action": rate_low_action,
-                "boost_dac_step": boost_dac_step,
-                "boost_max_count": boost_max_count,
+                "hold_sec": hold_sec,
             })
 
         if not steps:
@@ -1164,74 +1041,18 @@ class ProcessWindow(QWidget):
         step_count = max(1, min(10, step_count))
         steps = steps[:step_count]
 
-        extra_src = dict(src.get("extra_ramp") or default["extra_ramp"])
-
-        try:
-            extra_enabled = bool(extra_src.get("enabled", True))
-        except Exception:
-            extra_enabled = True
-
-        try:
-            extra_max_adc = max(0.0, float(extra_src.get("max_adc", 300.0) or 0.0))
-        except Exception:
-            extra_max_adc = 300.0
-
-        try:
-            extra_step_max = float(extra_src.get("step_max", 50.0) or 50.0)
-        except Exception:
-            extra_step_max = 50.0
-        extra_step_max = min(100.0, max(1.0, extra_step_max))
-
-        try:
-            extra_interval_s = float(extra_src.get("interval_s", 5.0) or 5.0)
-        except Exception:
-            extra_interval_s = 5.0
-        extra_interval_s = max(0.1, extra_interval_s)
-
-        policy = str(src.get("after_last_step_policy", "extra_ramp") or "extra_ramp").strip().lower()
-        if policy not in {"extra_ramp", "stop"}:
-            policy = "extra_ramp"
-
-        if policy != "extra_ramp":
-            extra_enabled = False
-
         return {
             "step_count": len(steps),
             "ramp_steps": steps,
-            "reach_main_on_rate": bool(src.get("reach_main_on_rate", True)),
-            "after_last_step_policy": policy,
-            "extra_ramp": {
-                "enabled": extra_enabled,
-                "max_adc": extra_max_adc,
-                "step_max": extra_step_max,
-                "interval_s": extra_interval_s,
-            },
-
-            "ramp_seg1_max_dac": _as_int(src, "ramp_seg1_max_dac", 700, 1),
-            "ramp_interval_seg1_s": _as_float(src, "ramp_interval_seg1_s", 10.0, 0.1),
-            "ramp_seg2_max_dac": _as_int(src, "ramp_seg2_max_dac", 2000, 1),
-            "ramp_interval_seg2_s": _as_float(src, "ramp_interval_seg2_s", 30.0, 0.1),
-            "ramp_interval_after_seg2_s": _as_float(src, "ramp_interval_after_seg2_s", 30.0, 0.1),
-
-            "pre_rate": _as_float(src, "pre_rate", 0.4, 0.0),
-
-            "dac_adjust_interval_s": _as_float(src, "dac_adjust_interval_s", 10.0, 0.1),
-            "fine_step_dac": _as_int(src, "fine_step_dac", 10, 1),
-
-            "material_shortage_dac": _as_int(src, "material_shortage_dac", 2000, 0),
-            "material_shortage_rate_max": _as_float(src, "material_shortage_rate_max", 0.0, 0.0),
-            "material_shortage_time_s": _as_float(src, "material_shortage_time_s", 10.0, 0.0),
-
-            "rate_filter_window": _as_int(src, "rate_filter_window", 5, 1, 21),
+            "dac_max": _as_int(src, "dac_max", 4000, 1),
+            "rate_tol_ratio": _as_float(src, "rate_tol_ratio", 0.05, 0.001, 1.0),
             "rate_stable_sec": _as_float(src, "rate_stable_sec", 3.0, 0.0),
-            "rate_drop_ratio": _as_float(src, "rate_drop_ratio", 0.50, 0.01, 1.0),
-            "rate_drop_count": _as_int(src, "rate_drop_count", 3, 1, 20),
-
-            # MODIFIED: 신규 제어 파라미터
-            "iir_alpha": _as_float(src, "iir_alpha", 0.3, 0.01, 1.0),
-            "pi_kp": _as_float(src, "pi_kp", 5.0, 0.0),
-            "pi_ki": _as_float(src, "pi_ki", 0.5, 0.0),
-            "max_slew_dac_per_sec": _as_float(src, "max_slew_dac_per_sec", 200.0, 1.0),
+            "hold_control_interval_s": _as_float(src, "hold_control_interval_s", 1.0, 0.1),
+            "fine_step_dac": _as_int(src, "fine_step_dac", 10, 1),
+            "rate_abort_ratio": _as_float(src, "rate_abort_ratio", 0.30, 0.001, 1.0),
+            "rate_abort_sec": _as_float(src, "rate_abort_sec", 5.0, 0.0),
+            "sensor_none_abort_s": _as_float(src, "sensor_none_abort_s", 5.0, 0.0),
+            "adc_none_abort_s": _as_float(src, "adc_none_abort_s", 5.0, 0.0),
         }
 
     def _open_process_config_dialog(self) -> None:
@@ -1242,13 +1063,12 @@ class ProcessWindow(QWidget):
         try:
             from ui.process_config_dialog import ProcessConfigDialog
         except Exception as e:
-            QMessageBox.information(
+            QMessageBox.warning(
                 self,
                 "Process Config",
-                "process_config_dialog.py 가 아직 준비되지 않았습니다.\n"
-                "다음 단계에서 추가할 예정입니다."
+                f"Process Config dialog import 실패:\n{e!r}"
             )
-            _append_text(getattr(self.ui, "logWindow", None), f"[CFG][WARN] dialog import failed: {e!r}")
+            _append_text(getattr(self.ui, "logWindow", None), f"[CFG][ERR] dialog import failed: {e!r}")
             return
 
         try:
@@ -1269,7 +1089,10 @@ class ProcessWindow(QWidget):
 
         steps = self._process_cfg.get("ramp_steps") or []
         step_desc = ", ".join(
-            f"{idx+1}:{float(s.get('target_adc', 0.0)):.1f}/{float(s.get('rate_wait_sec', s.get('delay_s', 0.0))):.1f}s"
+            f"{idx+1}: ADC {float(s.get('target_adc', 0.0)):.1f}, "
+            f"DAC+{int(s.get('dac_step', 0))}, "
+            f"{float(s.get('dac_interval_sec', 0.0)):.1f}s, "
+            f"hold {float(s.get('hold_sec', 0.0)):.1f}s"
             for idx, s in enumerate(steps)
         )
 
@@ -1283,8 +1106,7 @@ class ProcessWindow(QWidget):
         _append_text(
             getattr(self.ui, "logWindow", None),
             "[CFG] Process config updated | "
-            f"steps={len(steps)} | {step_desc} | "
-            f"policy={self._process_cfg.get('after_last_step_policy')}"
+            f"steps={len(steps)} | {step_desc}"
         )
 
     # ================== 그래프 설정 ==================
@@ -1309,13 +1131,13 @@ class ProcessWindow(QWidget):
             if w is not None:
                 w.setParent(None)
 
-        adc_range = self._get_plot_adc_default_range()
-        self._plot = DepositionPlotWidget(
-            parent=host,
-            power_title="ADC",
-            power_default_range=adc_range,
-            fixed_power_range=(0.0, 200.0),  # MODIFIED: ADC Y축 0~200 고정 (자동 스케일 비활성화)
-        )
+        # adc_range = self._get_plot_adc_default_range()
+        # self._plot = DepositionPlotWidget(
+        #     parent=host,
+        #     power_title="ADC",
+        #     power_default_range=adc_range,
+        #     fixed_power_range=(0.0, 200.0),  # MODIFIED: ADC Y축 0~200 고정 (자동 스케일 비활성화)
+        # )
         lay.addWidget(self._plot)
 
     def _rt_start(self) -> None:
@@ -1494,11 +1316,6 @@ class ProcessWindow(QWidget):
             self.ui.currentDac2Edit.setText(t2)
         except Exception:
             pass
-
-    def _read_plc_power_dac(self) -> Optional[float]:
-        """선택된 power 기준 DAC 합계/단일값."""
-        p1, p2 = self._read_plc_power_dac_pair()
-        return self._sum_selected_pair(p1, p2)
         
     def _convert_power_read_to_amp(self, raw: Optional[float]) -> Optional[float]:
         """
@@ -1749,12 +1566,6 @@ class ProcessWindow(QWidget):
             QMessageBox.warning(self, "Input", "Process Config의 step이 비어 있습니다.")
             return None
 
-        # ✅ 임시 호환용 bridge
-        legacy_ramp_cfg: dict[str, Any] = {}
-        for k in getattr(self, "_PROCESS_CFG_KEYS", ()):
-            if k in proc_cfg:
-                legacy_ramp_cfg[k] = proc_cfg.get(k)
-
         cfg: dict[str, Any] = {
             "process_name": pname,
 
@@ -1765,11 +1576,6 @@ class ProcessWindow(QWidget):
             "density": den,
             "z_factor": zf,
 
-            # ✅ 더 이상 material 기반 ramp가 아니다.
-            #    다음 단계에서 controller가 process_config만 보게 바꿀 예정이므로
-            #    지금은 호환용으로만 유지
-            "ramp": legacy_ramp_cfg,
-
             "target_rate": float(target_rate),
             "target_thickness": float(target_thk),
             "delay_min": float(delay_min),
@@ -1777,11 +1583,7 @@ class ProcessWindow(QWidget):
             "material_1": self._material_1,
             "material_2": self._material_2,
 
-            "adc_control_mode": "adc",
             "process_config": proc_cfg,
-            "ramp_steps": list(steps),
-            "after_last_step_policy": proc_cfg.get("after_last_step_policy", "extra_ramp"),
-            "extra_ramp": dict(proc_cfg.get("extra_ramp") or {}),
         }
         return cfg
     

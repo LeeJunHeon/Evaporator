@@ -173,8 +173,18 @@ class ProcessWindow(QWidget):
         try:
             if hasattr(w, "setStyleSheet"):
                 w.setStyleSheet(
-                    "font-size: 22px; font-weight: 700;"
+                    "background: white;"
+                    "border: 1px solid #d0d0d0;"
+                    "border-radius: 2px;"
+                    "color: #111111;"
+                    "padding: 6px 10px;"
+                    "font-size: 18px;"
+                    "font-weight: 700;"
                 )
+
+            if hasattr(w, "setWordWrap"):
+                w.setWordWrap(True)
+
         except Exception:
             pass
 
@@ -844,7 +854,9 @@ class ProcessWindow(QWidget):
                 if ok:
                     self._set_process_status("공정 완료", f"run_id={rid}")
                 else:
-                    self._set_process_status("공정 종료", f"ok={ok} | run_id={rid}")
+                    # error 경로에서 이미 더 구체적인 status를 올렸다면
+                    # finished가 그 내용을 덮지 않도록 종료 정보만 로그로 남긴다.
+                    self._append_process_log(f"[FINISHED][ABNORMAL] ok={ok} run_id={rid}")
 
             except Exception:
                 self._append_process_log("[FINISHED]")

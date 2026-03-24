@@ -894,7 +894,7 @@ class Ui_Form(object):
 
         self.graphWidget = QWidget(self.page_2)
         self.graphWidget.setObjectName("graphWidget")
-        self.graphWidget.setGeometry(QRect(209, 50, 891, 431))
+        self.graphWidget.setGeometry(QRect(209, 68, 891, 413))
         self.graphWidget.setAutoFillBackground(True)
 
         self.deprateEdit = QLineEdit(self.page_2)
@@ -984,13 +984,14 @@ class Ui_Form(object):
         self.sourcePower2.setObjectName("sourcePower2")
         self.sourcePower2.setGeometry(QRect(110, 120, 81, 24))
 
-        self.processMonitor_Process = QLineEdit(self.page_2)
+        self.processMonitor_Process = QLabel(self.page_2)
         self.processMonitor_Process.setObjectName("processMonitor_Process")
-        self.processMonitor_Process.setGeometry(QRect(210, 5, 891, 41))
-        self.processMonitor_Process.setReadOnly(True)
-        self.processMonitor_Process.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.processMonitor_Process.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
+        self.processMonitor_Process.setGeometry(QRect(210, 5, 891, 56))
+        self.processMonitor_Process.setWordWrap(True)
+        self.processMonitor_Process.setTextFormat(Qt.TextFormat.PlainText)
         self.processMonitor_Process.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.processMonitor_Process.setMargin(10)
+        self.processMonitor_Process.setAutoFillBackground(True)
 
         self.stackedWidget.addWidget(self.page_2)
 

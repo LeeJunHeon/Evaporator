@@ -393,48 +393,81 @@ class ACS2000(BaseSerialDevice):
         return self._call_with_policy(f"CON({interval_a})", _start_once)
 
     def read_stream_line(self, timeout_s: float = 2.0) -> str:
+        """
+        첫 stream 샘플을 기다려 읽는 public 함수.
+        여기서는 timeout을 통신 실패로 보고 policy 재시도 대상에 포함한다.
+        """
         def _read_once():
-            with self._lock:
-                rx = self._read_until_cr_unlocked(timeout_s=timeout_s)
-            if not rx:
-                self._emit_io_trace(ok=False, token="CON_STREAM", tx="$CON_STREAM", rx="", detail="timeout/no data")
+            line = self._read_stream_line_once(
+                timeout_s=timeout_s,
+                emit_timeout_trace=True,
+            )
+            if line is None:
                 raise ACS2000ProtocolError("stream timeout/no data")
-            line = rx.decode("ascii", errors="replace").strip()
-
-            # 스트림에서도 ERR이 올 가능성 대비
-            err_code = _extract_err_code(line)
-            if err_code is not None:
-                self._emit_io_trace(ok=False, token="CON_STREAM", tx="$CON_STREAM", rx=line, detail=f"ERR code={err_code}")
-                raise ACS2000ProtocolError(f"ACS2000 stream ERR: {line} (code={err_code})")
-            
-            # ✅ 정상 CON 라인: status/pressure 변화 기반 로그
-            try:
-                b, p = self.parse_con_line(line)
-
-                # status!=0이면(Or/Ur/NoGauge 등) 상태 에러는 “변화 시만” 로그
-                if b != 0:
-                    last_b = getattr(self, "_last_logged_con_status", None)
-                    if last_b is None or last_b != b:
-                        self._last_logged_con_status = b
-                        self._emit_io_trace(
-                            ok=False,
-                            token="CON_STATUS",
-                            tx="$CON_STREAM",
-                            rx=line,
-                            detail=f"status={b} ({CON_STATUS_MAP.get(b, '?')})",
-                        )
-                else:
-                    self._last_logged_con_status = 0
-                    if p is not None:
-                        # ✅ pressure는 “값이 바뀌면만”
-                        self._emit_pressure_if_changed(pressure=p, source="CON", raw=line, tx="$CON_STREAM")
-            except Exception:
-                # 파싱 실패는 일단 무시(원하면 여기서 ok=False trace로 올려도 됨)
-                pass
-
             return line
 
         return self._call_with_policy("CON_STREAM_READ", _read_once)
+
+    def _read_stream_line_once(
+        self,
+        timeout_s: float = 2.0,
+        *,
+        emit_timeout_trace: bool = True,
+    ) -> Optional[str]:
+        with self._lock:
+            rx = self._read_until_cr_unlocked(timeout_s=timeout_s)
+
+        if not rx:
+            if emit_timeout_trace:
+                self._emit_io_trace(
+                    ok=False,
+                    token="CON_STREAM",
+                    tx="$CON_STREAM",
+                    rx="",
+                    detail="timeout/no data",
+                )
+            return None
+
+        line = rx.decode("ascii", errors="replace").strip()
+
+        err_code = _extract_err_code(line)
+        if err_code is not None:
+            self._emit_io_trace(
+                ok=False,
+                token="CON_STREAM",
+                tx="$CON_STREAM",
+                rx=line,
+                detail=f"ERR code={err_code}",
+            )
+            raise ACS2000ProtocolError(f"ACS2000 stream ERR: {line} (code={err_code})")
+
+        try:
+            b, p = self.parse_con_line(line)
+
+            if b != 0:
+                last_b = getattr(self, "_last_logged_con_status", None)
+                if last_b is None or last_b != b:
+                    self._last_logged_con_status = b
+                    self._emit_io_trace(
+                        ok=False,
+                        token="CON_STATUS",
+                        tx="$CON_STREAM",
+                        rx=line,
+                        detail=f"status={b} ({CON_STATUS_MAP.get(b, '?')})",
+                    )
+            else:
+                self._last_logged_con_status = 0
+                if p is not None:
+                    self._emit_pressure_if_changed(
+                        pressure=p,
+                        source="CON",
+                        raw=line,
+                        tx="$CON_STREAM",
+                    )
+        except Exception:
+            pass
+
+        return line
 
     def parse_con_line(self, line: str) -> tuple[int, Optional[float]]:
         """
@@ -505,24 +538,21 @@ class ACS2000(BaseSerialDevice):
         """
         CON stream에서 '가장 최신의 완전한 샘플'만 반환한다.
 
-        동작:
-        1) 첫 샘플 1개는 timeout_s까지 기다려서 읽는다.
-        2) 그 직후 버퍼에 남아 있는 추가 샘플들을 drain_timeout_s로 짧게 계속 읽는다.
-        3) 마지막으로 읽힌 샘플만 반환한다.
-
-        이렇게 해야 stream backlog가 생겨도 화면은 최신값을 따라간다.
+        - 첫 샘플은 blocking + policy로 기다린다.
+        - drain 구간은 추가 데이터가 없으면 정상 종료한다.
+        - drain timeout은 오류나 reconnect 사유로 취급하지 않는다.
         """
         line = self.read_stream_line(timeout_s=timeout_s)
         latest_line = line
         drained = 0
 
         while drained < max_drain_lines:
-            try:
-                extra = self.read_stream_line(timeout_s=drain_timeout_s)
-            except Exception:
-                break
+            extra = self._read_stream_line_once(
+                timeout_s=drain_timeout_s,
+                emit_timeout_trace=False,   # drain 종료는 정상 상황
+            )
 
-            if not extra:
+            if extra is None:
                 break
 
             latest_line = extra

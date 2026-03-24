@@ -1152,14 +1152,12 @@ class ProcessWindow(QWidget):
 
     def _tick_rt_ui(self) -> None:
         """1초마다 lineedit + 그래프 갱신"""
-        rate = self._clamp_nonneg(self._last_rate)
+        rate = self._to_float_or_none(self._last_rate)
 
         # ✅ DAC / ADC 둘 다 읽기
         dac1, dac2 = self._read_plc_power_dac_pair()
         adc1, adc2 = self._read_plc_power_actual_pair()
 
-        # MODIFIED: 하드웨어 채널 매핑 — Power1 단독 사용 시 ADC2가 실제 feedback
-        # Power1 선택 시: ADC2 값을 그래프/표시에 사용 (ADC1은 노이즈)
         graph_power, display_adc1, display_adc2 = self._resolve_power_feedback_for_ui(adc1, adc2)
 
         if graph_power is not None:
@@ -1168,30 +1166,7 @@ class ProcessWindow(QWidget):
             self._last_power = None
 
         show_th = self._is_main_deposition()
-        th = self._clamp_nonneg(self._last_thickness) if show_th else None
-
-        try:
-            self.ui.currentRateEdit.setText(f"{rate:.3f}" if rate is not None else "---")
-        except Exception:
-            pass
-
-        try:
-            self.ui.currentThicknessEdit.setText(f"{th:.2f}" if th is not None else "---")
-        except Exception:
-            pass
-
-        # ✅ 신규 DAC 표시
-        self._update_dac_power_ui(dac1, dac2)
-
-        # MODIFIED: actualPower 표시 — Power1 단독 시 ADC2 값으로 표시
-        self._update_actual_power_ui(display_adc1, display_adc2)
-
-        # ✅ 그래프는 ADC 기준으로 append
-        if self._plot is not None:
-            try:
-                self._plot.append(rate=rate, power=graph_power)
-            except Exception:
-                pass
+        th = self._to_float_or_none(self._last_thickness) if show_th else None
 
     def _resolve_power_feedback_for_ui(
         self,
@@ -1202,17 +1177,19 @@ class ProcessWindow(QWidget):
         반환값:
             graph_power, display_adc1, display_adc2
         """
-
         use1, use2 = self._selected_power_flags()
 
         # 현재 하드웨어 임시 우회:
         # Power1 단독 사용 시 실제 feedback은 ADC2를 사용한다.
         if use1 and not use2 and self._power1_feedback_uses_adc2:
-            fb = self._clamp_nonneg(adc2)
+            fb = self._to_float_or_none(adc2)
             return fb, fb, None
 
-        graph_power = self._clamp_nonneg(self._sum_selected_pair(adc1, adc2))
-        return graph_power, self._clamp_nonneg(adc1), self._clamp_nonneg(adc2)
+        graph_power = self._sum_selected_pair(
+            self._to_float_or_none(adc1),
+            self._to_float_or_none(adc2),
+        )
+        return graph_power, self._to_float_or_none(adc1), self._to_float_or_none(adc2)
     # ================== 그래프 설정 ==================
 
     @staticmethod
@@ -1225,6 +1202,15 @@ class ProcessWindow(QWidget):
         except Exception:
             return None
         return 0.0 if fv < 0 else fv
+
+    @staticmethod
+    def _to_float_or_none(v: Optional[float]) -> Optional[float]:
+        if v is None:
+            return None
+        try:
+            return float(v)
+        except Exception:
+            return None
 
     def _is_main_deposition(self) -> bool:
         """메인 공정(메인 셔터 OPEN)일 때만 True."""

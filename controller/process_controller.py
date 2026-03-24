@@ -795,13 +795,31 @@ class ProcessController(QObject):
         """
         self.sig_finished.emit(result)
 
-        if result.ok:
-            self._ui_info(f"공정 완료: run_id={result.run_id}")
-        else:
-            if result.error:
-                self._ui_warn(f"공정 종료(실패/중단): {result.error.where} | {result.error.message}")
+        rid = getattr(result, "run_id", "")
+        err = getattr(result, "error", None)
+        ok = bool(getattr(result, "ok", False))
+
+        # run 전용 로그는 UI attach 여부와 무관하게 직접 남긴다.
+        try:
+            if ok:
+                self.log.run_line(f"[FINISHED] ok=True run_id={rid}")
             else:
-                self._ui_warn(f"공정 종료(정지/중단): run_id={result.run_id}")
+                if err:
+                    self.log.run_line(
+                        f"[FINISHED][ERROR] run_id={rid} | {err.where} | {err.message}"
+                    )
+                else:
+                    self.log.run_line(f"[FINISHED][STOP] ok=False run_id={rid}")
+        except Exception:
+            pass
+
+        if ok:
+            self._ui_info(f"공정 완료: run_id={rid}")
+        else:
+            if err:
+                self._ui_warn(f"공정 종료(실패/중단): {err.where} | {err.message}")
+            else:
+                self._ui_warn(f"공정 종료(정지/중단): run_id={rid}")
 
     def _on_worker_finished(self) -> None:
         """
@@ -810,8 +828,18 @@ class ProcessController(QObject):
         if hasattr(self.plc, "set_process_logging"):
             self.plc.set_process_logging(False)
 
+        try:
+            self.log.run_line("[WORKER] thread finished")
+        except Exception:
+            pass
+
         self._worker = None
         self._ui_info("공정 스레드 종료")
+
+        try:
+            self.log.close_run()
+        except Exception:
+            pass
 
     def _on_plc_cmd_trace(self, obj: object) -> None:
         try:

@@ -636,6 +636,9 @@ class LogWriterWorker(QThread):
         self._run_open = False
         self._run_dir = None
         self._run_folder_name = ""
+        self._run_id = ""
+        self._run_recipe = ""
+        self._run_open_ts = 0.0
         self._run_meta = {}
 
     def _close_all(self) -> None:
@@ -1005,6 +1008,20 @@ class LogService(QObject):
         self._worker.post(CmdSetBaseDir(Path(base_dir)))
 
     # ---------- UI widget hook ----------
+    def _iter_widget_capture_lines(self, text: object, *, channel: str) -> list[str]:
+        txt = str(text)
+        lines = [line for line in re.split(r"\r?\n", txt.rstrip("\n")) if line]
+
+        # HMI는 _write_log()가 이미 HMIWindowLog에 저장하므로,
+        # LogService 포맷 줄까지 다시 widget hook로 저장하면 중복된다.
+        if str(channel).upper() == "HMI":
+            fmt = re.compile(
+                r"^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\] \[[A-Z]+\]( \[[^\]]+\])? "
+            )
+            lines = [line for line in lines if not fmt.match(line)]
+
+        return lines
+
     def attach_text_widget(self, widget: Any, *, channel: str) -> None:
         """
         QPlainTextEdit/QTextEdit의 append 계열 호출을 후킹해서:
@@ -1027,11 +1044,8 @@ class LogService(QObject):
 
                 def wrapped(s: object) -> None:
                     try:
-                        txt = str(s)
-                        # 멀티라인이면 line 단위로 저장(파일 가독성)
-                        for line in re.split(r"\r?\n", txt.rstrip("\n")):
-                            if line:
-                                self.ui_line(line, channel=ch)
+                        for line in self._iter_widget_capture_lines(s, channel=ch):
+                            self.ui_line(line, channel=ch)
                     except Exception:
                         pass
                     orig(str(s))
@@ -1043,17 +1057,16 @@ class LogService(QObject):
 
                 def wrapped2(s: object) -> None:
                     try:
-                        txt = str(s)
-                        for line in re.split(r"\r?\n", txt.rstrip("\n")):
-                            if line:
-                                self.ui_line(line, channel=ch)
+                        for line in self._iter_widget_capture_lines(s, channel=ch):
+                            self.ui_line(line, channel=ch)
                     except Exception:
                         pass
                     orig2(str(s))
 
                 widget.append = wrapped2  # type: ignore[attr-defined]
 
-            widget._evap_ls_wrapped = True  # type: ignore[attr-defined]
+            setattr(widget, "_evap_ls_wrapped", True)
+
         except Exception:
             pass
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import gc
+import re
 import time
 import warnings
 import contextlib
@@ -235,13 +236,49 @@ class ProcessWindow(QWidget):
         if not raw:
             return
 
-        ts = datetime.now().strftime("%H:%M:%S")
-        if raw.startswith("["):
-            line = f"[{ts}] {raw}"
+        # LogService 포맷:
+        # [YYYY-MM-DD HH:MM:SS] [LEVEL] [TAG] ...
+        m = re.match(r"^\[(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})\]\s+(.*)$", raw)
+        if m:
+            line = f"[{m.group(2)}] {m.group(3)}"
         else:
-            line = f"[{ts}] [INFO] {raw}"
+            ts = datetime.now().strftime("%H:%M:%S")
+            if raw.startswith("["):
+                line = f"[{ts}] {raw}"
+            else:
+                line = f"[{ts}] [INFO] {raw}"
 
         _append_text(getattr(self.ui, "logWindow", None), line)
+
+    def _open_process_run_log(self, run_id: str, run_cfg: dict[str, Any]) -> None:
+        self._active_run_id = str(run_id)
+
+        ls = self._log_service
+        if ls is None or not hasattr(ls, "open_run"):
+            return
+
+        recipe_name = str(run_cfg.get("process_name", "") or "").strip()
+        meta = {
+            "process_name": recipe_name,
+            "material_name": str(run_cfg.get("material_name", "") or "").strip(),
+            "use_power1": bool(run_cfg.get("use_power1", False)),
+            "use_power2": bool(run_cfg.get("use_power2", False)),
+            "target_rate": run_cfg.get("target_rate"),
+            "target_thickness": run_cfg.get("target_thickness"),
+            "delay_min": run_cfg.get("delay_min"),
+            "process_config": dict(run_cfg.get("process_config") or {}),
+        }
+
+        with contextlib.suppress(Exception):
+            ls.open_run(run_id=run_id, recipe_name=recipe_name, meta=meta)
+
+    def _close_process_run_log(self) -> None:
+        ls = self._log_service
+        if ls is None or not hasattr(ls, "close_run"):
+            return
+
+        with contextlib.suppress(Exception):
+            ls.close_run()
 
     def _bind_stm_ui(self, stm):
         """
@@ -454,6 +491,7 @@ class ProcessWindow(QWidget):
         stm = self._stm_service
         if stm is None:
             QMessageBox.warning(self, "STM", "STM 서비스가 준비되지 않았습니다.")
+            self._close_process_run_log()
             self._clear_run_power_flags()
             self._active_run_id = None
             return
@@ -502,6 +540,8 @@ class ProcessWindow(QWidget):
             self._set_process_status("STM 준비 실패", message)
         else:
             self._set_process_status("STM 준비 실패")
+
+        self._close_process_run_log()
 
         if show_warning:
             QMessageBox.warning(self, title, message)
@@ -649,6 +689,10 @@ class ProcessWindow(QWidget):
 
         self._latch_run_power_flags(run_cfg)
 
+        # 2) run_id 생성 + run 로그 open
+        run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self._open_process_run_log(run_id, run_cfg)
+
         proc_cfg = run_cfg.get("process_config") or {}
         steps = proc_cfg.get("ramp_steps") or []
 
@@ -672,11 +716,9 @@ class ProcessWindow(QWidget):
             f"fine_step_dac={proc_cfg.get('fine_step_dac')}"
         )
 
-        # 2) run_id 생성
-        self._active_run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-
         # 3) PLC precheck
         if not self._check_plc_ready_before_start():
+            self._close_process_run_log()
             self._clear_run_power_flags()
             self._active_run_id = None
             return
@@ -686,6 +728,7 @@ class ProcessWindow(QWidget):
             QMessageBox.warning(self, "Device Connect Failed", "STM 준비 실패")
             with contextlib.suppress(Exception):
                 self._shutdown_stm_with_ftm_off_best_effort()
+            self._close_process_run_log()
             self._clear_run_power_flags()
             self._active_run_id = None
             return
@@ -732,6 +775,7 @@ class ProcessWindow(QWidget):
         with contextlib.suppress(Exception):
             self._reset_process_ui(reset_monitor=False)
 
+        self._close_process_run_log()
         self._active_run_id = None
 
     def _on_status(self, st: Any) -> None:

@@ -847,15 +847,6 @@ class LogWriterWorker(QThread):
         if "dep.rate" not in row2 and "rate_Aps" in row2:
             row2["dep.rate"] = row2.get("rate_Aps")
 
-        dep_rate_val = row2.get("dep.rate", None)
-        try:
-            if dep_rate_val is not None:
-                dep_rate_f = float(dep_rate_val)
-                if math.isnan(dep_rate_f) or math.isinf(dep_rate_f) or dep_rate_f < 0:
-                    row2["dep.rate"] = None
-        except Exception:
-            pass
-
         row2.setdefault("pressure_torr", "")
         row2.setdefault("dac1", "")
         row2.setdefault("adc1", "")
@@ -863,8 +854,8 @@ class LogWriterWorker(QThread):
         row2.setdefault("dac2", "")
         row2.setdefault("adc2", "")
         row2.setdefault("adc2_raw", "")
-        row2.setdefault("dep.rate", None)
-        row2.setdefault("thickness_A", None)
+        row2.setdefault("dep.rate", "")
+        row2.setdefault("thickness_A", "")
         row2.setdefault("step", "")
         row2.setdefault("detail", "")
 
@@ -875,10 +866,11 @@ class LogWriterWorker(QThread):
             return
 
         def _norm_cell(k: str, v: Any) -> Any:
+            # logger는 값을 꾸미지 않는다.
+            # 실제 값이 있으면 그대로 저장하고,
+            # 값이 아예 없을 때만 빈칸으로 둔다.
             if v is None:
-                return "None" if k in ("dep.rate", "thickness_A") else ""
-            if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
-                return "None" if k in ("dep.rate", "thickness_A") else ""
+                return ""
             return v
 
         filtered = {k: _norm_cell(k, row2.get(k, None)) for k in self._tele_fieldnames}

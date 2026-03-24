@@ -404,6 +404,35 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
     shutter_open = False
     shutdown_done = False
 
+    def _wait_with_checks(wait_s: float, *, label: str) -> None:
+        wait_s = float(wait_s)
+        if wait_s <= 0:
+            return
+
+        start_m = time.monotonic()
+        deadline_m = start_m + wait_s
+        next_ui_m = start_m
+
+        while True:
+            engine._check_stop_pause(recipe, step)
+            engine._tick_emit(recipe, step)
+
+            now_m = time.monotonic()
+            remain_s = deadline_m - now_m
+            if remain_s <= 0:
+                break
+
+            if now_m >= next_ui_m:
+                engine._emit_status(
+                    message=f"[남은 {engine._fmt_hms(remain_s, ceil=True)}] {label}",
+                    force=True,
+                )
+                next_ui_m = now_m + 1.0
+
+            time.sleep(0.1)
+
+        engine._emit_status(message=f"[남은 00:00] {label} 완료", force=True)
+
     def _read_rate_or_abort(*, where: str) -> float:
         t0 = time.monotonic()
         while True:
@@ -515,6 +544,12 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
 
         # DAC 0 적용
         _evap_apply_dac(engine, use_p1, use_p2, dac, tag="EVAP_INIT_DAC0")
+
+        # ramp-up 진입 전 고정 대기
+        # 전원 ON 직후 ADC가 순간적으로 튀는 현상이 있어,
+        # step target_adc 비교 전에 10초간 안정화 시간을 둔다.
+        pre_ramp_wait_s = 10.0
+        _wait_with_checks(pre_ramp_wait_s, label="EVAP ramp-up 전 ADC 안정화 대기")
 
         # -------------------------
         # 1) 파워 상승

@@ -211,11 +211,13 @@ def _read_selected_adc_total(
     a1, a2 = _read_plc_reg_pair(engine, "POWER_READ_1", "POWER_READ_2")
 
     # 임시 하드웨어 매핑:
-    # 현재 active path는 Power1 only 운전이지만,
-    # 실제 Power1 feedback은 임시로 ADC2 값을 사용한다.
-    # dual-power 복구 전까지는 이 우회를 유지한다.
+    # Power1 only 운전에서는 실제 Power1 feedback을 ADC2로 본다.
+    # 반환값도 logical 기준으로 맞춰 downstream 표시/UI가 헷갈리지 않게 한다.
     if power1_feedback_adc2 and use_p1 and (not use_p2):
-        return a2, a1, a2
+        logical_p1 = a2
+        logical_p2 = a1
+        total = logical_p1
+        return total, logical_p1, logical_p2
 
     total = _sum_selected_values(use_p1, use_p2, a1, a2)
     return total, a1, a2
@@ -690,12 +692,16 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         # -------------------------
         # 2) 파워 유지
         # -------------------------
-        engine._emit_status(message="EVAP HOLD 진입: STM ZERO + MAIN SHUTTER OPEN", force=True)
+        engine._emit_status(message="EVAP HOLD 진입: STM ZERO", force=True)
 
         zero_mode = str(meta.get("zero_mode", "B") or "B")
         _stm_zero_thickness(engine, recipe, step, mode=zero_mode)
-        th0 = _read_thickness_or_abort(where="hold_thickness_baseline")
 
+        # ZERO 직후 stale thickness를 baseline으로 잡지 않도록
+        # 한 번 반영 시간을 준다.
+        _wait_with_checks(hold_control_interval_s, label="STM ZERO 반영 대기")
+
+        engine._emit_status(message="EVAP HOLD 진입: MAIN SHUTTER OPEN", force=True)
         engine._plc_write_coil("MAIN_SHUTTER_SW", True, tag="EVAP_MAIN_SHUTTER_OPEN")
         shutter_open = True
 
@@ -711,11 +717,16 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
             adc_total = _read_adc_or_abort(where="hold")
             th = _read_thickness_or_abort(where="hold")
 
-            dep_th = max(0.0, th - th0)
+            # STM ZERO 이후에는 현재 thickness 자체를 증착 두께로 본다.
+            dep_th = max(0.0, th)
             remain_th = max(0.0, target_th - dep_th)
 
-            # abort 조건: dep.rate 장시간 과도 저하
-            if rt <= abort_threshold:
+            # abort 조건:
+            # dep.rate가 0 이상의 유효값일 때만 저하 판정을 건다.
+            # 음수 dep.rate는 센서 이상/순간 튐으로 보고 abort 카운트에 넣지 않는다.
+            if rt < 0.0:
+                rate_abort_start_ts = None
+            elif rt <= abort_threshold:
                 now_m = time.monotonic()
                 if rate_abort_start_ts is None:
                     rate_abort_start_ts = now_m

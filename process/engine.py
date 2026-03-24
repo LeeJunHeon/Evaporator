@@ -166,6 +166,7 @@ class ProcessEngine:
 
         # ✅ UI 표시용: 마지막 메시지 캐시 (tick emit이 message=""로 덮는 문제 방지)
         self._ui_last_message: str = ""
+        self._shutdown_already_executed: bool = False
 
     # --------------------------------------------------------
     # External controls (thread-safe-ish: 단순 플래그)
@@ -207,6 +208,7 @@ class ProcessEngine:
         self._last_adc_power_1 = None
         self._last_adc_power_2 = None
         self._ui_last_message = ""
+        self._shutdown_already_executed = False
 
         # run open
         try:
@@ -266,9 +268,9 @@ class ProcessEngine:
             self._emit_status(message=f"정지 요청 처리중: {e.mode.value}")
             self._log_warn(f"Stop requested: {e.mode.value}", tag="ENGINE", also_ui=True)
 
-            # ✅ EV 안전정지 시퀀스 통일
-            #    (셔터 닫기 → DAC pair ramp-down → Power off)
-            self._safe_shutdown_sequence(tag=f"STOP_{e.mode.value}", mode=e.mode)
+            # runtime(EVAP)에서 이미 안전정지를 수행한 경우 중복 실행 금지
+            if not self._shutdown_already_executed:
+                self._safe_shutdown_sequence(tag=f"STOP_{e.mode.value}", mode=e.mode)
 
             self._phase = ProcessPhase.FINISHED
             self._run_line(
@@ -292,9 +294,10 @@ class ProcessEngine:
                 f"where={err_obj.where} | error={err_obj.message}"
             )
 
-            # ✅ 에러 시에도 동일한 안전정지 시퀀스
-            #    (셔터 닫기 → DAC pair ramp-down → Power off)
-            self._safe_shutdown_sequence(tag="ERROR_ABORT", mode=StopMode.ABORT)
+            # runtime(EVAP)에서 이미 안전정지를 수행한 경우 중복 실행 금지
+            if not self._shutdown_already_executed:
+                self._safe_shutdown_sequence(tag="ERROR_ABORT", mode=StopMode.ABORT)
+
             ok = False
 
         finally:

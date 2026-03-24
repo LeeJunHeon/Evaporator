@@ -385,43 +385,6 @@ class ACSServiceWorker(QThread):
             )
             self._next_try = time.time() + 0.1
 
-    def _drain_stale_stream_buffer(self, drain_s: float = 3.0) -> None:
-        """
-        재연결 직후 버퍼에 쌓인 오래된 데이터를 버린다.
-        drain_s 초 동안 읽어서 모두 무시.
-        """
-        if self._acs is None:
-            return
-        
-        deadline = time.monotonic() + drain_s
-        drained = 0
-        try:
-            # ✅ 먼저 OS 버퍼 명시적 초기화
-            ser = getattr(self._acs, '_ser', None)
-            if ser and ser.is_open:
-                ser.reset_input_buffer()
-            
-            # ✅ 그 다음 drain_s 초간 계속 읽어서 버림
-            while time.monotonic() < deadline:
-                try:
-                    self._acs.read_stream_sample(timeout_s=0.5)
-                    drained += 1
-                except Exception:
-                    break
-                    
-        except Exception:
-            pass
-        
-        self.sig_error.emit(f"[ACSService] stale buffer drained: {drained} samples discarded")
-        
-        # ✅ 드레인 후 OS 버퍼 한 번 더 초기화
-        try:
-            ser = getattr(self._acs, '_ser', None)
-            if ser and ser.is_open:
-                ser.reset_input_buffer()
-        except Exception:
-            pass
-
     def _handle_reload(self, ini_path: Path) -> None:
         self._ini_path = Path(ini_path)
         self._safe_close()
@@ -542,7 +505,11 @@ class ACSServiceWorker(QThread):
 
         try:
             if self._use_stream:
-                sample = self._acs.read_stream_sample(timeout_s=1.5)
+                sample = self._acs.read_stream_sample_latest(
+                    timeout_s=1.5,
+                    drain_timeout_s=0.02,
+                    max_drain_lines=100,
+                )
 
                 if sample.get("ok"):
                     pr = float(sample["pressure"])
@@ -550,8 +517,6 @@ class ACSServiceWorker(QThread):
                     self.sig_pressure.emit(pr)
                     pressure_for_snap: Optional[float] = pr
                 else:
-                    # bad status는 통신 실패로 보지 않되,
-                    # 화면/공정에 stale pressure가 남지 않도록 표시값은 즉시 비움
                     pressure_for_snap = None
                     self.sig_pressure.emit(None)
 
@@ -569,6 +534,7 @@ class ACSServiceWorker(QThread):
                         "raw": sample.get("raw"),
                         "pressure_last": self._last_pressure,
                         "ok": bool(sample.get("ok")),
+                        "drained": sample.get("drained", 0),
                     },
                 )
                 self._last_snapshot = snap

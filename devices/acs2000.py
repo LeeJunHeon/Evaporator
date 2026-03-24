@@ -495,6 +495,48 @@ class ACS2000(BaseSerialDevice):
             "raw": line,
             "ok": (b == 0 and p is not None),
         }
+    
+    def read_stream_sample_latest(
+        self,
+        timeout_s: float = 2.0,
+        drain_timeout_s: float = 0.02,
+        max_drain_lines: int = 100,
+    ) -> dict:
+        """
+        CON stream에서 '가장 최신의 완전한 샘플'만 반환한다.
+
+        동작:
+        1) 첫 샘플 1개는 timeout_s까지 기다려서 읽는다.
+        2) 그 직후 버퍼에 남아 있는 추가 샘플들을 drain_timeout_s로 짧게 계속 읽는다.
+        3) 마지막으로 읽힌 샘플만 반환한다.
+
+        이렇게 해야 stream backlog가 생겨도 화면은 최신값을 따라간다.
+        """
+        line = self.read_stream_line(timeout_s=timeout_s)
+        latest_line = line
+        drained = 0
+
+        while drained < max_drain_lines:
+            try:
+                extra = self.read_stream_line(timeout_s=drain_timeout_s)
+            except Exception:
+                break
+
+            if not extra:
+                break
+
+            latest_line = extra
+            drained += 1
+
+        b, p = self.parse_con_line(latest_line)
+        return {
+            "status": b,
+            "status_text": CON_STATUS_MAP.get(b, "?"),
+            "pressure": p,
+            "raw": latest_line,
+            "ok": (b == 0 and p is not None),
+            "drained": drained,
+        }
 
     def stop_stream_safe(self) -> None:
         self._streaming = False

@@ -125,6 +125,8 @@ class ProcessWindow(QWidget):
         self._rt_timer.setInterval(1000)  # ✅ 1초
         self._rt_timer.timeout.connect(self._tick_rt_ui)
 
+        self._setup_process_monitor_ui()
+
     def set_hmi_window(self, hmi_window: HmiWindow):
         self.hmi_window = hmi_window
 
@@ -147,7 +149,7 @@ class ProcessWindow(QWidget):
         pc = self._process_controller
         if pc is not None:
             try:
-                pc.sig_ui_log.connect(lambda s: _append_text(getattr(self.ui, "logWindow", None), s))
+                pc.sig_ui_log.connect(self._append_process_log)
             except Exception:
                 pass
             try:
@@ -162,6 +164,52 @@ class ProcessWindow(QWidget):
                 pc.sig_finished.connect(self._on_finished)
             except Exception:
                 pass
+
+    def _setup_process_monitor_ui(self) -> None:
+        w = getattr(self.ui, "processMonitor_Process", None)
+        if w is None:
+            return
+
+        try:
+            if hasattr(w, "setStyleSheet"):
+                w.setStyleSheet(
+                    "font-size: 22px; font-weight: 700;"
+                )
+        except Exception:
+            pass
+
+    def _set_process_monitor_text(self, text: str, *, fallback: str = "---") -> None:
+        w = getattr(self.ui, "processMonitor_Process", None)
+        if w is None or not hasattr(w, "setText"):
+            return
+
+        s = str(text or "").strip()
+        if not s:
+            s = fallback
+
+        # "제목 | 상세" 형식이면 첫 번째 구분자만 줄바꿈 처리
+        # 실제 2줄 표시 여부는 다음 mainWindow.py에서 위젯 타입 확인 후 최종 마무리
+        if " | " in s:
+            head, tail = s.split(" | ", 1)
+            s = f"{head}\n{tail}"
+
+        try:
+            w.setText(s)
+        except Exception:
+            pass
+
+    def _append_process_log(self, text: str) -> None:
+        raw = str(text or "").strip()
+        if not raw:
+            return
+
+        ts = datetime.now().strftime("%H:%M:%S")
+        if raw.startswith("["):
+            line = f"[{ts}] {raw}"
+        else:
+            line = f"[{ts}] [INFO] {raw}"
+
+        _append_text(getattr(self.ui, "logWindow", None), line)
 
     def _bind_stm_ui(self, stm):
         """
@@ -350,10 +398,8 @@ class ProcessWindow(QWidget):
             with contextlib.suppress(Exception):
                 stop_btn.setEnabled(True)
 
-        monitor = getattr(self.ui, "processMonitor_Process", None)
-        if monitor is not None and hasattr(monitor, "setText") and busy:
-            with contextlib.suppress(Exception):
-                monitor.setText("Preparing STM...")
+        if busy:
+            self._set_process_monitor_text("STM 준비중 | 장비 연결 및 crystal 상태 확인")
 
     def _cleanup_start_worker(self) -> None:
         worker = self._start_worker
@@ -400,12 +446,8 @@ class ProcessWindow(QWidget):
         worker.start()
 
     def _on_start_preflight_progress(self, text: str) -> None:
-        _append_text(getattr(self.ui, "logWindow", None), f"[PRECHECK] {text}")
-
-        monitor = getattr(self.ui, "processMonitor_Process", None)
-        if monitor is not None and hasattr(monitor, "setText"):
-            with contextlib.suppress(Exception):
-                monitor.setText(str(text))
+        self._append_process_log(f"[PRECHECK] {text}")
+        self._set_process_monitor_text(f"STM 준비중 | {text}")
 
     def _abort_start_preflight(self, *, show_warning: bool, title: str, message: str) -> None:
         with contextlib.suppress(Exception):
@@ -423,13 +465,11 @@ class ProcessWindow(QWidget):
         self._cleanup_start_worker()
         self._set_start_busy(False)
 
-        monitor = getattr(self.ui, "processMonitor_Process", None)
-        if monitor is not None and hasattr(monitor, "setText"):
-            with contextlib.suppress(Exception):
-                monitor.setText("---")
-
         if message:
-            _append_text(getattr(self.ui, "logWindow", None), f"[PRECHECK][ABORT] {message}")
+            self._append_process_log(f"[PRECHECK][ABORT] {message}")
+            self._set_process_monitor_text(f"STM 준비 실패 | {message}")
+        else:
+            self._set_process_monitor_text("STM 준비 실패")
 
         if show_warning:
             QMessageBox.warning(self, title, message)
@@ -571,6 +611,8 @@ class ProcessWindow(QWidget):
         run_cfg = self._collect_ui_run_cfg()
         if run_cfg is None:
             return
+        
+        self._set_process_monitor_text("공정 시작 요청 | PLC / STM pre-check 진행")
 
         self._latch_run_power_flags(run_cfg)
 
@@ -584,10 +626,10 @@ class ProcessWindow(QWidget):
                 f"hold {float(s.get('hold_sec', 0.0)):.1f}s"
                 for idx, s in enumerate(steps)
             )
-            _append_text(getattr(self.ui, "logWindow", None), f"[CFG] {step_desc}")
+            
+        self._append_process_log(f"[CFG] {step_desc}")
 
-        _append_text(
-            getattr(self.ui, "logWindow", None),
+        self._append_process_log(
             "[CFG] "
             f"dac_max={proc_cfg.get('dac_max')} | "
             f"rate_tol_ratio={proc_cfg.get('rate_tol_ratio')} | "
@@ -622,7 +664,8 @@ class ProcessWindow(QWidget):
             if worker is not None:
                 with contextlib.suppress(Exception):
                     worker.request_cancel()
-            _append_text(getattr(self.ui, "logWindow", None), "[UI] STM preflight 취소 요청")
+            self._append_process_log("[UI] STM preflight 취소 요청")
+            self._set_process_monitor_text("STM 준비 취소 요청")
             return
 
         pc = self._process_controller
@@ -631,7 +674,8 @@ class ProcessWindow(QWidget):
         if pc is not None:
             try:
                 pc.stop()
-                _append_text(getattr(self.ui, "logWindow", None), "[UI] 공정 정지 요청 -> engine safety shutdown 대기")
+                self._append_process_log("[UI] 공정 정지 요청 -> engine safety shutdown 대기")
+                self._set_process_monitor_text("공정 정지 요청 | safety shutdown 진행중")
                 return
             except Exception as e:
                 _append_text(getattr(self.ui, "logWindow", None), f"[STOP FAIL] controller stop failed: {e!r}")
@@ -639,7 +683,8 @@ class ProcessWindow(QWidget):
         # 2) controller stop 요청이 안 되는 경우에만 emergency fallback
         try:
             self._emergency_safe_shutdown_plc_best_effort()
-            _append_text(getattr(self.ui, "logWindow", None), "[SAFE] emergency fallback shutdown executed")
+            self._append_process_log("[SAFE] emergency fallback shutdown executed")
+            self._set_process_monitor_text("비상 종료 수행 | PLC fallback shutdown")
         except Exception as e:
             _append_text(getattr(self.ui, "logWindow", None), f"[SAFE][FAIL] emergency shutdown failed: {e!r}")
 
@@ -653,28 +698,21 @@ class ProcessWindow(QWidget):
         self._active_run_id = None
 
     def _on_status(self, st: Any) -> None:
-        # ✅ 그래프용 power 추출(기존 유지)
         self._try_update_last_power(st)
 
-        w = getattr(self.ui, "processMonitor_Process", None)
-        if w is None or not hasattr(w, "setText"):
-            return
-
         try:
-            # ✅ engine.py가 보내는 “스텝별 표시 메시지” 우선
             m = str(getattr(st, "message", "") or "").strip()
             if m:
-                w.setText(m)
+                self._set_process_monitor_text(m)
                 return
 
-            # fallback: message가 없으면 기존처럼 phase/step
             phase = getattr(st, "phase", None)
             step = getattr(st, "step_name", None) or getattr(st, "step", None)
 
             if phase or step:
-                w.setText(f"{phase} | {step}")
+                self._set_process_monitor_text(f"{phase} | {step}")
             else:
-                w.setText("---")
+                self._set_process_monitor_text("---")
 
         except Exception:
             pass
@@ -763,9 +801,11 @@ class ProcessWindow(QWidget):
         try:
             where = getattr(err, "where", "")
             msg = getattr(err, "message", "")
-            _append_text(getattr(self.ui, "logWindow", None), f"[ERROR] {where} | {msg}")
+            self._append_process_log(f"[ERROR] {where} | {msg}")
+            self._set_process_monitor_text(f"오류 발생 | {where} | {msg}")
         except Exception:
-            _append_text(getattr(self.ui, "logWindow", None), f"[ERROR] {err!r}")
+            self._append_process_log(f"[ERROR] {err!r}")
+            self._set_process_monitor_text("오류 발생")
 
     def _on_finished(self, result: Any) -> None:
         try:
@@ -783,12 +823,17 @@ class ProcessWindow(QWidget):
             try:
                 ok = bool(getattr(result, "ok", False))
                 rid = getattr(result, "run_id", "")
-                _append_text(
-                    getattr(self.ui, "logWindow", None),
-                    f"[FINISHED] ok={ok} run_id={rid}"
-                )
+
+                self._append_process_log(f"[FINISHED] ok={ok} run_id={rid}")
+
+                if ok:
+                    self._set_process_monitor_text(f"공정 완료 | run_id={rid}")
+                else:
+                    self._set_process_monitor_text(f"공정 종료 | ok={ok} | run_id={rid}")
+
             except Exception:
-                _append_text(getattr(self.ui, "logWindow", None), "[FINISHED]")
+                self._append_process_log("[FINISHED]")
+                self._set_process_monitor_text("공정 종료")
 
         finally:
             self._active_run_id = None

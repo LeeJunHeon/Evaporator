@@ -542,7 +542,7 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
                 force=True,
             )
 
-            last_dac_apply_m = time.monotonic()
+            last_dac_apply_m = time.monotonic() - step_dac_interval_sec
 
             # A. target_adc 도달까지 상승
             while True:
@@ -691,9 +691,18 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         _ramp_down_then_shutdown(tag="EVAP_DONE")
         engine._emit_status(message="EVAP 완료", force=True)
 
-    except Exception:
+    except Exception as ex:
         try:
-            _ramp_down_then_shutdown(tag="EVAP_FAIL")
+            from process.engine import EngineStopRequested
+            is_stop_requested = isinstance(ex, EngineStopRequested)
+        except Exception:
+            is_stop_requested = False
+
+        try:
+            if is_stop_requested:
+                _ramp_down_then_shutdown(tag="EVAP_STOP")
+            else:
+                _ramp_down_then_shutdown(tag="EVAP_FAIL")
         except Exception:
             pass
         raise

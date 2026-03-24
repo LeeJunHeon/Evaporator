@@ -519,11 +519,13 @@ class ProcessEngine:
         try:
             if mode is None:
                 steps = build_engine_safe_shutdown_steps()
+                plan_name = "build_engine_safe_shutdown_steps"
             else:
                 steps = build_safety_steps(mode)
+                plan_name = f"build_safety_steps({mode.value})"
         except Exception as e:
             self._log_error(
-                f"[SAFETY:{tag}] build_engine_safe_shutdown_steps failed: {e!r}",
+                f"[SAFETY:{tag}] {plan_name} failed: {e!r}",
                 tag="ENGINE",
                 also_ui=True,
             )
@@ -993,20 +995,24 @@ class ProcessEngine:
         if self._stop_mode is not None:
             raise EngineStopRequested(self._stop_mode)
 
+        entered_pause = False
+
         # pause 처리: paused일 때는 stop 요청만 감시하면서 대기
         while self._paused:
-            # pause 중에도 stop이면 즉시 빠져나감
             if self._stop_mode is not None:
                 raise EngineStopRequested(self._stop_mode)
 
-            self._phase = ProcessPhase.PAUSED
-            self._emit_status(message="일시정지", force=True)
+            if not entered_pause:
+                self._phase = ProcessPhase.PAUSED
+                self._emit_status(message="일시정지", force=True)
+                entered_pause = True
+
             time.sleep(0.1)
 
-        if self._phase == ProcessPhase.PAUSED:
+        if entered_pause:
             self._phase = ProcessPhase.RUNNING
             self._emit_status(message="재개", force=True)
-
+            
     def _is_plc_ready(self) -> bool:
         try:
             if hasattr(self.plc, "is_running") and not self.plc.is_running():

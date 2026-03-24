@@ -235,14 +235,11 @@ class ProcessController(QObject):
         return self._recipe
     
     def _normalize_ramp_steps(self, run_cfg: dict[str, Any]) -> list[dict[str, Any]]:
-        raw_steps = (
-            run_cfg.get("ramp_steps")
-            or (run_cfg.get("process_config") or {}).get("ramp_steps")
-            or []
-        )
+        proc_cfg = dict(run_cfg.get("process_config") or {})
+        raw_steps = proc_cfg.get("ramp_steps") or []
 
         if not isinstance(raw_steps, list) or not raw_steps:
-            raise ValueError("Process Config의 ramp_steps가 비어 있습니다.")
+            raise ValueError("process_config.ramp_steps가 비어 있습니다.")
 
         if len(raw_steps) > 10:
             raise ValueError(
@@ -259,142 +256,38 @@ class ProcessController(QObject):
 
             try:
                 target_adc = float(item.get("target_adc", 0.0) or 0.0)
-                # 레거시 호환: delay_s → rate_wait_sec
-                legacy_delay = float(item.get("delay_s", 0.0) or 0.0)
-                delay_s = legacy_delay
-                rate_wait_sec = float(item.get("rate_wait_sec", legacy_delay) or 0.0)
+                dac_step = int(item.get("dac_step", 0) or 0)
+                dac_interval_sec = float(item.get("dac_interval_sec", 0.0) or 0.0)
+                # delay_s 읽기 호환만 허용
+                hold_src = item.get("hold_sec", item.get("delay_s", 0.0))
+                hold_sec = float(hold_src or 0.0)
             except Exception:
                 raise ValueError(f"Process Config step {idx} 값 변환에 실패했습니다.")
 
             if target_adc <= 0:
                 raise ValueError(f"Process Config step {idx}의 target_adc는 0보다 커야 합니다.")
-            if rate_wait_sec < 0:
-                raise ValueError(f"Process Config step {idx}의 rate_wait_sec는 0 이상이어야 합니다.")
+            if dac_step <= 0:
+                raise ValueError(f"Process Config step {idx}의 dac_step은 0보다 커야 합니다.")
+            if dac_interval_sec <= 0:
+                raise ValueError(f"Process Config step {idx}의 dac_interval_sec는 0보다 커야 합니다.")
+            if hold_sec < 0:
+                raise ValueError(f"Process Config step {idx}의 hold_sec는 0 이상이어야 합니다.")
 
             if last_adc >= 0 and target_adc < last_adc:
                 raise ValueError(
                     f"Process Config step {idx}의 target_adc가 이전 step보다 작습니다. "
-                    "step target_adc는 일반적으로 오름차순이어야 합니다."
+                    "step target_adc는 오름차순이어야 합니다."
                 )
 
-            try:
-                dac_step = max(1, int(item.get("dac_step", 10) or 10))
-            except Exception:
-                dac_step = 10
-            try:
-                dac_interval_sec = max(0.1, float(item.get("dac_interval_sec", 30.0) or 30.0))
-            except Exception:
-                dac_interval_sec = 30.0
-            try:
-                min_dep_rate = max(0.0, float(item.get("min_dep_rate", 0.1) or 0.0))
-            except Exception:
-                min_dep_rate = 0.1
-
-            rate_low_action = str(item.get("rate_low_action", "next_step") or "next_step").strip().lower()
-            if rate_low_action not in {"next_step", "boost_dac", "stop"}:
-                rate_low_action = "next_step"
-
-            try:
-                boost_dac_step = max(0, int(item.get("boost_dac_step", 0) or 0))
-            except Exception:
-                boost_dac_step = 0
-            try:
-                boost_max_count = max(0, int(item.get("boost_max_count", 0) or 0))
-            except Exception:
-                boost_max_count = 0
-
             steps.append({
-                "step_no":          idx,
-                "target_adc":       float(target_adc),
-                "delay_s":          float(delay_s),
-                "rate_wait_sec":    float(rate_wait_sec),
-                "dac_step":         dac_step,
+                "target_adc": target_adc,
+                "dac_step": dac_step,
                 "dac_interval_sec": dac_interval_sec,
-                "min_dep_rate":     min_dep_rate,
-                "rate_low_action":  rate_low_action,
-                "boost_dac_step":   boost_dac_step,
-                "boost_max_count":  boost_max_count,
+                "hold_sec": hold_sec,
             })
             last_adc = target_adc
 
-        if not steps:
-            raise ValueError("최소 1개의 process step이 필요합니다.")
-
         return steps
-    
-    def _normalize_process_policy(
-        self,
-        run_cfg: dict[str, Any],
-        *,
-        last_step_adc: float,
-    ) -> dict[str, Any]:
-        proc_cfg = run_cfg.get("process_config") or {}
-
-        policy = str(
-            run_cfg.get("after_last_step_policy")
-            or proc_cfg.get("after_last_step_policy")
-            or "extra_ramp"
-        ).strip().lower()
-
-        if policy not in {"extra_ramp", "stop"}:
-            raise ValueError(
-                f"after_last_step_policy 값이 올바르지 않습니다: {policy!r} "
-                "(허용: 'extra_ramp', 'stop')"
-            )
-
-        extra_src = (
-            run_cfg.get("extra_ramp")
-            or proc_cfg.get("extra_ramp")
-            or {}
-        )
-        if not isinstance(extra_src, dict):
-            raise ValueError("extra_ramp 설정 형식이 올바르지 않습니다. dict 형태여야 합니다.")
-
-        enabled = bool(extra_src.get("enabled", True))
-        if policy != "extra_ramp":
-            enabled = False
-
-        try:
-            max_adc = float(extra_src.get("max_adc", last_step_adc) or last_step_adc)
-        except Exception:
-            raise ValueError(f"extra_ramp.max_adc 값 변환에 실패했습니다: {extra_src.get('max_adc')!r}")
-
-        try:
-            step_max = float(extra_src.get("step_max", 50.0) or 50.0)
-        except Exception:
-            raise ValueError(f"extra_ramp.step_max 값 변환에 실패했습니다: {extra_src.get('step_max')!r}")
-
-        try:
-            interval_s = float(extra_src.get("interval_s", 5.0) or 5.0)
-        except Exception:
-            raise ValueError(f"extra_ramp.interval_s 값 변환에 실패했습니다: {extra_src.get('interval_s')!r}")
-
-        if max_adc < last_step_adc:
-            raise ValueError(
-                f"extra_ramp.max_adc는 마지막 step target_adc보다 작을 수 없습니다. "
-                f"(last_step_adc={last_step_adc}, max_adc={max_adc})"
-            )
-
-        if not (1.0 <= step_max <= 100.0):
-            raise ValueError(f"extra_ramp.step_max는 1.0 ~ 100.0 범위여야 합니다. (입력={step_max})")
-
-        if interval_s < 0.1:
-            raise ValueError(f"extra_ramp.interval_s는 0.1초 이상이어야 합니다. (입력={interval_s})")
-
-        reach_main_on_rate = bool(
-            proc_cfg.get("reach_main_on_rate", run_cfg.get("reach_main_on_rate", True))
-        )
-
-        return {
-            "reach_main_on_rate": reach_main_on_rate,
-            "after_last_step_policy": policy,
-            "extra_ramp": {
-                "enabled": enabled,
-                "max_adc": max_adc,
-                "step_max": step_max,
-                "interval_s": interval_s,
-            },
-        }
 
     def _prepare_recipe_build_context(self, run_cfg: dict[str, Any]) -> dict[str, Any]:
         """
@@ -406,12 +299,10 @@ class ProcessController(QObject):
         process_config = self._build_process_config_from_run_cfg(run_cfg)
 
         runtime_meta = self._build_runtime_evap_meta(
-            run_cfg,
             power=power,
             material_cfg=material_cfg,
             process_config=process_config,
         )
-        self._apply_material_ramp_overrides(runtime_meta, run_cfg.get("ramp"))
 
         process_name = self._sanitize_process_name(
             run_cfg.get("process_name"),
@@ -429,8 +320,6 @@ class ProcessController(QObject):
     def _build_recipe_from_context(
         self,
         ctx: dict[str, Any],
-        *,
-        run_cfg: dict[str, Any],
     ) -> ProcessRecipe:
         steps = self._build_evap_steps(
             power=ctx["power"],
@@ -446,8 +335,6 @@ class ProcessController(QObject):
                 power=ctx["power"],
                 material_cfg=ctx["material_cfg"],
                 process_config=ctx["process_config"],
-                runtime_meta=ctx["runtime_meta"],
-                run_cfg=run_cfg,
             ),
         )
         recipe.validate(strict=True)
@@ -456,8 +343,8 @@ class ProcessController(QObject):
 
     def build_recipe_from_ui(self, run_cfg: dict[str, Any]) -> ProcessRecipe:
         ctx = self._prepare_recipe_build_context(run_cfg)
-        return self._build_recipe_from_context(ctx, run_cfg=run_cfg)
-    
+        return self._build_recipe_from_context(ctx)
+        
     def _to_float(self, value: Any, field_name: str) -> float:
         try:
             return float(value or 0.0)
@@ -497,207 +384,95 @@ class ProcessController(QObject):
     
     def _build_process_config_from_run_cfg(self, run_cfg: dict[str, Any]) -> dict[str, Any]:
         proc_src = dict(run_cfg.get("process_config") or {})
+        ramp_steps = self._normalize_ramp_steps(run_cfg)
 
         def _cfg_int(name: str, default: int) -> int:
             try:
                 return int(proc_src.get(name, default))
             except Exception:
-                return int(default)
+                raise ValueError(f"process_config.{name} 값 변환에 실패했습니다.")
 
         def _cfg_float(name: str, default: float) -> float:
             try:
                 return float(proc_src.get(name, default))
             except Exception:
-                return float(default)
+                raise ValueError(f"process_config.{name} 값 변환에 실패했습니다.")
 
-        ramp_steps = self._normalize_ramp_steps(run_cfg)
-        last_step_adc = float(ramp_steps[-1]["target_adc"])
-        proc_policy = self._normalize_process_policy(run_cfg, last_step_adc=last_step_adc)
+        step_count = _cfg_int("step_count", len(ramp_steps))
+        if step_count != len(ramp_steps):
+            raise ValueError(
+                f"process_config.step_count({step_count})와 "
+                f"ramp_steps 길이({len(ramp_steps)})가 일치하지 않습니다."
+            )
 
-        return {
-            "step_count": len(ramp_steps),
+        cfg = {
+            "step_count": step_count,
             "ramp_steps": ramp_steps,
-            "reach_main_on_rate": bool(proc_policy["reach_main_on_rate"]),
-            "after_last_step_policy": str(proc_policy["after_last_step_policy"]),
-            "extra_ramp": dict(proc_policy["extra_ramp"]),
-            "last_step_target_adc": last_step_adc,
-
-            "ramp_seg1_max_dac": _cfg_int("ramp_seg1_max_dac", 700),
-            "ramp_interval_seg1_s": _cfg_float("ramp_interval_seg1_s", 10.0),
-            "ramp_seg2_max_dac": _cfg_int("ramp_seg2_max_dac", 2000),
-            "ramp_interval_seg2_s": _cfg_float("ramp_interval_seg2_s", 30.0),
-            "ramp_interval_after_seg2_s": _cfg_float("ramp_interval_after_seg2_s", 30.0),
-
-            "pre_rate": _cfg_float("pre_rate", 0.4),
-
-            "dac_adjust_interval_s": _cfg_float("dac_adjust_interval_s", 10.0),
-            "fine_step_dac": _cfg_int("fine_step_dac", 10),
-
-            "material_shortage_dac": _cfg_int("material_shortage_dac", 2000),
-            "material_shortage_rate_max": _cfg_float("material_shortage_rate_max", 0.0),
-            "material_shortage_time_s": _cfg_float("material_shortage_time_s", 10.0),
-
-            "rate_filter_window": _cfg_int("rate_filter_window", 5),
+            "dac_max": _cfg_int("dac_max", 4000),
+            "rate_tol_ratio": _cfg_float("rate_tol_ratio", 0.05),
             "rate_stable_sec": _cfg_float("rate_stable_sec", 3.0),
-            "rate_drop_ratio": _cfg_float("rate_drop_ratio", 0.50),
-            "rate_drop_count": _cfg_int("rate_drop_count", 3),
-        }
-    
-    def _build_power_runtime_meta(self, power: dict[str, Any]) -> dict[str, Any]:
-        return {
-            "use_power1": power["use_power1"],
-            "use_power2": power["use_power2"],
-            "power1_feedback_adc2": power["power1_feedback_adc2"],
+            "hold_control_interval_s": _cfg_float("hold_control_interval_s", 1.0),
+            "fine_step_dac": _cfg_int("fine_step_dac", 10),
+            "rate_abort_ratio": _cfg_float("rate_abort_ratio", 0.5),
+            "rate_abort_sec": _cfg_float("rate_abort_sec", 10.0),
+            "sensor_none_abort_s": _cfg_float("sensor_none_abort_s", 5.0),
+            "adc_none_abort_s": _cfg_float("adc_none_abort_s", 5.0),
         }
 
-    def _build_material_runtime_meta(self, material_cfg: dict[str, Any]) -> dict[str, Any]:
-        return {
-            "density": material_cfg["density"],
-            "z_factor": material_cfg["z_factor"],
-            "target_rate": material_cfg["target_rate"],
-            "target_thickness": material_cfg["target_thickness"],
-            "delay_min": material_cfg["delay_min"],
-        }
+        if cfg["dac_max"] <= 0:
+            raise ValueError("process_config.dac_max는 0보다 커야 합니다.")
+        if cfg["rate_tol_ratio"] < 0:
+            raise ValueError("process_config.rate_tol_ratio는 0 이상이어야 합니다.")
+        if cfg["rate_stable_sec"] < 0:
+            raise ValueError("process_config.rate_stable_sec는 0 이상이어야 합니다.")
+        if cfg["hold_control_interval_s"] <= 0:
+            raise ValueError("process_config.hold_control_interval_s는 0보다 커야 합니다.")
+        if cfg["fine_step_dac"] <= 0:
+            raise ValueError("process_config.fine_step_dac는 0보다 커야 합니다.")
+        if cfg["rate_abort_ratio"] < 0:
+            raise ValueError("process_config.rate_abort_ratio는 0 이상이어야 합니다.")
+        if cfg["rate_abort_sec"] < 0:
+            raise ValueError("process_config.rate_abort_sec는 0 이상이어야 합니다.")
+        if cfg["sensor_none_abort_s"] < 0:
+            raise ValueError("process_config.sensor_none_abort_s는 0 이상이어야 합니다.")
+        if cfg["adc_none_abort_s"] < 0:
+            raise ValueError("process_config.adc_none_abort_s는 0 이상이어야 합니다.")
 
-    def _build_control_runtime_meta(
-        self,
-        run_cfg: dict[str, Any],
-        process_config: dict[str, Any],
-    ) -> dict[str, Any]:
-        return {
-            "dac_max": 4000,
-            "sensor_none_abort_s": 5.0,
-            "adc_none_abort_s": 5.0,
-
-            "ramp_seg1_max_dac": int(process_config["ramp_seg1_max_dac"]),
-            "ramp_seg2_max_dac": int(process_config["ramp_seg2_max_dac"]),
-            "ramp_interval_seg1_s": float(process_config["ramp_interval_seg1_s"]),
-            "ramp_interval_seg2_s": float(process_config["ramp_interval_seg2_s"]),
-            "ramp_interval_after_seg2_s": float(process_config["ramp_interval_after_seg2_s"]),
-            "fine_step_dac": int(process_config["fine_step_dac"]),
-
-            # 기존 로직과의 호환용
-            "rate_tol_ratio": float(run_cfg.get("rate_tol_ratio", 0.05) or 0.05),
-            "target_ramp_stable_hits": int(run_cfg.get("target_ramp_stable_hits", 3) or 3),
-            "target_stable_hits": int(run_cfg.get("target_stable_hits", 5) or 5),
-            "target_stable_interval_s": float(run_cfg.get("target_stable_interval_s", 1.0) or 1.0),
-
-            # 신규 dep.rate 판단 파라미터
-            "rate_filter_window": int(process_config["rate_filter_window"]),
-            "rate_stable_sec": float(process_config["rate_stable_sec"]),
-            "rate_drop_ratio": float(process_config["rate_drop_ratio"]),
-            "rate_drop_count": int(process_config["rate_drop_count"]),
-
-            "pre_rate": float(process_config["pre_rate"]),
-            "dac_adjust_interval_s": float(process_config["dac_adjust_interval_s"]),
-
-            "material_shortage_dac": int(process_config["material_shortage_dac"]),
-            "material_shortage_rate_max": float(process_config["material_shortage_rate_max"]),
-            "material_shortage_time_s": float(process_config["material_shortage_time_s"]),
-
-            "zero_mode": "B",
-            "adc_control_mode": str(run_cfg.get("adc_control_mode", "adc") or "adc"),
-            "tune_timeout_s": float(run_cfg.get("tune_timeout_s", 120.0) or 120.0),
-        }
-
-    def _build_process_runtime_meta(self, process_config: dict[str, Any]) -> dict[str, Any]:
-        last_step_adc = float(process_config["last_step_target_adc"])
-
-        return {
-            "process_config": {
-                "ramp_steps": process_config["ramp_steps"],
-                "reach_main_on_rate": process_config["reach_main_on_rate"],
-                "after_last_step_policy": process_config["after_last_step_policy"],
-                "extra_ramp": dict(process_config["extra_ramp"]),
-            },
-
-            "ramp_steps": process_config["ramp_steps"],
-            "reach_main_on_rate": process_config["reach_main_on_rate"],
-            "after_last_step_policy": process_config["after_last_step_policy"],
-            "extra_ramp": dict(process_config["extra_ramp"]),
-            "last_step_target_adc": last_step_adc,
-            "adc_dynamic_step_cap": float(process_config["extra_ramp"].get("step_max", 50.0)),
-        }
+        return cfg
 
     def _build_runtime_evap_meta(
         self,
-        run_cfg: dict[str, Any],
         *,
         power: dict[str, Any],
         material_cfg: dict[str, Any],
         process_config: dict[str, Any],
     ) -> dict[str, Any]:
-        meta: dict[str, Any] = {}
-        meta.update(self._build_power_runtime_meta(power))
-        meta.update(self._build_material_runtime_meta(material_cfg))
-        meta.update(self._build_control_runtime_meta(run_cfg, process_config))
-        meta.update(self._build_process_runtime_meta(process_config))
-        return meta
-        
-    def _apply_material_ramp_overrides(self, meta: dict[str, Any], ramp_cfg: Any) -> None:
-        if ramp_cfg is None:
-            return
-        if not isinstance(ramp_cfg, dict):
-            raise ValueError("ramp 설정 형식이 올바르지 않습니다. dict 형태여야 합니다.")
-        if not ramp_cfg:
-            return
+        return {
+            "use_power1": power["use_power1"],
+            "use_power2": power["use_power2"],
+            "power1_feedback_adc2": power["power1_feedback_adc2"],
 
-        nested = meta.get("process_config")
-        if not isinstance(nested, dict):
-            nested = None
+            "density": material_cfg["density"],
+            "z_factor": material_cfg["z_factor"],
+            "target_rate": material_cfg["target_rate"],
+            "target_thickness": material_cfg["target_thickness"],
+            "delay_min": material_cfg["delay_min"],
 
-        def _set_meta(k: str, value: Any) -> None:
-            meta[k] = value
-            if nested is not None:
-                nested[k] = value
-
-        def _apply(k: str, cast) -> bool:
-            if k not in ramp_cfg:
-                return False
-
-            v = ramp_cfg.get(k)
-            if v is None or v == "":
-                return False
-
-            try:
-                converted = cast(v)
-                _set_meta(k, converted)
-                return True
-            except Exception:
-                raise ValueError(f"ramp 설정값 변환 실패: {k}={v!r}")
-
-        _apply("ramp_seg1_max_dac", lambda x: int(float(x)))
-        _apply("ramp_seg2_max_dac", lambda x: int(float(x)))
-        _apply("fine_step_dac", lambda x: int(float(x)))
-        _apply("material_shortage_dac", lambda x: int(float(x)))
-        _apply("rate_filter_window", lambda x: int(float(x)))
-        _apply("rate_drop_count", lambda x: int(float(x)))
-        _apply("target_ramp_stable_hits", lambda x: int(float(x)))
-        _apply("target_stable_hits", lambda x: int(float(x)))
-
-        _apply("ramp_interval_seg1_s", float)
-        seg2_over = _apply("ramp_interval_seg2_s", float)
-        after_over = _apply("ramp_interval_after_seg2_s", float)
-        if seg2_over and not after_over:
-            _set_meta("ramp_interval_after_seg2_s", float(meta["ramp_interval_seg2_s"]))
-
-        _apply("pre_rate", float)
-        _apply("rate_tol_ratio", float)
-        _apply("target_stable_interval_s", float)
-
-        _apply("dac_adjust_interval_s", float)
-
-        _apply("material_shortage_rate_max", float)
-        _apply("material_shortage_time_s", float)
-
-        _apply("rate_stable_sec", float)
-        _apply("rate_drop_ratio", float)
-
-        # MODIFIED: 신규 제어 파라미터
-        _apply("iir_alpha", float)
-        _apply("pi_kp", float)
-        _apply("pi_ki", float)
-        _apply("max_slew_dac_per_sec", float)
+            # 핵심: 공정 제어 파라미터는 exact schema로 nested 전달
+            "process_config": {
+                "step_count": process_config["step_count"],
+                "ramp_steps": process_config["ramp_steps"],
+                "dac_max": process_config["dac_max"],
+                "rate_tol_ratio": process_config["rate_tol_ratio"],
+                "rate_stable_sec": process_config["rate_stable_sec"],
+                "hold_control_interval_s": process_config["hold_control_interval_s"],
+                "fine_step_dac": process_config["fine_step_dac"],
+                "rate_abort_ratio": process_config["rate_abort_ratio"],
+                "rate_abort_sec": process_config["rate_abort_sec"],
+                "sensor_none_abort_s": process_config["sensor_none_abort_s"],
+                "adc_none_abort_s": process_config["adc_none_abort_s"],
+            },
+        }
 
     def _build_evap_steps(
         self,
@@ -709,6 +484,11 @@ class ProcessController(QObject):
         use_p2 = bool(power["use_power2"])
         temp_force_power2_sw = bool(power["temp_force_power2_sw"])
 
+        if use_p2:
+            raise ValueError("현재 build_evap_steps는 Power2 공정을 지원하지 않습니다.")
+        if not use_p1:
+            raise ValueError("현재 build_evap_steps는 Power1 선택이 필요합니다.")
+
         steps: list[ProcessStep] = [
             ProcessStep(name="MAIN_SHUTTER_CLOSE", type=StepType.PLC_WRITE_COIL, coil="MAIN_SHUTTER_SW", on=False),
             ProcessStep(name="SHUTTER_1_CLOSE_INIT", type=StepType.PLC_WRITE_COIL, coil="SHUTTER_1_SW", on=False),
@@ -718,6 +498,7 @@ class ProcessController(QObject):
             ProcessStep(name="DAC2_ZERO", type=StepType.PLC_WRITE_REG, reg="DAC_POWER_2", value=0),
 
             ProcessStep(name="POWER1_SET", type=StepType.PLC_WRITE_COIL, coil="POWER_1_SW", on=use_p1),
+            # 현재 장비 임시 매핑으로 Power1 only 공정에서도 POWER_2_SW를 함께 ON
             ProcessStep(name="POWER2_SET", type=StepType.PLC_WRITE_COIL, coil="POWER_2_SW", on=temp_force_power2_sw),
         ]
 
@@ -727,22 +508,7 @@ class ProcessController(QObject):
             steps.append(ProcessStep(name="SHUTTER_2_OPEN", type=StepType.PLC_WRITE_COIL, coil="SHUTTER_2_SW", on=True))
 
         steps.append(ProcessStep(name="FTM_ON", type=StepType.PLC_WRITE_COIL, coil="FTM_SW", on=True))
-        steps.append(
-            ProcessStep(
-                name="WAIT_FTM_STM",
-                type=StepType.WAIT_SECONDS,
-                seconds=float(meta.get("wait_after_ftm_on_s", 1.5)),
-                message="FTM/STM 안정화 대기",
-            )
-        )
         steps.append(ProcessStep(name="EVAP_DEPOSITION_CONTROL", type=StepType.MARK, meta=meta))
-
-        if use_p1:
-            steps.append(ProcessStep(name="SHUTTER_1_CLOSE", type=StepType.PLC_WRITE_COIL, coil="SHUTTER_1_SW", on=False))
-        if use_p2:
-            steps.append(ProcessStep(name="SHUTTER_2_CLOSE", type=StepType.PLC_WRITE_COIL, coil="SHUTTER_2_SW", on=False))
-        steps.append(ProcessStep(name="FTM_OFF", type=StepType.PLC_WRITE_COIL, coil="FTM_SW", on=False))
-
         return steps
     
     def _sanitize_process_name(self, raw_name: Any, *, fallback_material: str) -> str:
@@ -761,49 +527,31 @@ class ProcessController(QObject):
         power: dict[str, Any],
         material_cfg: dict[str, Any],
         process_config: dict[str, Any],
-        runtime_meta: dict[str, Any],
-        run_cfg: dict[str, Any],
     ) -> dict[str, Any]:
         return {
             "process_name": process_name,
             "material_name": material_cfg["material_name"],
             "use_power1": power["use_power1"],
             "use_power2": power["use_power2"],
+            "hw_mapping": {
+                "temp_force_power2_sw": power["temp_force_power2_sw"],
+                "power1_feedback_adc2": power["power1_feedback_adc2"],
+            },
             "target_rate": material_cfg["target_rate"],
             "target_thickness": material_cfg["target_thickness"],
             "delay_min": material_cfg["delay_min"],
-            "adc_control_mode": str(run_cfg.get("adc_control_mode", "adc") or "adc"),
-            "step_count": process_config["step_count"],
-            "ramp_steps": process_config["ramp_steps"],
-            "after_last_step_policy": process_config["after_last_step_policy"],
-            "extra_ramp": dict(process_config["extra_ramp"]),
-
-            # 실제 실행 메타 일부 snapshot
-            "effective_runtime": {
-                "ramp_seg1_max_dac": runtime_meta.get("ramp_seg1_max_dac"),
-                "ramp_seg2_max_dac": runtime_meta.get("ramp_seg2_max_dac"),
-                "ramp_interval_seg1_s": runtime_meta.get("ramp_interval_seg1_s"),
-                "ramp_interval_seg2_s": runtime_meta.get("ramp_interval_seg2_s"),
-                "ramp_interval_after_seg2_s": runtime_meta.get("ramp_interval_after_seg2_s"),
-                "fine_step_dac": runtime_meta.get("fine_step_dac"),
-                "pre_rate": runtime_meta.get("pre_rate"),
-                "dac_adjust_interval_s": runtime_meta.get("dac_adjust_interval_s"),
-                "rate_tol_ratio": runtime_meta.get("rate_tol_ratio"),
-                "target_ramp_stable_hits": runtime_meta.get("target_ramp_stable_hits"),
-                "target_stable_hits": runtime_meta.get("target_stable_hits"),
-                "target_stable_interval_s": runtime_meta.get("target_stable_interval_s"),
-                "rate_filter_window": runtime_meta.get("rate_filter_window"),
-                "rate_stable_sec": runtime_meta.get("rate_stable_sec"),
-                "rate_drop_ratio": runtime_meta.get("rate_drop_ratio"),
-                "rate_drop_count": runtime_meta.get("rate_drop_count"),
-                "material_shortage_dac": runtime_meta.get("material_shortage_dac"),
-                "material_shortage_rate_max": runtime_meta.get("material_shortage_rate_max"),
-                "material_shortage_time_s": runtime_meta.get("material_shortage_time_s"),
-                "dac_max": runtime_meta.get("dac_max"),
-                "sensor_none_abort_s": runtime_meta.get("sensor_none_abort_s"),
-                "adc_none_abort_s": runtime_meta.get("adc_none_abort_s"),
-                "zero_mode": runtime_meta.get("zero_mode"),
-                "tune_timeout_s": runtime_meta.get("tune_timeout_s"),
+            "process_config": {
+                "step_count": process_config["step_count"],
+                "ramp_steps": process_config["ramp_steps"],
+                "dac_max": process_config["dac_max"],
+                "rate_tol_ratio": process_config["rate_tol_ratio"],
+                "rate_stable_sec": process_config["rate_stable_sec"],
+                "hold_control_interval_s": process_config["hold_control_interval_s"],
+                "fine_step_dac": process_config["fine_step_dac"],
+                "rate_abort_ratio": process_config["rate_abort_ratio"],
+                "rate_abort_sec": process_config["rate_abort_sec"],
+                "sensor_none_abort_s": process_config["sensor_none_abort_s"],
+                "adc_none_abort_s": process_config["adc_none_abort_s"],
             },
         }
         
@@ -821,21 +569,20 @@ class ProcessController(QObject):
                 "임시로 Power 1만 사용해 주세요."
             )
 
+        # 현재 장비 임시 매핑:
+        # - UI에서는 Power2 사용 금지
+        # - 그러나 실제 하드웨어 구동상 Power1 공정 시작 시 POWER_2_SW도 함께 ON 되어야 함
+        # - 셔터는 SHUTTER_1만 OPEN
+        # - DAC command는 DAC_POWER_1 사용
+        # - 실제 feedback은 ADC2 사용
         temp_force_power2_sw = use_p1 and (not use_p2)
         power1_feedback_adc2 = use_p1 and (not use_p2)
-
-        source_shutter_coils: list[str] = []
-        if use_p1:
-            source_shutter_coils.append("SHUTTER_1_SW")
-        if use_p2:
-            source_shutter_coils.append("SHUTTER_2_SW")
 
         return {
             "use_power1": use_p1,
             "use_power2": use_p2,
             "temp_force_power2_sw": temp_force_power2_sw,
             "power1_feedback_adc2": power1_feedback_adc2,
-            "source_shutter_coils": source_shutter_coils,
         }
 
     def start_from_ui(self, run_cfg: dict[str, Any], *, run_id: Optional[str] = None) -> None:

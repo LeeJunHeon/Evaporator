@@ -60,7 +60,6 @@ class ProcessWindow(QWidget):
 
         # ✅ 공정별 ProcessWindowLog 파일 식별자
         self._active_run_id: Optional[str] = None
-        self._active_recipe_name: str = ""
 
         self.setWindowTitle("Process")
         self.ui.stackedWidget.setCurrentIndex(1)  # Process page
@@ -84,6 +83,16 @@ class ProcessWindow(QWidget):
 
         self._material_1 = None
         self._material_2 = None
+
+        # 공정 시작 시점 power 선택 상태 latch
+        self._run_use_power1: Optional[bool] = None
+        self._run_use_power2: Optional[bool] = None
+
+        # 현재 하드웨어 임시 우회 정책
+        # - Power2는 현재 장비 문제로 start path에서 비활성
+        # - Power1 actual feedback은 임시로 ADC2를 사용
+        self._power2_temporarily_disabled: bool = True
+        self._power1_feedback_uses_adc2: bool = True
 
         self.ui.materialEdit.clicked.connect(lambda: self._open_material_dialog(1))
         self.ui.materialEdit2.clicked.connect(lambda: self._open_material_dialog(2))
@@ -287,8 +296,8 @@ class ProcessWindow(QWidget):
             _append_text(getattr(self.ui, "logWindow", None), "[DEV][ERR] ini_path is None -> cannot prepare STM")
             return False
 
-        # 이전 STM 정리
-        self._shutdown_sensors_and_release_memory()
+        # 이전 STM 정리 (start 직전이므로 FTM OFF까지 포함한 best-effort cleanup)
+        self._shutdown_stm_with_ftm_off_best_effort()
 
         binder = getattr(self.hmi_window, "_plc_binder", None)
         if binder is None:
@@ -367,8 +376,8 @@ class ProcessWindow(QWidget):
         stm = self._stm_service
         if stm is None:
             QMessageBox.warning(self, "STM", "STM 서비스가 준비되지 않았습니다.")
+            self._clear_run_power_flags()
             self._active_run_id = None
-            self._active_recipe_name = ""
             return
 
         self._pending_run_cfg = dict(run_cfg)
@@ -403,14 +412,13 @@ class ProcessWindow(QWidget):
             self._rt_stop()
 
         with contextlib.suppress(Exception):
-            self._shutdown_sensors_and_release_memory()
+            self._shutdown_stm_with_ftm_off_best_effort()
 
         # ✅ 여기서는 사용자 입력값을 지우지 않는다.
         #    preflight 실패했다고 process name / thickness / rate까지 초기화하면 UX가 나빠진다.
-
         self._pending_run_cfg = None
         self._active_run_id = None
-        self._active_recipe_name = ""
+        self._clear_run_power_flags()
 
         self._cleanup_start_worker()
         self._set_start_busy(False)
@@ -504,26 +512,19 @@ class ProcessWindow(QWidget):
 
         return not worker.isRunning()
 
-    def _shutdown_sensors_and_release_memory(self) -> None:
-        """Stop에서 호출: STM 연결 해제 + 객체 해제 + gc.collect()
-        ✅ ACS는 항상 켜져있는 장비이므로 여기서 stop하지 않는다.
-        """
-
-        # ✅ 먼저 UI 시그널 해제
+    def _release_stm_runtime_only(self) -> None:
         try:
             self._unbind_stm_ui()
         except Exception:
             pass
 
-        # ✅ 1) STM만 stop()
         if self._stm_service is not None:
             try:
                 self._stm_service.stop()
-                _append_text(self.ui.logWindow, "[DEV] STM stop() called")
+                _append_text(getattr(self.ui, "logWindow", None), "[DEV] STM stop() called")
             except Exception as e:
-                _append_text(self.ui.logWindow, f"[DEV][WARN] STM stop failed: {e!r}")
+                _append_text(getattr(self.ui, "logWindow", None), f"[DEV][WARN] STM stop failed: {e!r}")
 
-        # ✅ 2) ProcessController에서 STM runtime device 참조 정리(ACS는 유지)
         try:
             pc = self._process_controller
             if pc is not None and hasattr(pc, "replace_runtime_devices"):
@@ -531,23 +532,23 @@ class ProcessWindow(QWidget):
         except Exception:
             pass
 
-        # ✅ 3) 참조 제거(ACS는 건드리지 않음)
         self._stm_service = None
         if self.hmi_window is not None:
             self.hmi_window._stm_service = None
 
-        # ✅ 4) FTM OFF (S`TM을 더 이상 쓰지 않으면 반드시 끈다)
+        gc.collect()
+        _append_text(getattr(self.ui, "logWindow", None), "[DEV] STM released + gc.collect() (ACS kept alive)")
+
+    def _shutdown_stm_with_ftm_off_best_effort(self) -> None:
+        self._release_stm_runtime_only()
+
         try:
             binder = getattr(self.hmi_window, "_plc_binder", None) if self.hmi_window else None
             if binder is not None:
                 binder.enqueue_write("FTM_SW", False)
-                _append_text(self.ui.logWindow, "[DEV] FTM_SW -> OFF (after STM stop)")
+                _append_text(getattr(self.ui, "logWindow", None), "[DEV] FTM_SW -> OFF")
         except Exception as e:
-            _append_text(self.ui.logWindow, f"[DEV][WARN] FTM_SW off failed: {e!r}")
-            
-        # 5) GC
-        gc.collect()
-        _append_text(self.ui.logWindow, "[DEV] STM released + gc.collect() (ACS kept alive)")
+            _append_text(getattr(self.ui, "logWindow", None), f"[DEV][WARN] FTM_SW off failed: {e!r}")
 
     def _on_start_clicked(self) -> None:
         if self._start_in_progress:
@@ -570,6 +571,8 @@ class ProcessWindow(QWidget):
         run_cfg = self._collect_ui_run_cfg()
         if run_cfg is None:
             return
+
+        self._latch_run_power_flags(run_cfg)
 
         proc_cfg = run_cfg.get("process_config") or {}
         steps = proc_cfg.get("ramp_steps") or []
@@ -594,23 +597,19 @@ class ProcessWindow(QWidget):
         # 2) run_id 생성
         self._active_run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-        pname = str(run_cfg.get("process_name", "") or "").strip()
-        mat = str(run_cfg.get("material_name", "") or "").strip()
-        self._active_recipe_name = pname if pname else (f"EVAP_{mat}" if mat else "EVAP")
-
         # 3) PLC precheck
         if not self._check_plc_ready_before_start():
+            self._clear_run_power_flags()
             self._active_run_id = None
-            self._active_recipe_name = ""
             return
 
         # 4) STM service 준비(여기서는 blocking wait 안 함)
         if not self._prepare_stm_service_for_start():
             QMessageBox.warning(self, "Device Connect Failed", "STM 준비 실패")
             with contextlib.suppress(Exception):
-                self._shutdown_sensors_and_release_memory()
+                self._shutdown_stm_with_ftm_off_best_effort()
+            self._clear_run_power_flags()
             self._active_run_id = None
-            self._active_recipe_name = ""
             return
 
         # 5) 실제 연결 대기 / crystal health는 worker로 넘긴다
@@ -647,12 +646,11 @@ class ProcessWindow(QWidget):
         with contextlib.suppress(Exception):
             self._rt_stop()
         with contextlib.suppress(Exception):
-            self._shutdown_sensors_and_release_memory()
+            self._shutdown_stm_with_ftm_off_best_effort()
         with contextlib.suppress(Exception):
             self._reset_process_ui()
 
         self._active_run_id = None
-        self._active_recipe_name = ""
 
     def _on_status(self, st: Any) -> None:
         # ✅ 그래프용 power 추출(기존 유지)
@@ -780,7 +778,7 @@ class ProcessWindow(QWidget):
 
             # 3) worker 종료 후에만 센서/메모리 정리
             with contextlib.suppress(Exception):
-                self._shutdown_sensors_and_release_memory()
+                self._release_stm_runtime_only()
 
             try:
                 ok = bool(getattr(result, "ok", False))
@@ -794,7 +792,7 @@ class ProcessWindow(QWidget):
 
         finally:
             self._active_run_id = None
-            self._active_recipe_name = ""
+            self._clear_run_power_flags()
 
             with contextlib.suppress(Exception):
                 self._reset_process_ui()
@@ -1131,13 +1129,12 @@ class ProcessWindow(QWidget):
             if w is not None:
                 w.setParent(None)
 
-        # adc_range = self._get_plot_adc_default_range()
-        # self._plot = DepositionPlotWidget(
-        #     parent=host,
-        #     power_title="ADC",
-        #     power_default_range=adc_range,
-        #     fixed_power_range=(0.0, 200.0),  # MODIFIED: ADC Y축 0~200 고정 (자동 스케일 비활성화)
-        # )
+        adc_range = self._get_plot_adc_default_range()
+        self._plot = DepositionPlotWidget(
+            parent=host,
+            power_title="ADC",
+            power_default_range=adc_range,
+        )
         lay.addWidget(self._plot)
 
     def _rt_start(self) -> None:
@@ -1163,17 +1160,7 @@ class ProcessWindow(QWidget):
 
         # MODIFIED: 하드웨어 채널 매핑 — Power1 단독 사용 시 ADC2가 실제 feedback
         # Power1 선택 시: ADC2 값을 그래프/표시에 사용 (ADC1은 노이즈)
-        use1, use2 = self._selected_power_flags()
-        if use1 and not use2:
-            # Power1 only → feedback/display는 ADC2
-            graph_power = self._clamp_nonneg(adc2)
-            display_adc1 = adc2   # actualPower1 칸에도 ADC2 값 표시
-            display_adc2 = adc2
-        else:
-            # Power2 단독 또는 Power1+Power2 동시 → 기존 로직
-            graph_power = self._sum_selected_pair(adc1, adc2)
-            graph_power = self._clamp_nonneg(graph_power)
-            display_adc1, display_adc2 = adc1, adc2
+        graph_power, display_adc1, display_adc2 = self._resolve_power_feedback_for_ui(adc1, adc2)
 
         if graph_power is not None:
             self._last_power = graph_power
@@ -1205,6 +1192,27 @@ class ProcessWindow(QWidget):
                 self._plot.append(rate=rate, power=graph_power)
             except Exception:
                 pass
+
+    def _resolve_power_feedback_for_ui(
+        self,
+        adc1: Optional[float],
+        adc2: Optional[float],
+    ) -> tuple[Optional[float], Optional[float], Optional[float]]:
+        """
+        반환값:
+            graph_power, display_adc1, display_adc2
+        """
+
+        use1, use2 = self._selected_power_flags()
+
+        # 현재 하드웨어 임시 우회:
+        # Power1 단독 사용 시 실제 feedback은 ADC2를 사용한다.
+        if use1 and not use2 and self._power1_feedback_uses_adc2:
+            fb = self._clamp_nonneg(adc2)
+            return fb, fb, None
+
+        graph_power = self._clamp_nonneg(self._sum_selected_pair(adc1, adc2))
+        return graph_power, self._clamp_nonneg(adc1), self._clamp_nonneg(adc2)
     # ================== 그래프 설정 ==================
 
     @staticmethod
@@ -1239,10 +1247,24 @@ class ProcessWindow(QWidget):
             return False
         
     def _selected_power_flags(self) -> tuple[bool, bool]:
+        """
+        공정/preflight 중에는 시작 시점에 latch된 power 선택 상태를 사용한다.
+        idle 상태에서만 현재 UI 체크박스 값을 읽는다.
+        """
+        if self._run_use_power1 is not None and self._run_use_power2 is not None:
+            return bool(self._run_use_power1), bool(self._run_use_power2)
+
         use1 = bool(getattr(getattr(self.ui, "sourcePower1", None), "isChecked", lambda: False)())
         use2 = bool(getattr(getattr(self.ui, "sourcePower2", None), "isChecked", lambda: False)())
         return use1, use2
+    
+    def _latch_run_power_flags(self, run_cfg: dict[str, Any]) -> None:
+        self._run_use_power1 = bool(run_cfg.get("use_power1", False))
+        self._run_use_power2 = bool(run_cfg.get("use_power2", False))
 
+    def _clear_run_power_flags(self) -> None:
+        self._run_use_power1 = None
+        self._run_use_power2 = None
 
     def _sum_selected_pair(self, p1: Optional[float], p2: Optional[float]) -> Optional[float]:
         """
@@ -1296,6 +1318,7 @@ class ProcessWindow(QWidget):
     def _update_dac_power_ui(self, p1: Optional[float], p2: Optional[float]) -> None:
         """
         DAC 표시칸(currentDac1Edit/currentDac2Edit)에 값 출력.
+        공정/preflight 중에는 현재 체크박스 상태가 아니라 run 시작 시점 latch 기준으로 표시한다.
         """
         use1, use2 = self._selected_power_flags()
 
@@ -1366,6 +1389,7 @@ class ProcessWindow(QWidget):
     def _update_actual_power_ui(self, p1: Optional[float], p2: Optional[float]) -> None:
         """
         기존 actualPower1/2 는 ADC 표시칸으로 사용.
+        공정/preflight 중에는 현재 체크박스 상태가 아니라 run 시작 시점 latch 기준으로 표시한다.
         """
         use1, use2 = self._selected_power_flags()
 
@@ -1403,6 +1427,7 @@ class ProcessWindow(QWidget):
 
         self._material_1 = None
         self._material_2 = None
+        self._clear_run_power_flags()
 
         with contextlib.suppress(Exception):
             self.ui.materialEdit.setText("Select")
@@ -1454,6 +1479,19 @@ class ProcessWindow(QWidget):
         p2 = bool(getattr(getattr(self.ui, "sourcePower2", None), "isChecked", lambda: False)())
         if not (p1 or p2):
             QMessageBox.warning(self, "Input", "Power1/Power2 중 최소 1개는 선택해야 합니다.")
+            return None
+
+        # 아래 Power2 / dual-power 분기는 현재 하드웨어 문제로 인해
+        # 위의 임시 차단에 걸려 실제로는 진입하지 않는다.
+        # 다만 장비 수리 후 다시 활성화할 복구 경로이므로 삭제하지 않고 유지한다.
+        if self._power2_temporarily_disabled and p2:
+            QMessageBox.warning(
+                self,
+                "Input",
+                "현재 장비 상태에서는 Power 2를 사용할 수 없습니다.\n"
+                "임시로 Power 1만 사용해 주세요.\n"
+                "(장비 수리 후 Power2/dual-power 경로를 다시 활성화할 예정)"
+            )
             return None
 
         # ✅ Target Dep.rate: 선택된 power에 해당하는 입력칸만 사용 (fallback 없음)
@@ -1565,6 +1603,31 @@ class ProcessWindow(QWidget):
         if not steps:
             QMessageBox.warning(self, "Input", "Process Config의 step이 비어 있습니다.")
             return None
+
+        last_adc = -1.0
+        for idx, step in enumerate(steps, start=1):
+            target_adc = float(step.get("target_adc", 0.0) or 0.0)
+            dac_step = int(step.get("dac_step", 0) or 0)
+            dac_interval_sec = float(step.get("dac_interval_sec", 0.0) or 0.0)
+            hold_sec = float(step.get("hold_sec", 0.0) or 0.0)
+
+            if target_adc <= 0:
+                QMessageBox.warning(self, "Input", f"Process Config step {idx}의 target_adc는 0보다 커야 합니다.")
+                return None
+            if dac_step <= 0:
+                QMessageBox.warning(self, "Input", f"Process Config step {idx}의 dac_step은 0보다 커야 합니다.")
+                return None
+            if dac_interval_sec <= 0:
+                QMessageBox.warning(self, "Input", f"Process Config step {idx}의 dac_interval_sec는 0보다 커야 합니다.")
+                return None
+            if hold_sec < 0:
+                QMessageBox.warning(self, "Input", f"Process Config step {idx}의 hold_sec는 0 이상이어야 합니다.")
+                return None
+            if last_adc >= 0 and target_adc < last_adc:
+                QMessageBox.warning(self, "Input", f"Process Config step {idx}의 target_adc는 이전 step보다 크거나 같아야 합니다.")
+                return None
+
+            last_adc = target_adc
 
         cfg: dict[str, Any] = {
             "process_name": pname,

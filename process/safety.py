@@ -87,14 +87,14 @@ class SafetyPlan:
 
 
 # ============================================================
-# Legacy engine sequence
+# Engine shutdown step builders
 # ============================================================
 
-def _legacy_engine_shutdown_steps(*, prefix: str) -> List[ProcessStep]:
+def _build_engine_shutdown_steps(*, prefix: str) -> List[ProcessStep]:
     """
     engine 안전정지 기본 순서를 ProcessStep으로 생성.
 
-    현재 정책:
+    현재 공통 정책:
     1) MAIN_SHUTTER close
     2) SHUTTER_1/2 close
     3) DAC pair ramp-down (dynamic action marker)
@@ -103,8 +103,8 @@ def _legacy_engine_shutdown_steps(*, prefix: str) -> List[ProcessStep]:
 
     주의:
     - DAC ramp-down은 현재 DAC 값을 알아야 하므로
-    여기서는 marker step만 정의하고,
-    실제 실행은 engine.py가 담당한다.
+      여기서는 marker step만 정의하고,
+      실제 실행은 engine.py가 담당한다.
     """
     return [
         ProcessStep(
@@ -171,8 +171,8 @@ def default_safety_plan() -> SafetyPlan:
     - ABORT : shutter close -> DAC pair ramp-down -> power off
     - ESTOP : 엔진 강제동작 최소(로그만)
     """
-    stop_steps = _legacy_engine_shutdown_steps(prefix="STOP")
-    abort_steps = _legacy_engine_shutdown_steps(prefix="ABORT")
+    stop_steps = _build_engine_shutdown_steps(prefix="STOP")
+    abort_steps = _build_engine_shutdown_steps(prefix="ABORT")
 
     estop_steps = [
         ProcessStep(
@@ -202,17 +202,24 @@ def default_safety_plan() -> SafetyPlan:
 
 def build_engine_safe_shutdown_steps() -> List[ProcessStep]:
     """
-    engine 기본 안전정지 step 리스트를 반환.
-    - STOP / ERROR / EVAP_DONE 등에서 공통으로 사용할 수 있는 기본 안전정지 정책
+    engine 공통 안전정지 step 리스트를 반환.
+    - EVAP_DONE / generic shutdown 에서 공통으로 사용할 수 있는 기본 안전정지 정책
     - DAC 종료는 marker step으로 정의되며 실제 실행은 engine.py가 담당
     """
-    return _legacy_engine_shutdown_steps(prefix="LEGACY")
+    return _build_engine_shutdown_steps(prefix="ENGINE")
 
 
 def build_safety_steps(mode: StopMode, plan: Optional[SafetyPlan] = None) -> List[ProcessStep]:
     """
     StopMode에 따라 실행할 안전정지 step 리스트 반환.
-    현재 default plan은 STOP/ABORT에 DAC pair ramp-down marker를 포함한다.
+
+    현재 기본 정책:
+    - STOP  : 공통 shutdown step 사용
+    - ABORT : 현재는 STOP과 동일한 shutdown step 사용
+    - ESTOP : 로그만 남김 (hardware/PLC interlock 우선)
+
+    즉, 현재 구현에서는 STOP/ABORT의 실제 step 순서는 동일하고,
+    향후 mode별 정책 분리가 필요하면 SafetyPlan에서 각 그룹을 다르게 정의하면 된다.
     """
     plan = plan or default_safety_plan()
 

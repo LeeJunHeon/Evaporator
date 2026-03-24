@@ -234,8 +234,7 @@ class ProcessController(QObject):
     def get_recipe(self) -> Optional[ProcessRecipe]:
         return self._recipe
     
-    def _normalize_ramp_steps(self, run_cfg: dict[str, Any]) -> list[dict[str, Any]]:
-        proc_cfg = dict(run_cfg.get("process_config") or {})
+    def _normalize_ramp_steps(self, proc_cfg: dict[str, Any]) -> list[dict[str, Any]]:
         raw_steps = proc_cfg.get("ramp_steps") or []
 
         if not isinstance(raw_steps, list) or not raw_steps:
@@ -384,39 +383,44 @@ class ProcessController(QObject):
     
     def _build_process_config_from_run_cfg(self, run_cfg: dict[str, Any]) -> dict[str, Any]:
         proc_src = dict(run_cfg.get("process_config") or {})
-        ramp_steps = self._normalize_ramp_steps(run_cfg)
+        ramp_steps = self._normalize_ramp_steps(proc_src)
 
-        def _cfg_int(name: str, default: int) -> int:
+        def _require_int(name: str) -> int:
+            if name not in proc_src:
+                raise ValueError(f"process_config.{name}가 누락되었습니다.")
             try:
-                return int(proc_src.get(name, default))
+                return int(proc_src[name])
             except Exception:
                 raise ValueError(f"process_config.{name} 값 변환에 실패했습니다.")
 
-        def _cfg_float(name: str, default: float) -> float:
+        def _require_float(name: str) -> float:
+            if name not in proc_src:
+                raise ValueError(f"process_config.{name}가 누락되었습니다.")
             try:
-                return float(proc_src.get(name, default))
+                return float(proc_src[name])
             except Exception:
                 raise ValueError(f"process_config.{name} 값 변환에 실패했습니다.")
 
-        step_count = _cfg_int("step_count", len(ramp_steps))
+        step_count = _require_int("step_count")
+
         if step_count != len(ramp_steps):
             raise ValueError(
-                f"process_config.step_count({step_count})와 "
-                f"ramp_steps 길이({len(ramp_steps)})가 일치하지 않습니다."
+                "process_config.step_count와 ramp_steps 개수가 일치하지 않습니다. "
+                f"(step_count={step_count}, ramp_steps={len(ramp_steps)})"
             )
 
         cfg = {
             "step_count": step_count,
             "ramp_steps": ramp_steps,
-            "dac_max": _cfg_int("dac_max", 4000),
-            "rate_tol_ratio": _cfg_float("rate_tol_ratio", 0.05),
-            "rate_stable_sec": _cfg_float("rate_stable_sec", 3.0),
-            "hold_control_interval_s": _cfg_float("hold_control_interval_s", 1.0),
-            "fine_step_dac": _cfg_int("fine_step_dac", 10),
-            "rate_abort_ratio": _cfg_float("rate_abort_ratio", 0.5),
-            "rate_abort_sec": _cfg_float("rate_abort_sec", 10.0),
-            "sensor_none_abort_s": _cfg_float("sensor_none_abort_s", 5.0),
-            "adc_none_abort_s": _cfg_float("adc_none_abort_s", 5.0),
+            "dac_max": _require_int("dac_max"),
+            "rate_tol_ratio": _require_float("rate_tol_ratio"),
+            "rate_stable_sec": _require_float("rate_stable_sec"),
+            "hold_control_interval_s": _require_float("hold_control_interval_s"),
+            "fine_step_dac": _require_int("fine_step_dac"),
+            "rate_abort_ratio": _require_float("rate_abort_ratio"),
+            "rate_abort_sec": _require_float("rate_abort_sec"),
+            "sensor_none_abort_s": _require_float("sensor_none_abort_s"),
+            "adc_none_abort_s": _require_float("adc_none_abort_s"),
         }
 
         if cfg["dac_max"] <= 0:
@@ -459,19 +463,22 @@ class ProcessController(QObject):
             "delay_min": material_cfg["delay_min"],
 
             # 핵심: 공정 제어 파라미터는 exact schema로 nested 전달
-            "process_config": {
-                "step_count": process_config["step_count"],
-                "ramp_steps": process_config["ramp_steps"],
-                "dac_max": process_config["dac_max"],
-                "rate_tol_ratio": process_config["rate_tol_ratio"],
-                "rate_stable_sec": process_config["rate_stable_sec"],
-                "hold_control_interval_s": process_config["hold_control_interval_s"],
-                "fine_step_dac": process_config["fine_step_dac"],
-                "rate_abort_ratio": process_config["rate_abort_ratio"],
-                "rate_abort_sec": process_config["rate_abort_sec"],
-                "sensor_none_abort_s": process_config["sensor_none_abort_s"],
-                "adc_none_abort_s": process_config["adc_none_abort_s"],
-            },
+            "process_config": self._copy_exact_process_config(process_config),
+        }
+    
+    def _copy_exact_process_config(self, process_config: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "step_count": process_config["step_count"],
+            "ramp_steps": process_config["ramp_steps"],
+            "dac_max": process_config["dac_max"],
+            "rate_tol_ratio": process_config["rate_tol_ratio"],
+            "rate_stable_sec": process_config["rate_stable_sec"],
+            "hold_control_interval_s": process_config["hold_control_interval_s"],
+            "fine_step_dac": process_config["fine_step_dac"],
+            "rate_abort_ratio": process_config["rate_abort_ratio"],
+            "rate_abort_sec": process_config["rate_abort_sec"],
+            "sensor_none_abort_s": process_config["sensor_none_abort_s"],
+            "adc_none_abort_s": process_config["adc_none_abort_s"],
         }
 
     def _build_evap_steps(
@@ -503,10 +510,17 @@ class ProcessController(QObject):
         ]
 
         if use_p1:
-            steps.append(ProcessStep(name="SHUTTER_1_OPEN", type=StepType.PLC_WRITE_COIL, coil="SHUTTER_1_SW", on=True))
-        if use_p2:
-            steps.append(ProcessStep(name="SHUTTER_2_OPEN", type=StepType.PLC_WRITE_COIL, coil="SHUTTER_2_SW", on=True))
+            steps.append(
+                ProcessStep(
+                    name="SHUTTER_1_OPEN",
+                    type=StepType.PLC_WRITE_COIL,
+                    coil="SHUTTER_1_SW",
+                    on=True,
+                )
+            )
 
+        # 현재 UI active path에서는 preflight/start 단계에서 이미 FTM이 ON 되었을 수 있다.
+        # 다만 controller 직접 시작 경로를 고려해 여기서는 idempotent ON step으로 유지한다.
         steps.append(ProcessStep(name="FTM_ON", type=StepType.PLC_WRITE_COIL, coil="FTM_SW", on=True))
         steps.append(ProcessStep(name="EVAP_DEPOSITION_CONTROL", type=StepType.MARK, meta=meta))
         return steps
@@ -540,19 +554,7 @@ class ProcessController(QObject):
             "target_rate": material_cfg["target_rate"],
             "target_thickness": material_cfg["target_thickness"],
             "delay_min": material_cfg["delay_min"],
-            "process_config": {
-                "step_count": process_config["step_count"],
-                "ramp_steps": process_config["ramp_steps"],
-                "dac_max": process_config["dac_max"],
-                "rate_tol_ratio": process_config["rate_tol_ratio"],
-                "rate_stable_sec": process_config["rate_stable_sec"],
-                "hold_control_interval_s": process_config["hold_control_interval_s"],
-                "fine_step_dac": process_config["fine_step_dac"],
-                "rate_abort_ratio": process_config["rate_abort_ratio"],
-                "rate_abort_sec": process_config["rate_abort_sec"],
-                "sensor_none_abort_s": process_config["sensor_none_abort_s"],
-                "adc_none_abort_s": process_config["adc_none_abort_s"],
-            },
+            "process_config": self._copy_exact_process_config(process_config),
         }
         
     def _extract_power_mode(self, run_cfg: dict[str, Any]) -> dict[str, Any]:
@@ -570,11 +572,15 @@ class ProcessController(QObject):
             )
 
         # 현재 장비 임시 매핑:
-        # - UI에서는 Power2 사용 금지
-        # - 그러나 실제 하드웨어 구동상 Power1 공정 시작 시 POWER_2_SW도 함께 ON 되어야 함
+        # - UI/start path에서는 Power2 사용 금지
+        # - 그러나 실제 하드웨어 구동상 Power1 only 공정 시작 시 POWER_2_SW도 함께 ON 되어야 함
         # - 셔터는 SHUTTER_1만 OPEN
         # - DAC command는 DAC_POWER_1 사용
         # - 실제 feedback은 ADC2 사용
+        #
+        # 장비 수리 후 Power2/dual-power를 다시 활성화할 때는
+        # 아래 temp_force_power2_sw / power1_feedback_adc2 정책과
+        # _build_evap_steps() 상단 guard, process_window의 Power2 차단을 같이 풀어야 한다.
         temp_force_power2_sw = use_p1 and (not use_p2)
         power1_feedback_adc2 = use_p1 and (not use_p2)
 

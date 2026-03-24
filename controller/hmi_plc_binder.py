@@ -557,18 +557,20 @@ class HmiPlcBinder(QObject):
             return f"LAST ERR {last_error_code}"
 
         return "---"
-
+    
     def _render_acs_status(self) -> None:
         snap = dict(self._acs_last_snapshot or {})
 
         connected = bool(snap.get("connected", self._acs_connected))
-        pressure = snap.get("pressure", self._acs_last_pressure)
 
-        # 상단 상태라인은 여기서 계속 반영
+        # ✅ 화면 표시는 live pressure 우선
+        pressure = self._acs_last_pressure
+        if pressure is None and "pressure" in snap:
+            pressure = snap.get("pressure", None)
+
         self.set_external_connected("ACS", connected)
 
-        # main.py 기준 실제 pressure 표시 위젯은 pressureValue
-        if pressure is None:
+        if (not connected) or (pressure is None):
             pressure_text = "--- Torr"
         else:
             try:
@@ -577,9 +579,6 @@ class HmiPlcBinder(QObject):
                 pressure_text = "--- Torr"
 
         self._set_acs_field("pressureValue", pressure_text)
-
-        # ACS 전용 conn 위젯이 실제로 있다면, 그 이름 확인 후 아래처럼 추가
-        # self._set_acs_field("실제Conn위젯이름", "CONNECTED" if connected else "DISCONNECTED")
 
     def _render_tmp_status(self) -> None:
         snap = dict(self._tmp_last_snapshot or {})

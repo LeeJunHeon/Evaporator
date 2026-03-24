@@ -363,7 +363,9 @@ class ACSServiceWorker(QThread):
     def _apply_stream_mode_if_needed(self) -> None:
         """
         연결 직후 stream 모드 설정이 켜져 있으면 stream 시작.
-        실패하면 close 후 재연결해서 다시 stream을 시도한다(폴백 없음).
+        stale 제거를 위해 시간 기반 드레인을 추가로 돌리지 않는다.
+        connect/_txrx 단계에서 이미 input buffer reset이 수행되므로,
+        여기서 추가 드레인을 하면 최신 샘플까지 버릴 수 있다.
         """
         if not self._use_stream:
             return
@@ -373,11 +375,7 @@ class ACSServiceWorker(QThread):
         try:
             self._acs.start_pressure_stream(interval_a=self._stream_interval_a)
             self.sig_error.emit(f"[ACSService] stream mode ON (A={self._stream_interval_a})")
-
-            # ✅ 추가: 연결 직후 버퍼 드레인 (3초간 읽고 버림)
-            self._drain_stale_stream_buffer(drain_s=3.0)
         except Exception as e:
-            # ✅ 폴백하지 말고, 다음 루프에서 재연결 후 다시 stream 시도
             self.sig_error.emit(f"[ACSService] stream start failed -> reconnect: {e!r}")
             self._safe_close()
             self._set_connected(False)
@@ -715,6 +713,18 @@ class ACSService(QObject):
     def start(self) -> None:
         if not self._worker.isRunning():
             self._worker.start()
+
+    def is_connected(self) -> bool:
+        snap = self._worker.get_last_snapshot()
+        if snap is None:
+            return False
+        try:
+            return bool(snap.connected)
+        except Exception:
+            try:
+                return bool(getattr(snap, "connected", False))
+            except Exception:
+                return False
 
     def stop(self, wait_ms: int = 3000) -> None:
         try:

@@ -99,10 +99,10 @@ def main():
     try:
         acs_service = ACSService(
             ini_path=ini_path,
-            poll_s=1.0,                # 워커 루프(읽기 템포). 스트림은 장비가 1초마다 보냄
-            reconnect_interval_s=1.0,   # 실패 시 재시도 템포
-            use_stream=True,            # ✅ CON 모드
-            stream_interval_a=1,        # ✅ 1초
+            poll_s=1.0,                # 1초마다 현재 pressure를 직접 질의
+            reconnect_interval_s=1.0,
+            use_stream=False,          # ✅ HMI는 query(PRD) 모드로 사용
+            channel=1,
         )
 
         # ✅ ACS UI/상태 관리는 binder가 전담

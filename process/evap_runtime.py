@@ -499,6 +499,24 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
             return ((now_m - stable_start_ts) >= rate_stable_sec), stable_start_ts
 
         return False, None
+    
+    def _update_adc_reached_state(
+        adc_total: float,
+        target_adc_value: float,
+        stable_start_ts: Optional[float],
+        stable_sec: float,
+    ) -> tuple[bool, Optional[float]]:
+        if adc_total >= target_adc_value:
+            now_m = time.monotonic()
+            if stable_start_ts is None:
+                stable_start_ts = now_m
+
+            if stable_sec <= 0.0:
+                return True, stable_start_ts
+
+            return ((now_m - stable_start_ts) >= stable_sec), stable_start_ts
+
+        return False, None
 
     def _ramp_down_then_shutdown(*, tag: str) -> None:
         nonlocal dac, shutter_open, shutdown_done
@@ -569,75 +587,95 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
             engine._emit_status(
                 message=(
                     f"RAMP STEP {step_no}/{len(ramp_steps)} 시작 | "
-                    f"target_adc={step_target_adc:.1f} / "
-                    f"dac_step={step_dac_step} / "
-                    f"interval={step_dac_interval_sec:.1f}s / "
-                    f"hold_sec={step_hold_sec:.1f}s"
+                    f"ADC 목표={step_target_adc:.1f} | "
+                    f"DAC +{step_dac_step} / {step_dac_interval_sec:.1f}s | "
+                    f"ADC 확인시간={step_hold_sec:.1f}s"
                 ),
                 force=True,
             )
 
             last_dac_apply_m = time.monotonic() - step_dac_interval_sec
+            adc_reached_start_ts: Optional[float] = None
 
-            # A. target_adc 도달까지 상승
             while True:
+                engine._check_stop_pause(recipe, step)
+                engine._tick_emit(recipe, step)
+
                 rt = _read_rate_or_abort(where=f"ramp_step{step_no}")
                 adc_total = _read_adc_or_abort(where=f"ramp_step{step_no}")
 
                 stable_ok, stable_start_ts = _update_rate_stable_state(rt, stable_start_ts)
                 if stable_ok:
                     reached_stable = True
+                    engine._emit_status(
+                        message=(
+                            f"RAMP STEP {step_no}/{len(ramp_steps)} | "
+                            f"dep.rate 안정 도달 -> HOLD 진입"
+                        ),
+                        force=True,
+                    )
                     break
 
-                if adc_total >= step_target_adc:
+                adc_ok, adc_reached_start_ts = _update_adc_reached_state(
+                    adc_total,
+                    step_target_adc,
+                    adc_reached_start_ts,
+                    step_hold_sec,
+                )
+                if adc_ok:
+                    engine._emit_status(
+                        message=(
+                            f"RAMP STEP {step_no}/{len(ramp_steps)} 완료 | "
+                            f"ADC={adc_total:.1f}/{step_target_adc:.1f} | "
+                            f"확인시간 {step_hold_sec:.1f}s 충족"
+                        ),
+                        force=True,
+                    )
                     break
 
-                if dac >= dac_max:
+                now_m = time.monotonic()
+                remain_to_next_dac_s = max(0.0, step_dac_interval_sec - (now_m - last_dac_apply_m))
+
+                if adc_reached_start_ts is None:
+                    adc_confirm_elapsed_s = 0.0
+                else:
+                    adc_confirm_elapsed_s = max(0.0, now_m - adc_reached_start_ts)
+
+                if adc_total < step_target_adc and dac >= dac_max:
                     _raise_engine_failed(
                         step.name,
-                        f"EVAP: DAC_MAX({dac_max}) 도달, STEP {step_no} target_adc 미도달 "
+                        f"EVAP: DAC_MAX({dac_max}) 도달, STEP {step_no} target_adc 안정 도달 실패 "
                         f"(adc={adc_total:.1f}/{step_target_adc:.1f}, rate={rt:.3f})"
                     )
 
-                now_m = time.monotonic()
-                if (now_m - last_dac_apply_m) >= step_dac_interval_sec:
+                if adc_total < step_target_adc and (now_m - last_dac_apply_m) >= step_dac_interval_sec:
                     dac = min(dac_max, dac + step_dac_step)
                     _evap_apply_dac(engine, use_p1, use_p2, dac, tag=f"EVAP_RAMP_STEP{step_no}")
                     last_dac_apply_m = now_m
+                    remain_to_next_dac_s = step_dac_interval_sec
 
-                engine._emit_status(
-                    message=(
-                        f"RAMP STEP {step_no}/{len(ramp_steps)} | "
-                        f"ADC={adc_total:.1f}/{step_target_adc:.1f} | "
-                        f"DAC={dac} | rate={rt:.3f}"
-                    ),
-                    force=True,
-                )
-                time.sleep(0.1)
+                if adc_total >= step_target_adc:
+                    engine._emit_status(
+                        message=(
+                            f"RAMP STEP {step_no}/{len(ramp_steps)} ADC 확인중 | "
+                            f"ADC={adc_total:.1f}/{step_target_adc:.1f} | "
+                            f"DAC={dac} | rate={rt:.3f} | "
+                            f"확인 {adc_confirm_elapsed_s:.1f}/{step_hold_sec:.1f}s | "
+                            f"다음 DAC까지 {remain_to_next_dac_s:.1f}s"
+                        ),
+                        force=True,
+                    )
+                else:
+                    engine._emit_status(
+                        message=(
+                            f"RAMP STEP {step_no}/{len(ramp_steps)} 상승중 | "
+                            f"ADC={adc_total:.1f}/{step_target_adc:.1f} | "
+                            f"DAC={dac} | rate={rt:.3f} | "
+                            f"다음 DAC까지 {remain_to_next_dac_s:.1f}s"
+                        ),
+                        force=True,
+                    )
 
-            if reached_stable:
-                break
-
-            # B. target_adc 도달 후 hold_sec 관찰
-            hold_end_m = time.monotonic() + step_hold_sec
-            while time.monotonic() < hold_end_m:
-                rt = _read_rate_or_abort(where=f"ramp_step{step_no}_hold")
-                adc_total = _read_adc_or_abort(where=f"ramp_step{step_no}_hold")
-
-                stable_ok, stable_start_ts = _update_rate_stable_state(rt, stable_start_ts)
-                if stable_ok:
-                    reached_stable = True
-                    break
-
-                remain_s = max(0.0, hold_end_m - time.monotonic())
-                engine._emit_status(
-                    message=(
-                        f"RAMP STEP {step_no}/{len(ramp_steps)} HOLD | "
-                        f"ADC={adc_total:.1f}/{step_target_adc:.1f} | "
-                        f"DAC={dac} | rate={rt:.3f} | remain={remain_s:.1f}s"
-                    ),
-                    force=True,
-                )
                 time.sleep(0.1)
 
             if reached_stable:

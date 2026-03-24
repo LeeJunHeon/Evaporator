@@ -34,6 +34,26 @@ _STEP_INTERVAL_W = 100
 _STEP_HOLD_W = 100
 
 
+PROCESS_CONFIG_TOOLTIPS = {
+    "step_enabled": "체크된 step만 공정 상승 구간에 사용합니다.",
+    "target_adc": "이 step에서 도달하려는 ADC 피드백 목표값입니다. 상승 중 dep.rate가 먼저 안정 도달하면 남은 step은 건너뛰고 hold 단계로 넘어갑니다.",
+    "dac_step": "DAC를 한 번 증가시킬 때 더하는 값입니다.",
+    "interval": "DAC를 증가시키는 주기(초)입니다.",
+    "hold": "Target ADC 도달 후 dep.rate 안정 여부를 추가로 관찰하는 시간입니다. 이 시간 안에 dep.rate가 안정 도달하면 hold 단계로 넘어갑니다.",
+
+    "rate_tol_ratio": "목표 dep.rate 허용 오차 비율입니다. 예: 0.05 = ±5%",
+    "rate_stable_sec": "dep.rate가 허용 오차 범위 안에 이 시간 이상 유지되면 '안정 도달'로 판정합니다.",
+    "hold_control_interval_s": "hold 단계에서 DAC를 조정하는 주기(초)입니다.",
+    "fine_step_dac": "hold 단계에서 dep.rate를 맞추기 위해 한 번에 증감하는 DAC 값입니다.",
+
+    "dac_max": "공정 중 허용하는 최대 DAC 값입니다.",
+    "rate_abort_ratio": "hold 단계에서 dep.rate가 목표값의 이 비율 이하로 떨어지면 저하 상태로 판단합니다. 예: 0.30 = 목표의 30% 이하",
+    "rate_abort_sec": "dep.rate 저하 상태가 이 시간 이상 지속되면 abort 처리합니다.",
+    "sensor_none_abort_s": "rate/thickness 센서값이 None인 상태를 허용하는 최대 시간입니다.",
+    "adc_none_abort_s": "ADC 피드백이 None인 상태를 허용하는 최대 시간입니다.",
+}
+
+
 class _NoWheelDoubleSpinBox(QDoubleSpinBox):
     def wheelEvent(self, event: QWheelEvent) -> None:
         event.ignore()
@@ -230,16 +250,26 @@ class ProcessConfigDialog(QDialog):
 
         lbl_step = QLabel("Step")
         lbl_step.setFixedWidth(_STEP_LABEL_W)
+
         lbl_enabled = QLabel("활성화")
         lbl_enabled.setFixedWidth(_STEP_CHECK_W)
+        lbl_enabled.setToolTip(PROCESS_CONFIG_TOOLTIPS["step_enabled"])
+
         lbl_target = QLabel("Target ADC")
         lbl_target.setFixedWidth(_STEP_TARGET_W)
+        lbl_target.setToolTip(PROCESS_CONFIG_TOOLTIPS["target_adc"])
+
         lbl_dac = QLabel("DAC step")
         lbl_dac.setFixedWidth(_STEP_DAC_W)
+        lbl_dac.setToolTip(PROCESS_CONFIG_TOOLTIPS["dac_step"])
+
         lbl_interval = QLabel("Interval(s)")
         lbl_interval.setFixedWidth(_STEP_INTERVAL_W)
+        lbl_interval.setToolTip(PROCESS_CONFIG_TOOLTIPS["interval"])
+
         lbl_hold = QLabel("Hold(s)")
         lbl_hold.setFixedWidth(_STEP_HOLD_W)
+        lbl_hold.setToolTip(PROCESS_CONFIG_TOOLTIPS["hold"])
 
         for w in (lbl_step, lbl_enabled, lbl_target, lbl_dac, lbl_interval, lbl_hold):
             header_layout.addWidget(w)
@@ -267,10 +297,18 @@ class ProcessConfigDialog(QDialog):
         self.holdControlIntervalSpin = self._make_double_spin(0.1, 60.0, step=0.5, decimals=1)
         self.fineStepDacSpin = self._make_int_spin(1, 1000, step=1)
 
-        hold_form.addRow("Rate Tolerance Ratio", self.rateTolRatioSpin)
-        hold_form.addRow("Rate Stable Sec", self.rateStableSecSpin)
-        hold_form.addRow("Control Interval (s)", self.holdControlIntervalSpin)
-        hold_form.addRow("Fine Step DAC", self.fineStepDacSpin)
+        self._add_form_row_with_tooltip(
+            hold_form, "Rate Tolerance Ratio", self.rateTolRatioSpin, PROCESS_CONFIG_TOOLTIPS["rate_tol_ratio"]
+        )
+        self._add_form_row_with_tooltip(
+            hold_form, "Rate Stable Sec", self.rateStableSecSpin, PROCESS_CONFIG_TOOLTIPS["rate_stable_sec"]
+        )
+        self._add_form_row_with_tooltip(
+            hold_form, "Control Interval (s)", self.holdControlIntervalSpin, PROCESS_CONFIG_TOOLTIPS["hold_control_interval_s"]
+        )
+        self._add_form_row_with_tooltip(
+            hold_form, "Fine Step DAC", self.fineStepDacSpin, PROCESS_CONFIG_TOOLTIPS["fine_step_dac"]
+        )
 
         body_root.addWidget(hold_box)
 
@@ -286,11 +324,21 @@ class ProcessConfigDialog(QDialog):
         self.sensorNoneAbortSpin = self._make_double_spin(0.0, 99999.0, step=1.0, decimals=1)
         self.adcNoneAbortSpin = self._make_double_spin(0.0, 99999.0, step=1.0, decimals=1)
 
-        safety_form.addRow("Max DAC", self.dacMaxSpin)
-        safety_form.addRow("Rate Abort Ratio", self.rateAbortRatioSpin)
-        safety_form.addRow("Rate Abort Sec", self.rateAbortSecSpin)
-        safety_form.addRow("Sensor None Abort (s)", self.sensorNoneAbortSpin)
-        safety_form.addRow("ADC None Abort (s)", self.adcNoneAbortSpin)
+        self._add_form_row_with_tooltip(
+            safety_form, "Max DAC", self.dacMaxSpin, PROCESS_CONFIG_TOOLTIPS["dac_max"]
+        )
+        self._add_form_row_with_tooltip(
+            safety_form, "Rate Abort Ratio", self.rateAbortRatioSpin, PROCESS_CONFIG_TOOLTIPS["rate_abort_ratio"]
+        )
+        self._add_form_row_with_tooltip(
+            safety_form, "Rate Abort Sec", self.rateAbortSecSpin, PROCESS_CONFIG_TOOLTIPS["rate_abort_sec"]
+        )
+        self._add_form_row_with_tooltip(
+            safety_form, "Sensor None Abort (s)", self.sensorNoneAbortSpin, PROCESS_CONFIG_TOOLTIPS["sensor_none_abort_s"]
+        )
+        self._add_form_row_with_tooltip(
+            safety_form, "ADC None Abort (s)", self.adcNoneAbortSpin, PROCESS_CONFIG_TOOLTIPS["adc_none_abort_s"]
+        )
 
         body_root.addWidget(safety_box)
         body_root.addStretch(1)
@@ -303,6 +351,29 @@ class ProcessConfigDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         root.addWidget(buttons)
+
+    def _add_form_row_with_tooltip(self, form: QFormLayout, label_text: str, widget: QWidget, tooltip: str) -> None:
+        lbl = QLabel(label_text, self)
+        lbl.setToolTip(tooltip)
+        widget.setToolTip(tooltip)
+        form.addRow(lbl, widget)
+
+    def _set_step_widget_tooltips(
+        self,
+        *,
+        lbl_step: QLabel,
+        chk: QCheckBox,
+        target_adc: QDoubleSpinBox,
+        dac_step: QSpinBox,
+        interval: QDoubleSpinBox,
+        hold: QDoubleSpinBox,
+    ) -> None:
+        lbl_step.setToolTip("공정 상승 step 번호입니다.")
+        chk.setToolTip(PROCESS_CONFIG_TOOLTIPS["step_enabled"])
+        target_adc.setToolTip(PROCESS_CONFIG_TOOLTIPS["target_adc"])
+        dac_step.setToolTip(PROCESS_CONFIG_TOOLTIPS["dac_step"])
+        interval.setToolTip(PROCESS_CONFIG_TOOLTIPS["interval"])
+        hold.setToolTip(PROCESS_CONFIG_TOOLTIPS["hold"])
 
     def _add_step_row_ui(self, step_data: dict[str, Any] | None = None) -> None:
         if len(self._step_rows) >= MAX_STEPS:
@@ -348,6 +419,15 @@ class ProcessConfigDialog(QDialog):
         dac_step.setValue(int(step_data.get("dac_step", 10)))
         interval.setValue(float(step_data.get("dac_interval_sec", 30.0)))
         hold.setValue(float(step_data.get("hold_sec", step_data.get("rate_wait_sec", step_data.get("delay_s", 0.0)))))
+
+        self._set_step_widget_tooltips(
+            lbl_step=lbl_step,
+            chk=chk,
+            target_adc=target_adc,
+            dac_step=dac_step,
+            interval=interval,
+            hold=hold,
+        )
 
         row_info = {
             "frame": frame,

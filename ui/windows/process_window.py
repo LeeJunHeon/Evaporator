@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Any, TYPE_CHECKING
 
-from PySide6.QtWidgets import QWidget, QMessageBox, QVBoxLayout, QApplication
+from PySide6.QtWidgets import QWidget, QMessageBox, QVBoxLayout, QApplication, QPushButton
 from PySide6.QtCore import QTimer
 
 from ui.windows.mainWindow import Ui_Form
@@ -72,11 +72,16 @@ class ProcessWindow(QWidget):
         self._log_service: Any = None
         self._stm_service: Any = None
         self._acs_service: Any = None
+        self._run_summary_service: Any = None
+        self._recommendation_service: Any = None
 
         # ✅ Start preflight 상태
         self._start_worker: Optional[ProcessStartWorker] = None
         self._start_in_progress: bool = False
         self._pending_run_cfg: Optional[dict[str, Any]] = None
+        self._active_run_cfg: Optional[dict[str, Any]] = None
+        self._active_run_profile: Optional[dict[str, Any]] = None
+        self._last_recommendation: Optional[dict[str, Any]] = None
 
         # ✅ UI에 "실제로 connect된 STM 인스턴스" 추적용(경고/중복 connect 방지)
         self._stm_ui_bound: bool = False
@@ -105,6 +110,7 @@ class ProcessWindow(QWidget):
         cfg_btn = getattr(self.ui, "processConfigBtn", None)
         if cfg_btn is not None and hasattr(cfg_btn, "clicked"):
             cfg_btn.clicked.connect(self._open_process_config_dialog)
+        self._setup_recommendation_ui()
 
         # ✅ 새 프로세스 설정(ADC step 기반) 보관
         self._process_cfg: dict[str, Any] = self._default_process_config()
@@ -132,7 +138,8 @@ class ProcessWindow(QWidget):
         self.hmi_window = hmi_window
 
     def set_runtime_objects(self, plc_binder, ini_path: Path, *, process_controller=None, log_service=None,
-                            stm_service=None, acs_service=None) -> None:
+                            stm_service=None, acs_service=None, run_summary_service=None,
+                            recommendation_service=None) -> None:
         self._plc_binder = plc_binder
         self._ini_path = Path(ini_path)
 
@@ -140,6 +147,8 @@ class ProcessWindow(QWidget):
         self._log_service = log_service
         self._stm_service = stm_service
         self._acs_service = acs_service
+        self._run_summary_service = run_summary_service
+        self._recommendation_service = recommendation_service
 
         # PROCESS 로그는 위젯 후킹에 의존하지 않고
         # _append_process_log()에서 명시적으로 run_line()까지 보낸다.
@@ -183,6 +192,29 @@ class ProcessWindow(QWidget):
             if hasattr(w, "setWordWrap"):
                 w.setWordWrap(True)
 
+        except Exception:
+            pass
+
+    def _setup_recommendation_ui(self) -> None:
+        cfg_btn = getattr(self.ui, "processConfigBtn", None)
+        parent = getattr(self.ui, "page_2", None)
+        if cfg_btn is None or parent is None:
+            return
+
+        try:
+            cfg_btn.setGeometry(0, 548, 92, 32)
+        except Exception:
+            pass
+
+        btn = getattr(self, "_recommendation_btn", None)
+        if btn is None:
+            btn = QPushButton("Recommend", parent)
+            btn.clicked.connect(self._on_recommendation_clicked)
+            self._recommendation_btn = btn
+
+        try:
+            btn.setGeometry(99, 548, 92, 32)
+            btn.setAutoDefault(False)
         except Exception:
             pass
 
@@ -257,7 +289,106 @@ class ProcessWindow(QWidget):
             with contextlib.suppress(Exception):
                 ls.run_line(line)
 
-    def _open_process_run_log(self, run_id: str, run_cfg: dict[str, Any]) -> None:
+    @staticmethod
+    def _strip_process_log_tag_prefix(body: str, tag: str) -> str:
+        text = str(body or "").strip()
+        if not text or not tag:
+            return text
+        pattern = rf"^(?:\[{re.escape(str(tag).strip())}\]\s*)+"
+        return re.sub(pattern, "", text, flags=re.IGNORECASE).strip()
+
+    def _format_process_log_line(self, raw: str) -> str:
+        text = str(raw or "").strip()
+        if not text:
+            return ""
+
+        time_text = datetime.now().strftime("%H:%M:%S")
+        payload = text
+
+        m = re.match(r"^\[(?:\d{4}-\d{2}-\d{2}\s+)?(\d{2}:\d{2}:\d{2})\]\s+(.*)$", text)
+        if m:
+            time_text = str(m.group(1) or "").strip() or time_text
+            payload = str(m.group(2) or "").strip()
+
+        level = ""
+        tag = ""
+
+        level_match = re.match(r"^\[([A-Z]+)\]\s*(.*)$", payload)
+        if level_match and str(level_match.group(1) or "").upper() in ("INFO", "WARN", "WARNING", "ERROR", "DEBUG"):
+            level = str(level_match.group(1) or "").strip().upper()
+            payload = str(level_match.group(2) or "").strip()
+
+        tag_match = re.match(r"^\[([^\]]+)\]\s*(.*)$", payload)
+        if tag_match:
+            tag = str(tag_match.group(1) or "").strip()
+            payload = str(tag_match.group(2) or "").strip()
+
+        if tag:
+            payload = self._strip_process_log_tag_prefix(payload, tag)
+        if level in ("WARN", "WARNING", "ERROR"):
+            level_pattern = "WARN|WARNING" if level == "WARNING" else re.escape(level)
+            payload = re.sub(rf"^\[(?:{level_pattern})\]\s*", "", payload, flags=re.IGNORECASE)
+        elif level == "INFO":
+            payload = re.sub(r"^\[INFO\]\s*", "", payload, flags=re.IGNORECASE)
+
+        prefix = ""
+        if tag:
+            prefix = f"[{tag}]"
+            if level in ("WARN", "WARNING", "ERROR"):
+                prefix += f"[{'WARN' if level == 'WARNING' else level}]"
+        elif level in ("WARN", "WARNING", "ERROR"):
+            prefix = f"[{'WARN' if level == 'WARNING' else level}]"
+
+        if prefix and payload:
+            return f"[{time_text}] {prefix} {payload}"
+        if prefix:
+            return f"[{time_text}] {prefix}"
+        if payload:
+            return f"[{time_text}] {payload}"
+        return f"[{time_text}]"
+
+    def _append_process_log(self, text: str) -> None:
+        raw = str(text or "").strip()
+        if not raw:
+            return
+
+        line = self._format_process_log_line(raw)
+
+        _append_text(getattr(self.ui, "logWindow", None), line)
+
+        ls = self._log_service
+        if self._active_run_id and ls is not None and hasattr(ls, "run_line"):
+            with contextlib.suppress(Exception):
+                ls.run_line(line)
+
+    def _build_run_profile(self, run_cfg: dict[str, Any]) -> Optional[dict[str, Any]]:
+        pc = self._process_controller
+        if pc is None or not hasattr(pc, "build_run_profile"):
+            return None
+        return dict(pc.build_run_profile(run_cfg) or {})
+
+    def _apply_process_config(self, new_cfg: Any, *, log_prefix: str) -> None:
+        self._process_cfg = self._normalize_process_config(new_cfg)
+
+        steps = self._process_cfg.get("ramp_steps") or []
+        step_desc = ", ".join(
+            f"{idx+1}: ADC {float(s.get('target_adc', 0.0)):.1f}, "
+            f"DAC+{int(s.get('dac_step', 0))}, "
+            f"{float(s.get('dac_interval_sec', 0.0)):.1f}s, "
+            f"hold {float(s.get('hold_sec', 0.0)):.1f}s"
+            for idx, s in enumerate(steps)
+        )
+
+        if self._plot is not None and hasattr(self._plot, "set_power_default_range"):
+            try:
+                adc_range = self._get_plot_adc_default_range()
+                self._plot.set_power_default_range(*adc_range)
+            except Exception:
+                pass
+
+        self._append_process_log(f"{log_prefix} steps={len(steps)} | {step_desc}")
+
+    def _open_process_run_log(self, run_id: str, run_cfg: dict[str, Any], run_profile: Optional[dict[str, Any]] = None) -> None:
         self._active_run_id = str(run_id)
 
         ls = self._log_service
@@ -265,15 +396,20 @@ class ProcessWindow(QWidget):
             return
 
         recipe_name = str(run_cfg.get("process_name", "") or "").strip()
+        profile = dict(run_profile or {})
         meta = {
             "process_name": recipe_name,
             "material_name": str(run_cfg.get("material_name", "") or "").strip(),
+            "density": run_cfg.get("density"),
+            "z_factor": run_cfg.get("z_factor"),
             "use_power1": bool(run_cfg.get("use_power1", False)),
             "use_power2": bool(run_cfg.get("use_power2", False)),
             "target_rate": run_cfg.get("target_rate"),
             "target_thickness": run_cfg.get("target_thickness"),
             "delay_min": run_cfg.get("delay_min"),
             "process_config": dict(run_cfg.get("process_config") or {}),
+            "process_config_hash": str(profile.get("process_config_hash", "") or ""),
+            "hw_mapping": dict(profile.get("hw_mapping") or {}),
         }
 
         with contextlib.suppress(Exception):
@@ -286,6 +422,16 @@ class ProcessWindow(QWidget):
 
         with contextlib.suppress(Exception):
             ls.close_run()
+
+    def _store_finished_run_summary(self, *, run_profile: dict[str, Any], result: Any) -> None:
+        svc = self._run_summary_service
+        if not run_profile or svc is None or not hasattr(svc, "store_finished_run"):
+            return
+
+        try:
+            svc.store_finished_run(run_profile=dict(run_profile), result=result)
+        except Exception as exc:
+            self._append_process_log(f"[HISTORY][WARN] summary save failed: {exc!r}")
 
     def _bind_stm_ui(self, stm):
         """
@@ -501,6 +647,8 @@ class ProcessWindow(QWidget):
             self._close_process_run_log()
             self._clear_run_power_flags()
             self._active_run_id = None
+            self._active_run_cfg = None
+            self._active_run_profile = None
             return
 
         self._pending_run_cfg = dict(run_cfg)
@@ -549,6 +697,8 @@ class ProcessWindow(QWidget):
         self._close_process_run_log()
         self._active_run_id = None
         self._clear_run_power_flags()
+        self._active_run_cfg = None
+        self._active_run_profile = None
 
         if show_warning:
             QMessageBox.warning(self, title, message)
@@ -688,17 +838,29 @@ class ProcessWindow(QWidget):
             pass
 
         # 1) UI 입력 검증
-        run_cfg = self._collect_ui_run_cfg()
+        run_cfg = self._collect_ui_run_cfg(require_process_name=True)
         if run_cfg is None:
+            return
+
+        try:
+            run_profile = self._build_run_profile(run_cfg)
+        except Exception as exc:
+            QMessageBox.warning(self, "Process", f"Run profile build failed:\n{exc!r}")
+            return
+
+        if not run_profile:
+            QMessageBox.warning(self, "Process", "Run profile is not available.")
             return
         
         self._set_process_status("공정 시작 요청", "PLC / STM pre-check 진행")
 
         self._latch_run_power_flags(run_cfg)
+        self._active_run_cfg = dict(run_cfg)
+        self._active_run_profile = dict(run_profile)
 
         # 2) run_id 생성 + run 로그 open
         run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self._open_process_run_log(run_id, run_cfg)
+        self._open_process_run_log(run_id, run_cfg, run_profile)
 
         proc_cfg = run_cfg.get("process_config") or {}
         steps = proc_cfg.get("ramp_steps") or []
@@ -728,6 +890,8 @@ class ProcessWindow(QWidget):
             self._close_process_run_log()
             self._clear_run_power_flags()
             self._active_run_id = None
+            self._active_run_cfg = None
+            self._active_run_profile = None
             return
 
         # 4) STM service 준비(여기서는 blocking wait 안 함)
@@ -738,11 +902,14 @@ class ProcessWindow(QWidget):
             self._close_process_run_log()
             self._clear_run_power_flags()
             self._active_run_id = None
+            self._active_run_cfg = None
+            self._active_run_profile = None
             return
 
         # 5) 실제 연결 대기 / crystal health는 worker로 넘긴다
         self._start_async_preflight(run_cfg)
             
+    """
     def _on_stop_clicked(self) -> None:
         # 0) Start preflight 중이면 우선 취소
         if self._has_active_start_preflight():
@@ -791,6 +958,51 @@ class ProcessWindow(QWidget):
         self._close_process_run_log()
         self._active_run_id = None
 
+    """
+
+    def _on_stop_clicked(self) -> None:
+        if self._has_active_start_preflight():
+            worker = self._start_worker
+            if worker is not None:
+                with contextlib.suppress(Exception):
+                    worker.request_cancel()
+            self._append_process_log("[UI] STM preflight cancel requested")
+            self._set_process_status("STM preflight cancel requested")
+            return
+
+        pc = self._process_controller
+
+        if pc is not None:
+            try:
+                is_running = bool(pc.is_running()) if hasattr(pc, "is_running") else False
+                if is_running:
+                    pc.stop()
+                    self._append_process_log("[UI] Stop requested -> waiting for engine safety shutdown")
+                    self._set_process_status("Stop requested", "engine safety shutdown in progress")
+                    return
+            except Exception as e:
+                self._append_process_log(f"[STOP FAIL] controller stop failed: {e!r}")
+
+        try:
+            self._emergency_safe_shutdown_plc_best_effort()
+            self._append_process_log("[SAFE] emergency fallback shutdown executed")
+            self._set_process_status("Emergency stop executed", "PLC fallback shutdown")
+        except Exception as e:
+            self._append_process_log(f"[SAFE][FAIL] emergency shutdown failed: {e!r}")
+            self._set_process_status("Emergency stop failed", f"{e!r}")
+
+        with contextlib.suppress(Exception):
+            self._rt_stop()
+        with contextlib.suppress(Exception):
+            self._shutdown_stm_with_ftm_off_best_effort()
+        with contextlib.suppress(Exception):
+            self._reset_process_ui(reset_monitor=False)
+
+        self._close_process_run_log()
+        self._active_run_id = None
+        self._active_run_cfg = None
+        self._active_run_profile = None
+
     def _split_status_message(self, st: Any) -> tuple[str, list[str], str]:
         msg = str(self._status_value(st, "message", "") or "").strip()
         if not msg:
@@ -807,6 +1019,7 @@ class ProcessWindow(QWidget):
             return "", [], time_info
 
         return parts[0], parts[1:], time_info
+        """
 
         # 1) controller가 message를 직접 준 경우
         if msg:
@@ -828,6 +1041,8 @@ class ProcessWindow(QWidget):
             return ("진행중", step)
 
         return ("---", "")
+
+        """
 
     def _on_status(self, st: Any) -> None:
         self._try_update_last_power(st)
@@ -978,6 +1193,174 @@ class ProcessWindow(QWidget):
 
         return "\n".join(lines[:4])
 
+    def _split_status_message(self, st: Any) -> tuple[str, list[str], list[str], list[str]]:
+        msg = str(self._status_value(st, "message", "") or "").strip()
+        if not msg:
+            return "", [], [], []
+
+        time_parts: list[str] = []
+        while True:
+            m = re.match(r"^\[([^\]]+)\]\s*(.*)$", msg)
+            if not m:
+                break
+            time_text = str(m.group(1) or "").strip()
+            if time_text:
+                time_parts.append(time_text)
+            msg = str(m.group(2) or "").strip()
+            if not msg:
+                break
+
+        action = ""
+        value_parts: list[str] = []
+        extra_parts: list[str] = []
+
+        for raw_part in [part.strip() for part in msg.split("|") if str(part).strip()]:
+            part = str(raw_part or "").strip()
+            if not part:
+                continue
+            if self._is_status_time_part(part):
+                cleaned = re.sub(r"^\[(.*)\]$", r"\1", part).strip()
+                time_parts.append(cleaned or part)
+                continue
+            if self._is_status_value_part(part):
+                value_parts.append(part)
+                continue
+            if not action:
+                action = part
+            else:
+                extra_parts.append(part)
+
+        return action, value_parts, time_parts, extra_parts
+
+    @staticmethod
+    def _format_status_phase(phase: Any) -> str:
+        raw = str(getattr(phase, "value", phase) or "").strip().upper()
+        return {
+            "IDLE": "대기",
+            "RUNNING": "실행중",
+            "PAUSED": "일시정지",
+            "STOPPING": "정지중",
+            "FINISHED": "완료",
+            "ERROR": "오류",
+        }.get(raw, raw.replace("_", " ").title() if raw else "---")
+
+    @staticmethod
+    def _format_status_step(step_idx: Any, step_name: Any) -> str:
+        name = str(step_name or "").strip()
+        try:
+            idx = int(step_idx)
+        except Exception:
+            idx = -1
+
+        if idx >= 0 and name:
+            return f"#{idx + 1} {name}"
+        if idx >= 0:
+            return f"#{idx + 1}"
+        return name
+
+    @staticmethod
+    def _same_status_text(left: str, right: str) -> bool:
+        def _norm(text: str) -> str:
+            s = str(text or "").strip().upper().replace("_", " ")
+            return re.sub(r"\s+", " ", s)
+
+        return bool(left and right and _norm(left) == _norm(right))
+
+    @staticmethod
+    def _is_status_value_part(part: str) -> bool:
+        text = str(part or "").strip()
+        if not text:
+            return False
+        upper = text.upper()
+        return bool(
+            re.match(r"^(ADC\d*|DAC\d*|RATE|THICKNESS|PRESSURE)\b", upper)
+            or re.match(r"^(ADC\d*|DAC\d*|RATE|THICKNESS|PRESSURE)\s*[:=]", upper)
+        )
+
+    @staticmethod
+    def _is_status_time_part(part: str) -> bool:
+        text = str(part or "").strip()
+        if not text:
+            return False
+        if re.fullmatch(r"\[[^\]]+\]", text):
+            return True
+        if not re.search(r"\d", text):
+            return False
+        keywords = ("남은", "경과", "다음", "후", "sec", "secs", "second", "seconds", "ms", "min", "mins", "minute", "minutes", "초", "분")
+        lower = text.lower()
+        return any(keyword in text or keyword in lower for keyword in keywords)
+
+    def _build_status_value_parts(self, st: Any, message_value_parts: list[str]) -> list[str]:
+        if message_value_parts:
+            return [str(part).strip() for part in message_value_parts if str(part).strip()][:4]
+
+        parts: list[str] = []
+
+        pressure = self._to_float_or_none(self._status_value(st, "pressure", None))
+        thickness = self._to_float_or_none(self._status_value(st, "thickness_a", None))
+        rate = self._to_float_or_none(self._status_value(st, "rate_a_s", None))
+
+        if pressure is not None:
+            parts.append(f"pressure={pressure:.2e} Torr")
+        if thickness is not None:
+            parts.append(f"thickness={thickness:.1f} A")
+        if rate is not None:
+            parts.append(f"rate={rate:.3f} A/s")
+
+        for label, value, fmt in (
+            ("ADC1", self._status_value(st, "adc1", None), "{:.1f}"),
+            ("ADC2", self._status_value(st, "adc2", None), "{:.1f}"),
+            ("DAC1", self._status_value(st, "dac1", None), "{:.0f}"),
+            ("DAC2", self._status_value(st, "dac2", None), "{:.0f}"),
+        ):
+            number = self._to_float_or_none(value)
+            if number is not None:
+                parts.append(f"{label}={fmt.format(number)}")
+
+        return parts[:4]
+
+    def _build_process_status_summary(self, st: Any) -> str:
+        phase_text = self._format_status_phase(self._status_value(st, "phase", ""))
+        step_text = self._format_status_step(
+            self._status_value(st, "step_idx", -1),
+            self._status_value(st, "step_name", self._status_value(st, "step", "")),
+        )
+        action, value_parts, time_parts, extra_parts = self._split_status_message(st)
+
+        lines: list[str] = [phase_text or "---"]
+
+        if step_text:
+            lines.append(f"단계: {step_text}")
+
+        action_parts: list[str] = []
+        if action and not self._same_status_text(action, phase_text) and not self._same_status_text(action, step_text):
+            action_parts.append(action)
+        for extra in extra_parts:
+            if len(action_parts) >= 3:
+                break
+            if not self._same_status_text(extra, phase_text) and not self._same_status_text(extra, step_text):
+                action_parts.append(extra)
+
+        if action_parts:
+            lines.append(f"동작: {' | '.join(action_parts)}")
+
+        current_parts = self._build_status_value_parts(st, value_parts)
+        tail_parts: list[str] = []
+        if current_parts:
+            tail_parts.append(f"현재값: {' | '.join(current_parts[:4])}")
+        if time_parts:
+            tail_parts.append(f"시간: {' | '.join([part for part in time_parts if part][:2])}")
+
+        if tail_parts:
+            lines.append(" | ".join(tail_parts))
+
+        if len(lines) == 1:
+            raw_msg = str(self._status_value(st, "message", "") or "").strip()
+            if raw_msg:
+                lines.append(f"동작: {raw_msg}")
+
+        return "\n".join(lines[:4])
+
     def _get_plot_adc_default_range(self) -> tuple[float, float]:
         cfg = self._normalize_process_config(self._process_cfg)
 
@@ -1073,6 +1456,8 @@ class ProcessWindow(QWidget):
             self._set_process_status("오류 발생", f"{err!r}")
 
     def _on_finished(self, result: Any) -> None:
+        run_profile = dict(self._active_run_profile or {})
+
         try:
             with contextlib.suppress(Exception):
                 self._rt_stop()
@@ -1113,7 +1498,17 @@ class ProcessWindow(QWidget):
             with contextlib.suppress(Exception):
                 self._close_process_run_log()
 
+            with contextlib.suppress(Exception):
+                ls = self._log_service
+                if ls is not None and hasattr(ls, "flush"):
+                    ls.flush(timeout_ms=3000)
+
+            with contextlib.suppress(Exception):
+                self._store_finished_run_summary(run_profile=run_profile, result=result)
+
             self._active_run_id = None
+            self._active_run_cfg = None
+            self._active_run_profile = None
             self._clear_run_power_flags()
 
             with contextlib.suppress(Exception):
@@ -1393,29 +1788,60 @@ class ProcessWindow(QWidget):
             new_cfg = getter()
         else:
             new_cfg = getattr(dlg, "config", None)
+        self._apply_process_config(new_cfg, log_prefix="[CFG] Process config updated |")
 
-        self._process_cfg = self._normalize_process_config(new_cfg)
+    def _on_recommendation_clicked(self) -> None:
+        if self._recommendation_service is None or not hasattr(self._recommendation_service, "recommend"):
+            QMessageBox.information(self, "Recommendation", "Recommendation service is not available.")
+            return
 
-        steps = self._process_cfg.get("ramp_steps") or []
-        step_desc = ", ".join(
-            f"{idx+1}: ADC {float(s.get('target_adc', 0.0)):.1f}, "
-            f"DAC+{int(s.get('dac_step', 0))}, "
-            f"{float(s.get('dac_interval_sec', 0.0)):.1f}s, "
-            f"hold {float(s.get('hold_sec', 0.0)):.1f}s"
-            for idx, s in enumerate(steps)
-        )
+        run_cfg = self._collect_ui_run_cfg(require_process_name=False)
+        if run_cfg is None:
+            return
 
-        if self._plot is not None and hasattr(self._plot, "set_power_default_range"):
-            try:
-                adc_range = self._get_plot_adc_default_range()
-                self._plot.set_power_default_range(*adc_range)
-            except Exception:
-                pass
+        try:
+            run_profile = self._build_run_profile(run_cfg)
+        except Exception as exc:
+            QMessageBox.warning(self, "Recommendation", f"Run profile build failed:\n{exc!r}")
+            return
 
-        self._append_process_log(
-            "[CFG] Process config updated | "
-            f"steps={len(steps)} | {step_desc}"
-        )
+        if not run_profile:
+            QMessageBox.warning(self, "Recommendation", "Run profile is not available.")
+            return
+
+        try:
+            recommendation = self._recommendation_service.recommend(run_profile)
+        except Exception as exc:
+            QMessageBox.warning(self, "Recommendation", f"Recommendation query failed:\n{exc!r}")
+            self._append_process_log(f"[RECO][ERR] query failed: {exc!r}")
+            return
+
+        if not recommendation:
+            self._append_process_log("[RECO] no recommendation data")
+            QMessageBox.information(self, "Recommendation", "추천 데이터가 없습니다.")
+            return
+
+        try:
+            from ui.history_recommendation_dialog import HistoryRecommendationDialog
+        except Exception as exc:
+            QMessageBox.warning(self, "Recommendation", f"Dialog import failed:\n{exc!r}")
+            return
+
+        dlg = HistoryRecommendationDialog(recommendation=recommendation, parent=self)
+        if not dlg.exec():
+            return
+
+        if not dlg.applied():
+            self._append_process_log("[RECO] recommendation viewed without apply")
+            return
+
+        recommended_cfg = dlg.recommended_process_config()
+        if not recommended_cfg:
+            QMessageBox.warning(self, "Recommendation", "Recommended config is empty.")
+            return
+
+        self._last_recommendation = dict(recommendation)
+        self._apply_process_config(recommended_cfg, log_prefix="[RECO] Applied recommendation |")
 
     # ================== 그래프 설정 ==================
     def _init_rt_plot(self) -> None:
@@ -1793,7 +2219,7 @@ class ProcessWindow(QWidget):
         except Exception:
             return None
 
-    def _collect_ui_run_cfg(self) -> Optional[dict[str, Any]]:
+    def _collect_ui_run_cfg(self, *, require_process_name: bool = True) -> Optional[dict[str, Any]]:
         # ✅ Power 선택: 1개 또는 2개 허용
         p1 = bool(getattr(getattr(self.ui, "sourcePower1", None), "isChecked", lambda: False)())
         p2 = bool(getattr(getattr(self.ui, "sourcePower2", None), "isChecked", lambda: False)())
@@ -1914,7 +2340,7 @@ class ProcessWindow(QWidget):
         w = getattr(self.ui, "processNameEdit", None)
         if w is not None and hasattr(w, "text"):
             pname = str(w.text()).strip()
-        if not pname:
+        if require_process_name and not pname:
             QMessageBox.warning(self, "Input", "Process Name을 입력하세요.")
             return None
 

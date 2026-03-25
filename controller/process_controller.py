@@ -13,6 +13,8 @@ ProcessController
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from pathlib import Path
 from typing import Optional, Union, Any
@@ -343,6 +345,58 @@ class ProcessController(QObject):
     def build_recipe_from_ui(self, run_cfg: dict[str, Any]) -> ProcessRecipe:
         ctx = self._prepare_recipe_build_context(run_cfg)
         return self._build_recipe_from_context(ctx)
+
+    def build_run_profile(self, run_cfg: dict[str, Any]) -> dict[str, Any]:
+        ctx = self._prepare_recipe_build_context(run_cfg)
+        return self._build_run_profile_from_context(ctx)
+
+    def _build_run_profile_from_context(self, ctx: dict[str, Any]) -> dict[str, Any]:
+        process_config = self._copy_exact_process_config(ctx["process_config"])
+        hw_mapping = {
+            "temp_force_power2_sw": bool(ctx["power"]["temp_force_power2_sw"]),
+            "power1_feedback_adc2": bool(ctx["power"]["power1_feedback_adc2"]),
+        }
+        process_config_hash = self._hash_canonical_payload(process_config)
+
+        fingerprint = {
+            "material_name": ctx["material_cfg"]["material_name"],
+            "density": ctx["material_cfg"]["density"],
+            "z_factor": ctx["material_cfg"]["z_factor"],
+            "target_rate": ctx["material_cfg"]["target_rate"],
+            "target_thickness": ctx["material_cfg"]["target_thickness"],
+            "delay_min": ctx["material_cfg"]["delay_min"],
+            "use_power1": bool(ctx["power"]["use_power1"]),
+            "use_power2": bool(ctx["power"]["use_power2"]),
+            "hw_mapping": dict(hw_mapping),
+            "process_config_hash": process_config_hash,
+        }
+
+        return {
+            "process_name": ctx["process_name"],
+            "recipe_name": ctx["process_name"],
+            "material_name": ctx["material_cfg"]["material_name"],
+            "density": ctx["material_cfg"]["density"],
+            "z_factor": ctx["material_cfg"]["z_factor"],
+            "target_rate": ctx["material_cfg"]["target_rate"],
+            "target_thickness": ctx["material_cfg"]["target_thickness"],
+            "delay_min": ctx["material_cfg"]["delay_min"],
+            "use_power1": bool(ctx["power"]["use_power1"]),
+            "use_power2": bool(ctx["power"]["use_power2"]),
+            "hw_mapping": dict(hw_mapping),
+            "process_config": process_config,
+            "process_config_hash": process_config_hash,
+            "runtime_meta": dict(ctx["runtime_meta"]),
+            "fingerprint": fingerprint,
+        }
+
+    @staticmethod
+    def _canonical_json_payload(payload: Any) -> str:
+        return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+    @classmethod
+    def _hash_canonical_payload(cls, payload: Any) -> str:
+        data = cls._canonical_json_payload(payload).encode("utf-8")
+        return hashlib.sha256(data).hexdigest()
         
     def _to_float(self, value: Any, field_name: str) -> float:
         try:
@@ -822,12 +876,16 @@ class ProcessController(QObject):
             self.sig_ui_log.emit(f"{prefix} {text}")
 
     @staticmethod
-    def _trim_trace_prefix(msg: str, prefix: str) -> str:
+    def _strip_device_prefix(msg: str, tag: str) -> str:
         text = str(msg or "").strip()
-        head = f"[{prefix}]"
-        if text.startswith(head):
-            return text[len(head):].strip()
-        return text
+        if not text:
+            return ""
+        pattern = rf"^(?:\[{re.escape(str(tag or '').strip())}\]\s*)+"
+        return re.sub(pattern, "", text, flags=re.IGNORECASE).strip()
+
+    @classmethod
+    def _trim_trace_prefix(cls, msg: str, prefix: str) -> str:
+        return cls._strip_device_prefix(msg, prefix)
 
     @staticmethod
     def _format_pressure_torr(value: Any) -> str:
@@ -991,7 +1049,9 @@ class ProcessController(QObject):
         except Exception:
             return
 
-        msg = self._format_plc_trace_message(d)
+        msg = self._strip_device_prefix(d.get("msg", ""), "PLC")
+        if not msg:
+            msg = self._format_plc_trace_message(d)
         if not msg:
             return
 
@@ -1011,23 +1071,28 @@ class ProcessController(QObject):
         if token in ("S", "T"):
             return
 
+        msg = self._strip_device_prefix(d.get("msg", ""), "STM")
+        if not msg:
+            msg = self._format_stm_trace_message(d)
+
         self._emit_process_trace_log(
             tag="STM",
-            msg=self._format_stm_trace_message(d),
+            msg=msg,
             ok=bool(d.get("ok", True)),
         )
 
     def _on_stm_connected(self, connected: bool) -> None:
         self._emit_process_trace_log(
             tag="STM",
-            msg=("connected" if connected else "disconnected"),
+            msg=("연결됨" if connected else "연결 해제"),
             ok=bool(connected),
         )
 
     def _on_stm_error(self, s: str) -> None:
+        text = re.sub(r"^\[STMService\]\s*", "", str(s or "").strip())
         self._emit_process_trace_log(
             tag="STM",
-            msg=self._format_stm_error_message(s),
+            msg=self._strip_device_prefix(self._format_stm_error_message(text), "STM"),
             ok=False,
         )
 
@@ -1040,9 +1105,13 @@ class ProcessController(QObject):
         except Exception:
             return
 
+        msg = self._strip_device_prefix(d.get("msg", ""), "ACS")
+        if not msg:
+            msg = self._format_acs_trace_message(d)
+
         self._emit_process_trace_log(
             tag="ACS",
-            msg=self._format_acs_trace_message(d),
+            msg=msg,
             ok=bool(d.get("ok", True)),
         )
 

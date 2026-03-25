@@ -47,6 +47,8 @@ class HmiWindow(QWidget):
         self._stm_service: Any = None
         self._acs_service: Any = None
         self._turbovac_service: Any = None
+        self._run_summary_service: Any = None
+        self._recommendation_service: Any = None
 
         # Process 버튼: Process 창 앞으로 (기존 유지)
         self.ui.processBtn.clicked.connect(self.goto_process_window)
@@ -75,6 +77,8 @@ class HmiWindow(QWidget):
                 log_service=self._log_service,
                 stm_service=self._stm_service,
                 acs_service=self._acs_service,
+                run_summary_service=self._run_summary_service,
+                recommendation_service=self._recommendation_service,
             )
 
         # ✅ 이미 떠 있는 창도 최신 참조를 보게 함
@@ -141,6 +145,16 @@ class HmiWindow(QWidget):
         except Exception:
             pass
 
+        try:
+            pw._run_summary_service = self._run_summary_service
+        except Exception:
+            pass
+
+        try:
+            pw._recommendation_service = self._recommendation_service
+        except Exception:
+            pass
+
     def _sync_process_controller_runtime_refs(self) -> None:
         """
         HMI가 들고 있는 최신 runtime object를
@@ -177,6 +191,8 @@ class HmiWindow(QWidget):
         stm_service: Any = None,
         acs_service: Any = None,
         turbovac_service: Any = None,
+        run_summary_service: Any = None,
+        recommendation_service: Any = None,
     ) -> None:
         """main()에서 만든 런타임 객체 주입(PLC/센서 재연결에 사용)"""
         self._plc_binder = plc_binder
@@ -187,6 +203,8 @@ class HmiWindow(QWidget):
         self._stm_service = stm_service
         self._acs_service = acs_service
         self._turbovac_service = turbovac_service
+        self._run_summary_service = run_summary_service
+        self._recommendation_service = recommendation_service
 
         # ✅ HMI 로그 위젯을 LogService에 연결 (일별 로그 저장)
         if self._log_service is not None and hasattr(self._log_service, "attach_text_widget"):

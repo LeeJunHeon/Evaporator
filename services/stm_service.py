@@ -108,6 +108,40 @@ def _format_stm_io_trace(d: dict) -> str:
     return f"[STM] TX={tx!r} RX={rx!r}"
 
 
+def _format_stm_io_trace(d: dict) -> str:
+    tx = str(d.get("tx", "") or "").strip().upper()
+    rx = str(d.get("rx", "") or "").strip()
+    ok = bool(d.get("ok", True))
+    detail = str(d.get("detail", "") or "").strip()
+
+    body = rx
+    if body[:1].upper() in ("A", "B") and len(body) > 1:
+        body = body[1:].strip()
+
+    if not ok:
+        suffix = f" ({detail})" if detail else ""
+        return f"[STM] 통신 오류: tx={tx!r} rx={rx!r}{suffix}"
+
+    if tx == "U":
+        try:
+            hz = int(body)
+            return f"[STM] 센서 주파수: {hz / 1_000_000.0:.6f} MHz"
+        except Exception:
+            suffix = f" ({detail})" if detail else ""
+            return f"[STM] 센서 주파수 파싱 실패: tx={tx!r} rx={rx!r}{suffix}"
+
+    if tx == "V":
+        try:
+            return f"[STM] 크리스탈 수명: {float(body):.1f}%"
+        except Exception:
+            suffix = f" ({detail})" if detail else ""
+            return f"[STM] 크리스탈 수명 파싱 실패: tx={tx!r} rx={rx!r}{suffix}"
+
+    if detail:
+        return f"[STM] TX={tx!r} RX={rx!r} ({detail})"
+    return f"[STM] TX={tx!r} RX={rx!r}"
+
+
 # ============================================================
 # Snapshot
 # ============================================================

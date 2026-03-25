@@ -90,6 +90,10 @@ class CmdSetBaseDir(_CmdBase):
 class CmdStop(_CmdBase):
     pass
 
+@dataclass(frozen=True)
+class CmdBarrier(_CmdBase):
+    done_evt: threading.Event
+
 
 # ============================================================
 # Helper
@@ -318,6 +322,13 @@ class LogWriterWorker(QThread):
 
         if isinstance(cmd, CmdLog):
             self._write_log(cmd.level, cmd.msg, cmd.tag, cmd.also_ui, cmd.ts)
+            return
+
+        if isinstance(cmd, CmdBarrier):
+            try:
+                cmd.done_evt.set()
+            except Exception:
+                pass
             return
 
         self._write_log("WARN", f"Unknown command: {cmd!r}", "LogService", True, None)
@@ -1019,6 +1030,70 @@ class LogService(QObject):
     # ---------- config ----------
     def set_base_dir(self, base_dir: Union[str, Path]) -> None:
         self._worker.post(CmdSetBaseDir(Path(base_dir)))
+
+    def flush(self, timeout_ms: int = 2000) -> bool:
+        evt = threading.Event()
+        try:
+            self._worker.post(CmdBarrier(done_evt=evt))
+        except Exception:
+            return False
+        try:
+            return bool(evt.wait(max(0.1, float(timeout_ms) / 1000.0)))
+        except Exception:
+            return False
+
+    def get_storage_roots(self, *, force_resolve: bool = True) -> dict[str, Path]:
+        worker = self._worker
+
+        base_root = Path(getattr(worker, "_base_dir", Path.cwd()))
+        fallback_root = Path(getattr(worker, "_fallback_dir", Path.cwd()))
+
+        resolved_root = base_root
+        if force_resolve:
+            try:
+                resolved_root = Path(worker._resolve_base_dir(force=True))
+            except Exception:
+                resolved_root = base_root
+
+        return {
+            "base": base_root,
+            "fallback": fallback_root,
+            "resolved": resolved_root,
+        }
+
+    def build_run_file_stem(self, run_id: str, recipe_name: str = "") -> str:
+        rid = _safe_name(str(run_id or ""), 48) or _safe_name(datetime.now().strftime("%Y%m%d_%H%M%S"), 48)
+        rcp = _safe_name(str(recipe_name or ""), 48)
+        return f"{rid}_{rcp}" if rcp else rid
+
+    def find_run_artifacts(self, run_id: str, recipe_name: str = "") -> dict[str, Optional[Path]]:
+        stem = self.build_run_file_stem(run_id, recipe_name)
+
+        roots: list[Path] = []
+        for key in ("resolved", "base", "fallback"):
+            root = self.get_storage_roots(force_resolve=(key == "resolved")).get(key)
+            if root is not None and root not in roots:
+                roots.append(Path(root))
+
+        csv_path: Optional[Path] = None
+        log_path: Optional[Path] = None
+
+        for root in roots:
+            proc_candidate = root / "ProcessLog" / f"{stem}.csv"
+            if csv_path is None and proc_candidate.exists():
+                csv_path = proc_candidate
+
+            log_candidate = root / "ProcessWindowLog" / f"{stem}.log"
+            if log_path is None and log_candidate.exists():
+                log_path = log_candidate
+
+            if csv_path is not None and log_path is not None:
+                break
+
+        return {
+            "csv": csv_path,
+            "log": log_path,
+        }
 
     # ---------- UI widget hook ----------
     def _iter_widget_capture_lines(self, text: object, *, channel: str) -> list[str]:

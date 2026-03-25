@@ -21,6 +21,9 @@ from controller.hmi_plc_binder import HmiPlcBinder
 from controller.process_controller import ProcessController
 
 from services.log_service import LogService
+from services.history_store import HistoryStore
+from services.run_summary_service import RunSummaryService
+from services.recommendation_service import RecommendationService
 from services.acs_service import ACSService
 from services.turbovac_service import TurbovacService
 
@@ -150,6 +153,20 @@ def main():
     except Exception:
         log_service = None
 
+    history_store: Any = None
+    run_summary_service: Any = None
+    recommendation_service: Any = None
+    try:
+        if log_service is not None:
+            history_store = HistoryStore.from_log_service(log_service)
+            run_summary_service = RunSummaryService(history_store=history_store, log_service=log_service)
+            recommendation_service = RecommendationService(history_store=history_store)
+    except Exception as e:
+        history_store = None
+        run_summary_service = None
+        recommendation_service = None
+        _hmi_log(f"[BOOT][WARN] history/recommendation init failed: {e!r}")
+
     # ------------------------------
     # ProcessController (신규)
     # ------------------------------
@@ -255,6 +272,8 @@ def main():
         stm_service=stm_service,
         acs_service=acs_service,   # ✅ 부팅에서 만든 ACSService 주입
         turbovac_service=turbovac_service,
+        run_summary_service=run_summary_service,
+        recommendation_service=recommendation_service,
     )
 
     # ✅ HMI 표시 (기존 유지)

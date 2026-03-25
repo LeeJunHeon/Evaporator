@@ -1010,7 +1010,8 @@ class LogService(QObject):
         parent: Optional[QObject] = None,
     ):
         super().__init__(parent)
-        self._worker = LogWriterWorker(app_name=app_name, base_dir=base_dir)
+        self._app_name = str(app_name or "Evaporator")
+        self._worker = LogWriterWorker(app_name=self._app_name, base_dir=base_dir)
         self._worker.sig_line.connect(self.sig_line)
         self._worker.sig_error.connect(self.sig_error)
 

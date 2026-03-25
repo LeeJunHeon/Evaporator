@@ -672,12 +672,28 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         setattr(engine, "_shutdown_already_executed", True)
 
     def _run_preopen_guard(prev_filtered: Optional[float]) -> Optional[float]:
+        """
+        완화형 pre-open overshoot guard.
+
+        목적:
+        - STM ZERO 직후 stale/overshoot dep.rate 상태에서 곧바로 MAIN SHUTTER를 열지 않도록
+          짧은 재확인 + 제한적 DAC 감산으로 overshoot를 완화한다.
+
+        정책:
+        - hard-abort gate가 아니라 deadlock 방지 우선의 soft guard다.
+        - guard_max_checks 횟수만큼만 재확인해서 셔터 open 직전 무한 대기에 빠지지 않게 한다.
+        - 마지막 재확인까지 filtered_rate가 상한보다 높더라도, 그 사실을
+          OPEN_WITH_GUARD_LIMIT로 telemetry에 남기고 공정 흐름은 계속 진행한다.
+        - hold 진입 후 raw-rate 기반 abort/safety 의미는 기존 로직이 그대로 담당한다.
+        """
         nonlocal dac
 
         if target_rate <= 0.0:
             return prev_filtered
 
         guard_wait_s = min(max(0.5, hold_control_interval_s), 2.0)
+        # ZERO 직후 짧은 overshoot 완화만 노리고, 셔터 open을 무한정 지연시키지 않기 위해
+        # 고정 횟수만 재확인한다.
         guard_max_checks = 3
         guard_upper = float(target_rate) * (1.0 + max(0.0, rate_tol_ratio))
         jump_guard_abs = max(rate_jump_guard_abs, abs(target_rate) * rate_jump_guard_ratio)
@@ -693,25 +709,26 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
             )
 
             current_filtered = filtered if control_rate_valid else None
-            engine._tele_event(
-                event="PREOPEN_GUARD",
-                target="RATE",
-                value=(current_filtered if current_filtered is not None else raw_rate),
-                detail=(
-                    f"attempt={attempt}, "
-                    f"raw_rate={raw_rate:.6f}, "
-                    f"filtered_rate={'' if current_filtered is None else f'{current_filtered:.6f}'}, "
-                    f"upper={guard_upper:.6f}, "
-                    f"dac={dac}, "
-                    f"jump_clamped={1 if jump_clamped else 0}, "
-                    f"action=CHECK, "
-                    f"tag=EVAP_PREOPEN_GUARD"
-                ),
-            )
-
             if current_filtered is not None and current_filtered <= guard_upper:
+                engine._tele_event(
+                    event="PREOPEN_GUARD",
+                    target="RATE",
+                    value=current_filtered,
+                    detail=(
+                        f"attempt={attempt}, "
+                        f"raw_rate={raw_rate:.6f}, "
+                        f"filtered_rate={current_filtered:.6f}, "
+                        f"upper={guard_upper:.6f}, "
+                        f"dac={dac}, "
+                        f"jump_clamped={1 if jump_clamped else 0}, "
+                        f"action=OPEN_OK, "
+                        f"policy=SOFT_LIMIT, "
+                        f"tag=EVAP_PREOPEN_GUARD"
+                    ),
+                )
                 return filtered
 
+            adjusted = False
             if current_filtered is not None:
                 next_dac = dac
                 adjust_limit = min(max(1, fine_step_dac), max(1, hold_max_dac_delta))
@@ -721,6 +738,7 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
                 if next_dac != dac:
                     delta = int(next_dac - dac)
                     dac = next_dac
+                    adjusted = True
                     _evap_apply_dac(engine, use_p1, use_p2, dac, tag="EVAP_PREOPEN_GUARD")
                     engine._tele_event(
                         event="PREOPEN_GUARD_ADJUST",
@@ -729,8 +747,11 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
                         detail=(
                             f"attempt={attempt}, "
                             f"delta={delta}, "
+                            f"raw_rate={raw_rate:.6f}, "
                             f"filtered_rate={current_filtered:.6f}, "
                             f"upper={guard_upper:.6f}, "
+                            f"action=ADJUST_AND_RECHECK, "
+                            f"policy=SOFT_LIMIT, "
                             f"tag=EVAP_PREOPEN_GUARD"
                         ),
                     )
@@ -742,9 +763,13 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
                     value=guard_wait_s,
                     detail=(
                         f"attempt={attempt}, "
+                        f"raw_rate={raw_rate:.6f}, "
                         f"filtered_rate={'' if current_filtered is None else f'{current_filtered:.6f}'}, "
                         f"upper={guard_upper:.6f}, "
                         f"dac={dac}, "
+                        f"adjusted={1 if adjusted else 0}, "
+                        f"action={'ADJUST_AND_RECHECK' if adjusted else 'WAIT_AND_RECHECK'}, "
+                        f"policy=SOFT_LIMIT, "
                         f"tag=EVAP_PREOPEN_GUARD"
                     ),
                 )
@@ -762,6 +787,7 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
                     f"upper={guard_upper:.6f}, "
                     f"dac={dac}, "
                     f"action=OPEN_WITH_GUARD_LIMIT, "
+                    f"policy=SOFT_LIMIT, "
                     f"tag=EVAP_PREOPEN_GUARD"
                 ),
             )

@@ -20,6 +20,7 @@ import re
 import time
 import threading
 import math
+import contextlib
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -599,7 +600,7 @@ class LogWriterWorker(QThread):
             self._run_open_ts = 0.0
             self._run_meta = {}
             return
-
+        
         self._run_open = True
 
         try:
@@ -607,11 +608,18 @@ class LogWriterWorker(QThread):
         except Exception:
             pass
 
-        # RUN OPEN은 “일별 로그”에 기록(디버깅용)
+        # run .log에도 경계 문장 기록
+        with contextlib.suppress(Exception):
+            self._write_run_line(f"[RUN][OPEN] run_id={self._run_id} recipe={self._run_recipe}", ts)
+
+        # HMI 일별 로그에도 기록
         self._write_log("INFO", f"RUN OPEN -> {file_stem}", "LogService", True, ts)
 
     def _close_run(self) -> None:
         if self._run_open:
+            with contextlib.suppress(Exception):
+                self._write_run_line(f"[RUN][CLOSE] run_id={self._run_id} recipe={self._run_recipe}", None)
+
             self._write_log("INFO", "RUN CLOSE", "LogService", True, None)
 
         try:
@@ -734,6 +742,12 @@ class LogWriterWorker(QThread):
         if not s:
             return
 
+        # 형식 통일:
+        # - 이미 [HH:MM:SS] 또는 [YYYY-MM-DD HH:MM:SS] 로 시작하면 그대로 사용
+        # - 아니면 [HH:MM:SS] prefix 추가
+        if not re.match(r"^\[\d{2}:\d{2}:\d{2}\]\s+", s) and not re.match(r"^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\]\s+", s):
+            s = f"[{_time_str(ts)}] {s}"
+
         if self._run_open and self._run_folder_name:
             try:
                 if self._run_log_fp is None:
@@ -756,7 +770,6 @@ class LogWriterWorker(QThread):
                 except Exception:
                     pass
 
-        # run이 없으면 유실 방지용으로 HMI 일별 로그로 보냄
         self._write_ui_line("HMI", f"[PROCESS][NO-RUN] {s}", ts)
 
     def _reopen_run_files_in_resolved_base(self) -> None:

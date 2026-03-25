@@ -141,12 +141,9 @@ class ProcessWindow(QWidget):
         self._stm_service = stm_service
         self._acs_service = acs_service
 
-        # ✅ Process 로그 위젯을 LogService에 연결 (run별 로그 저장)
-        if self._log_service is not None and hasattr(self._log_service, "attach_text_widget"):
-            with contextlib.suppress(Exception):
-                self._log_service.attach_text_widget(getattr(self.ui, "logWindow", None), channel="PROCESS")
+        # PROCESS 로그는 위젯 후킹에 의존하지 않고
+        # _append_process_log()에서 명시적으로 run_line()까지 보낸다.
 
-        # ProcessController 시그널 → UI 업데이트
         pc = self._process_controller
         if pc is not None:
             try:
@@ -215,22 +212,6 @@ class ProcessWindow(QWidget):
         else:
             self._set_process_monitor_text(title)
 
-    def _format_status_message(self, st: Any) -> str:
-        msg = str(getattr(st, "message", "") or "").strip()
-        if msg:
-            return msg
-
-        phase = str(getattr(st, "phase", "") or "").strip()
-        step = str(getattr(st, "step_name", "") or getattr(st, "step", "") or "").strip()
-
-        if phase and step:
-            return f"{phase} | {step}"
-        if phase:
-            return phase
-        if step:
-            return f"진행중 | {step}"
-        return "---"
-
     def _append_process_log(self, text: str) -> None:
         raw = str(text or "").strip()
         if not raw:
@@ -248,7 +229,14 @@ class ProcessWindow(QWidget):
             else:
                 line = f"[{ts}] [INFO] {raw}"
 
+        # 1) UI 표시
         _append_text(getattr(self.ui, "logWindow", None), line)
+
+        # 2) run log 저장
+        ls = self._log_service
+        if ls is not None and hasattr(ls, "run_line"):
+            with contextlib.suppress(Exception):
+                ls.run_line(line)
 
     def _open_process_run_log(self, run_id: str, run_cfg: dict[str, Any]) -> None:
         self._active_run_id = str(run_id)
@@ -778,11 +766,38 @@ class ProcessWindow(QWidget):
         self._close_process_run_log()
         self._active_run_id = None
 
+    def _split_status_message(self, st: Any) -> tuple[str, str]:
+        msg = str(getattr(st, "message", "") or "").strip()
+        phase = str(getattr(st, "phase", "") or "").strip()
+        step = str(getattr(st, "step_name", "") or getattr(st, "step", "") or "").strip()
+
+        # 1) controller가 message를 직접 준 경우
+        if msg:
+            if " | " in msg:
+                title, detail = msg.split(" | ", 1)
+                return (title.strip() or "---", detail.strip())
+
+            if phase:
+                return (phase, msg)
+
+            return ("진행 상태", msg)
+
+        # 2) phase / step 조합
+        if phase and step:
+            return (phase, step)
+        if phase:
+            return (phase, "")
+        if step:
+            return ("진행중", step)
+
+        return ("---", "")
+
     def _on_status(self, st: Any) -> None:
         self._try_update_last_power(st)
 
         try:
-            self._set_process_monitor_text(self._format_status_message(st))
+            title, detail = self._split_status_message(st)
+            self._set_process_status(title, detail)
         except Exception:
             pass
 
@@ -868,45 +883,59 @@ class ProcessWindow(QWidget):
 
     def _on_error(self, err: Any) -> None:
         try:
-            where = getattr(err, "where", "")
-            msg = getattr(err, "message", "")
+            where = str(getattr(err, "where", "") or "").strip()
+            msg = str(getattr(err, "message", "") or "").strip()
+
             self._append_process_log(f"[ERROR] {where} | {msg}")
-            self._set_process_status("오류 발생", f"{where} | {msg}")
+
+            detail = f"{where} | {msg}" if where and msg else (where or msg or "상세 메시지 없음")
+            self._set_process_status("오류 발생", detail)
+
         except Exception:
             self._append_process_log(f"[ERROR] {err!r}")
-            self._set_process_monitor_text("오류 발생")
+            self._set_process_status("오류 발생", f"{err!r}")
 
     def _on_finished(self, result: Any) -> None:
         try:
-            # 1) worker가 끝났으니 이제 RT 정지
             with contextlib.suppress(Exception):
                 self._rt_stop()
 
-            # 2) 여기서는 PLC 종료를 직접 하지 않는다.
-            #    stop/error 경로의 safety shutdown은 engine.py가 이미 담당한다.
-
-            # 3) worker 종료 후에만 센서/메모리 정리
             with contextlib.suppress(Exception):
                 self._release_stm_runtime_only()
 
             try:
                 ok = bool(getattr(result, "ok", False))
-                rid = getattr(result, "run_id", "")
+                rid = str(getattr(result, "run_id", "") or "").strip()
 
-                self._append_process_log(f"[FINISHED] ok={ok} run_id={rid}")
+                current_status = ""
+                try:
+                    w = getattr(self.ui, "processMonitor_Process", None)
+                    if w is not None and hasattr(w, "text"):
+                        current_status = str(w.text() or "").strip()
+                except Exception:
+                    current_status = ""
 
                 if ok:
-                    self._set_process_status("공정 완료", f"run_id={rid}")
+                    self._append_process_log(f"[FINISHED][OK] run_id={rid}")
+                    self._set_process_status("공정 완료", f"run_id={rid}" if rid else "")
                 else:
-                    # error 경로에서 이미 더 구체적인 status를 올렸다면
-                    # finished가 그 내용을 덮지 않도록 종료 정보만 로그로 남긴다.
-                    self._append_process_log(f"[FINISHED][ABNORMAL] ok={ok} run_id={rid}")
+                    self._append_process_log(f"[FINISHED][ABNORMAL] run_id={rid}")
 
-            except Exception:
-                self._append_process_log("[FINISHED]")
-                self._set_process_monitor_text("공정 종료")
+                    # 이미 오류 상태면 유지
+                    if not current_status.startswith("오류 발생"):
+                        if rid:
+                            self._set_process_status("공정 종료", f"run_id={rid}")
+                        else:
+                            self._set_process_status("공정 종료", "정지 또는 비정상 종료")
+
+            except Exception as e:
+                self._append_process_log(f"[FINISHED][WARN] finalize failed: {e!r}")
+                self._set_process_status("공정 종료")
 
         finally:
+            with contextlib.suppress(Exception):
+                self._close_process_run_log()
+
             self._active_run_id = None
             self._clear_run_power_flags()
 

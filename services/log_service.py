@@ -21,13 +21,14 @@ import time
 import threading
 import math
 import contextlib
-import tempfile
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
 from PySide6.QtCore import QObject, QThread, Signal
+
+from services.storage_paths import default_temp_log_fallback_root, default_temp_log_root
 
 
 # ============================================================
@@ -125,10 +126,6 @@ def _ensure_dir(p: Path) -> None:
     p.mkdir(parents=True, exist_ok=True)
 
 
-def _default_temp_log_root(app_name: str) -> Path:
-    return Path(tempfile.gettempdir()) / f"Evaporator_{_safe_name(app_name)}_Logs"
-
-
 # ============================================================
 # Writer Worker
 # ============================================================
@@ -156,9 +153,9 @@ class LogWriterWorker(QThread):
         self._stop_evt = threading.Event()
 
         # ✅ base_dir는 “루트” (\\...\Evaporator)
-        default_root = _default_temp_log_root(self._app_name)
+        default_root = default_temp_log_root(self._app_name)
         self._base_dir = Path(base_dir) if base_dir else default_root
-        self._fallback_dir = default_root / "local"
+        self._fallback_dir = default_temp_log_fallback_root(self._app_name)
 
         # base_dir 접근 테스트 캐시
         self._resolved_base_cache: Optional[Path] = None
@@ -362,7 +359,7 @@ class LogWriterWorker(QThread):
             self._resolved_base_cache = self._fallback_dir
             return self._fallback_dir
         except Exception:
-            temp_root = _default_temp_log_root(self._app_name) / "last_resort"
+            temp_root = default_temp_log_root(self._app_name) / "last_resort"
             _ensure_dir(temp_root)
             self._resolved_base_cache = temp_root
             return temp_root
@@ -1053,9 +1050,9 @@ class LogService(QObject):
     def get_storage_roots(self, *, force_resolve: bool = True) -> dict[str, Path]:
         worker = self._worker
 
-        default_root = _default_temp_log_root(self._app_name)
+        default_root = default_temp_log_root(self._app_name)
         base_root = Path(getattr(worker, "_base_dir", default_root))
-        fallback_root = Path(getattr(worker, "_fallback_dir", default_root / "local"))
+        fallback_root = Path(getattr(worker, "_fallback_dir", default_temp_log_fallback_root(self._app_name)))
 
         resolved_root = base_root
         if force_resolve:

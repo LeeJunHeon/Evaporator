@@ -5,9 +5,10 @@ import contextlib
 import json
 import sqlite3
 import time
-import tempfile
 from pathlib import Path
 from typing import Any, Optional
+
+from services.storage_paths import default_temp_log_fallback_root, default_temp_log_root
 
 
 def _ensure_dir(path: Path) -> None:
@@ -16,10 +17,6 @@ def _ensure_dir(path: Path) -> None:
 
 def _json_text(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-
-
-def _default_history_root(name: str) -> Path:
-    return Path(tempfile.gettempdir()) / name
 
 
 class HistoryStore:
@@ -102,8 +99,9 @@ class HistoryStore:
             with contextlib.suppress(Exception):
                 roots = dict(log_service.get_storage_roots(force_resolve=False) or {})
 
-        primary_root = Path(roots.get("base") or _default_history_root("Evaporator_Logs"))
-        fallback_root = Path(roots.get("fallback") or _default_history_root("Evaporator_Logs_local"))
+        app_name = str(getattr(log_service, "_app_name", "") or getattr(log_service, "app_name", "") or "Evaporator")
+        primary_root = Path(roots.get("base") or default_temp_log_root(app_name))
+        fallback_root = Path(roots.get("fallback") or default_temp_log_fallback_root(app_name))
         return cls(
             primary_root=primary_root,
             fallback_root=fallback_root,

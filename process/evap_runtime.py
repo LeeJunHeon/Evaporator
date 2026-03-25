@@ -671,6 +671,103 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         shutdown_done = True
         setattr(engine, "_shutdown_already_executed", True)
 
+    def _run_preopen_guard(prev_filtered: Optional[float]) -> Optional[float]:
+        nonlocal dac
+
+        if target_rate <= 0.0:
+            return prev_filtered
+
+        guard_wait_s = min(max(0.5, hold_control_interval_s), 2.0)
+        guard_max_checks = 3
+        guard_upper = float(target_rate) * (1.0 + max(0.0, rate_tol_ratio))
+        jump_guard_abs = max(rate_jump_guard_abs, abs(target_rate) * rate_jump_guard_ratio)
+        filtered = prev_filtered
+
+        for attempt in range(1, guard_max_checks + 1):
+            raw_rate = _read_rate_or_abort(where=f"preopen_guard{attempt}")
+            filtered, control_rate_valid, jump_clamped = _filter_hold_rate(
+                raw_rate,
+                filtered,
+                alpha=rate_filter_alpha,
+                max_jump_abs=jump_guard_abs,
+            )
+
+            current_filtered = filtered if control_rate_valid else None
+            engine._tele_event(
+                event="PREOPEN_GUARD",
+                target="RATE",
+                value=(current_filtered if current_filtered is not None else raw_rate),
+                detail=(
+                    f"attempt={attempt}, "
+                    f"raw_rate={raw_rate:.6f}, "
+                    f"filtered_rate={'' if current_filtered is None else f'{current_filtered:.6f}'}, "
+                    f"upper={guard_upper:.6f}, "
+                    f"dac={dac}, "
+                    f"jump_clamped={1 if jump_clamped else 0}, "
+                    f"action=CHECK, "
+                    f"tag=EVAP_PREOPEN_GUARD"
+                ),
+            )
+
+            if current_filtered is not None and current_filtered <= guard_upper:
+                return filtered
+
+            if current_filtered is not None:
+                next_dac = dac
+                adjust_limit = min(max(1, fine_step_dac), max(1, hold_max_dac_delta))
+                if adjust_limit > 0 and dac > 0:
+                    next_dac = max(0, dac - adjust_limit)
+
+                if next_dac != dac:
+                    delta = int(next_dac - dac)
+                    dac = next_dac
+                    _evap_apply_dac(engine, use_p1, use_p2, dac, tag="EVAP_PREOPEN_GUARD")
+                    engine._tele_event(
+                        event="PREOPEN_GUARD_ADJUST",
+                        target="DAC",
+                        value=dac,
+                        detail=(
+                            f"attempt={attempt}, "
+                            f"delta={delta}, "
+                            f"filtered_rate={current_filtered:.6f}, "
+                            f"upper={guard_upper:.6f}, "
+                            f"tag=EVAP_PREOPEN_GUARD"
+                        ),
+                    )
+
+            if attempt < guard_max_checks:
+                engine._tele_event(
+                    event="PREOPEN_GUARD_WAIT",
+                    target="TIME",
+                    value=guard_wait_s,
+                    detail=(
+                        f"attempt={attempt}, "
+                        f"filtered_rate={'' if current_filtered is None else f'{current_filtered:.6f}'}, "
+                        f"upper={guard_upper:.6f}, "
+                        f"dac={dac}, "
+                        f"tag=EVAP_PREOPEN_GUARD"
+                    ),
+                )
+                _wait_with_checks(guard_wait_s, label="MAIN SHUTTER OPEN 전 rate 재확인 대기")
+                continue
+
+            engine._tele_event(
+                event="PREOPEN_GUARD",
+                target="RATE",
+                value=(current_filtered if current_filtered is not None else raw_rate),
+                detail=(
+                    f"attempt={attempt}, "
+                    f"raw_rate={raw_rate:.6f}, "
+                    f"filtered_rate={'' if current_filtered is None else f'{current_filtered:.6f}'}, "
+                    f"upper={guard_upper:.6f}, "
+                    f"dac={dac}, "
+                    f"action=OPEN_WITH_GUARD_LIMIT, "
+                    f"tag=EVAP_PREOPEN_GUARD"
+                ),
+            )
+
+        return filtered
+
     try:
         # 초기 안전 상태
         engine._plc_write_coil("MAIN_SHUTTER_SW", False, tag="EVAP_INIT_SHUTTER_CLOSE")
@@ -852,6 +949,9 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         # 한 번 반영 시간을 준다.
         _wait_with_checks(hold_control_interval_s, label="STM ZERO 반영 대기")
 
+        filtered_rate: Optional[float] = None
+        filtered_rate = _run_preopen_guard(filtered_rate)
+
         engine._emit_status(message="EVAP HOLD 진입: MAIN SHUTTER OPEN", force=True)
         engine._plc_write_coil("MAIN_SHUTTER_SW", True, tag="EVAP_MAIN_SHUTTER_OPEN")
         shutter_open = True
@@ -859,7 +959,6 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         last_hold_control_m = 0.0
         rate_abort_start_ts: Optional[float] = None
         abort_threshold = target_rate * rate_abort_ratio
-        filtered_rate: Optional[float] = None
         hold_integral = 0.0
 
         engine._tele_event(

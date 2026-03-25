@@ -7,10 +7,11 @@ import hashlib
 import json
 import re
 import statistics
-import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
+
+from services.storage_paths import default_temp_log_root
 
 
 def _to_float_or_none(value: Any) -> Optional[float]:
@@ -720,7 +721,12 @@ class RunSummaryService:
                             roots.append(path)
 
         if not roots:
-            roots.append(Path(tempfile.gettempdir()) / "Evaporator_Logs")
+            app_name = str(
+                getattr(self._log_service, "_app_name", "")
+                or getattr(self._log_service, "app_name", "")
+                or "Evaporator"
+            )
+            roots.append(default_temp_log_root(app_name))
 
         discovered: dict[str, dict[str, Any]] = {}
         for root in roots:

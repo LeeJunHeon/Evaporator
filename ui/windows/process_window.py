@@ -209,22 +209,51 @@ class ProcessWindow(QWidget):
         except Exception:
             pass
 
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        with contextlib.suppress(Exception):
+            self._adjust_process_page_layout()
+        with contextlib.suppress(Exception):
+            self._update_process_action_panel_geometry()
+
     def _adjust_process_page_layout(self) -> None:
         monitor = getattr(self.ui, "processMonitor_Process", None)
         graph = getattr(self.ui, "graphWidget", None)
         log_window = getattr(self.ui, "logWindow", None)
+        if any(widget is None for widget in (monitor, graph, log_window)):
+            return
 
         with contextlib.suppress(Exception):
-            if monitor is not None:
-                monitor.setGeometry(210, 5, 891, 92)
-
+            monitor.setGeometry(210, 5, 891, 56)
         with contextlib.suppress(Exception):
-            if graph is not None:
-                graph.setGeometry(209, 104, 891, 377)
-
+            graph.setGeometry(209, 68, 891, 413)
         with contextlib.suppress(Exception):
-            if log_window is not None:
-                log_window.setGeometry(210, 490, 891, 191)
+            log_window.setGeometry(210, 490, 891, 191)
+
+    def _update_process_action_panel_geometry(self) -> None:
+        panel = getattr(self, "_process_action_panel", None)
+        parent = getattr(self.ui, "page_2", None)
+        base = getattr(self, "_process_action_panel_base", None) or {}
+        if panel is None or parent is None or not base:
+            return
+
+        page_w = max(int(base.get("page_width", parent.width() or 1)), int(parent.width() or 1))
+        page_h = max(int(base.get("page_height", parent.height() or 1)), int(parent.height() or 1))
+        x = int(base.get("x", 0))
+        y = int(base.get("y", 0))
+        right_margin = max(0, int(base.get("right_margin", 0)))
+        bottom_margin = max(0, int(base.get("bottom_margin", 0)))
+        width = max(int(base.get("width", 191)), page_w - x - right_margin)
+        available_h = max(int(base.get("height", 143)), page_h - y - bottom_margin)
+
+        layout = panel.layout()
+        desired_h = int(base.get("height", 143))
+        if layout is not None:
+            with contextlib.suppress(Exception):
+                desired_h = max(desired_h, int(layout.sizeHint().height()) + 10)
+
+        panel_h = min(max(desired_h, int(base.get("min_height", desired_h))), available_h)
+        panel.setGeometry(x, y, width, panel_h)
 
     def _setup_recommendation_ui(self) -> None:
         parent = getattr(self.ui, "page_2", None)
@@ -237,20 +266,36 @@ class ProcessWindow(QWidget):
 
         panel = getattr(self, "_process_action_panel", None)
         if panel is None:
+            rects = [btn.geometry() for btn in (cfg_btn, recipe_btn, start_btn, stop_btn)]
+            left = min(int(rect.x()) for rect in rects)
+            top = min(int(rect.y()) for rect in rects)
+            right = max(int(rect.x()) + int(rect.width()) for rect in rects)
+            bottom = max(int(rect.y()) + int(rect.height()) for rect in rects)
+            self._process_action_panel_base = {
+                "x": left,
+                "y": top,
+                "width": right - left,
+                "height": bottom - top,
+                "right_margin": max(0, int(parent.width()) - right),
+                "bottom_margin": min(4, max(0, int(parent.height()) - bottom)),
+                "page_width": max(1, int(parent.width())),
+                "page_height": max(1, int(parent.height())),
+                "min_height": min(max((bottom - top) + 2, 146), max(146, int(parent.height()) - top)),
+            }
             panel = QWidget(parent)
             panel.setObjectName("processActionPanel")
             layout = QGridLayout(panel)
-            layout.setContentsMargins(0, 0, 0, 0)
-            layout.setHorizontalSpacing(8)
-            layout.setVerticalSpacing(4)
+            layout.setContentsMargins(4, 4, 4, 6)
+            layout.setHorizontalSpacing(6)
+            layout.setVerticalSpacing(3)
             self._process_action_panel = panel
         else:
             layout = panel.layout()
             if not isinstance(layout, QGridLayout):
                 layout = QGridLayout(panel)
-                layout.setContentsMargins(0, 0, 0, 0)
-                layout.setHorizontalSpacing(8)
-                layout.setVerticalSpacing(4)
+                layout.setContentsMargins(4, 4, 4, 6)
+                layout.setHorizontalSpacing(6)
+                layout.setVerticalSpacing(3)
 
         btn = getattr(self, "_recommendation_btn", None)
         if btn is None:
@@ -264,8 +309,6 @@ class ProcessWindow(QWidget):
             backfill_btn.clicked.connect(self._on_history_backfill_clicked)
             self._history_backfill_btn = backfill_btn
 
-        panel.setGeometry(0, 548, 191, 148)
-
         buttons = (cfg_btn, btn, backfill_btn, recipe_btn, start_btn, stop_btn)
         for button in buttons:
             with contextlib.suppress(Exception):
@@ -275,11 +318,13 @@ class ProcessWindow(QWidget):
 
         for action_btn in (cfg_btn, btn, backfill_btn, recipe_btn):
             with contextlib.suppress(Exception):
-                action_btn.setFixedHeight(32)
+                action_btn.setMinimumHeight(30)
+                action_btn.setMaximumHeight(34)
 
         for run_btn in (start_btn, stop_btn):
             with contextlib.suppress(Exception):
-                run_btn.setFixedHeight(40)
+                run_btn.setMinimumHeight(36)
+                run_btn.setMaximumHeight(40)
 
         while layout.count():
             item = layout.takeAt(0)
@@ -299,6 +344,8 @@ class ProcessWindow(QWidget):
         for button in buttons:
             with contextlib.suppress(Exception):
                 button.show()
+
+        self._update_process_action_panel_geometry()
 
         with contextlib.suppress(Exception):
             panel.raise_()
@@ -1701,7 +1748,7 @@ class ProcessWindow(QWidget):
 
         if not recommendation:
             self._append_process_log("[RECO] no recommendation data")
-            QMessageBox.information(self, "Recommendation", "異붿쿇 ?곗씠?곌? ?놁뒿?덈떎.")
+            QMessageBox.information(self, "Recommendation", "추천 데이터가 없습니다.")
             return
 
         try:
@@ -2159,7 +2206,7 @@ class ProcessWindow(QWidget):
         p1 = bool(getattr(getattr(self.ui, "sourcePower1", None), "isChecked", lambda: False)())
         p2 = bool(getattr(getattr(self.ui, "sourcePower2", None), "isChecked", lambda: False)())
         if not (p1 or p2):
-            QMessageBox.warning(self, "Input", "Power1/Power2 以?理쒖냼 1媛쒕뒗 ?좏깮?댁빞 ?⑸땲??")
+            QMessageBox.warning(self, "Input", "Power1/Power2 중 최소 1개는 선택해야 합니다.")
             return None
 
         # ?꾨옒 Power2 / dual-power 遺꾧린???꾩옱 ?섎뱶?⑥뼱 臾몄젣濡??명빐
@@ -2169,9 +2216,9 @@ class ProcessWindow(QWidget):
             QMessageBox.warning(
                 self,
                 "Input",
-                "?꾩옱 ?λ퉬 ?곹깭?먯꽌??Power 2瑜??ъ슜?????놁뒿?덈떎.\n"
-                "?꾩떆濡?Power 1留??ъ슜??二쇱꽭??\n"
-                "(?λ퉬 ?섎━ ??Power2/dual-power 寃쎈줈瑜??ㅼ떆 ?쒖꽦?뷀븷 ?덉젙)"
+                "현재 장비 상태에서는 Power 2를 사용할 수 없습니다.\n"
+                "임시로 Power 1만 사용해 주세요.\n"
+                "(장비 수리 후 Power2/dual-power 경로를 다시 활성화할 예정입니다.)"
             )
             return None
 
@@ -2182,20 +2229,20 @@ class ProcessWindow(QWidget):
         if p1 and not p2:
             # Power1留??좏깮 ??Dep.rate 1留?蹂몃떎
             if rate1 is None:
-                QMessageBox.warning(self, "Input", "Power1 ?좏깮 ??Target Dep.rate 1???낅젰?섏꽭??")
+                QMessageBox.warning(self, "Input", "Power1 선택 시 Target Dep.rate 1을 입력해 주세요.")
                 return None
             if rate1 <= 0:
-                QMessageBox.warning(self, "Input", "Target Dep.rate 1? 0蹂대떎 而ㅼ빞 ?⑸땲??")
+                QMessageBox.warning(self, "Input", "Target Dep.rate 1은 0보다 커야 합니다.")
                 return None
             target_rate = rate1
 
         elif p2 and not p1:
             # Power2留??좏깮 ??Dep.rate 2留?蹂몃떎
             if rate2 is None:
-                QMessageBox.warning(self, "Input", "Power2 ?좏깮 ??Target Dep.rate 2瑜??낅젰?섏꽭??")
+                QMessageBox.warning(self, "Input", "Power2 선택 시 Target Dep.rate 2를 입력해 주세요.")
                 return None
             if rate2 <= 0:
-                QMessageBox.warning(self, "Input", "Target Dep.rate 2??0蹂대떎 而ㅼ빞 ?⑸땲??")
+                QMessageBox.warning(self, "Input", "Target Dep.rate 2는 0보다 커야 합니다.")
                 return None
             target_rate = rate2
 
@@ -2204,16 +2251,16 @@ class ProcessWindow(QWidget):
             # ?꾩옱 ProcessController??target_rate媛 1媛쒕쭔 ?ㅼ뼱媛?꾨줉 ?ㅺ퀎?섏뼱 ?덉뼱??= ?붿쭊??1媛?紐⑺몴濡??숈옉),
             # ??媛믪쓣 ?ㅻⅤ寃?諛쏆쑝硫??댄썑 ?④퀎?먯꽌 紐⑥닚/?ㅻ룞??媛?????????낅젰 + ?숈씪媛?媛뺤젣
             if rate1 is None:
-                QMessageBox.warning(self, "Input", "Power1+Power2 ?숈떆 ?ъ슜 ??Target Dep.rate 1???낅젰?섏꽭??")
+                QMessageBox.warning(self, "Input", "Power1+Power2 동시 사용 시 Target Dep.rate 1을 입력해 주세요.")
                 return None
             if rate2 is None:
-                QMessageBox.warning(self, "Input", "Power1+Power2 ?숈떆 ?ъ슜 ??Target Dep.rate 2瑜??낅젰?섏꽭??")
+                QMessageBox.warning(self, "Input", "Power1+Power2 동시 사용 시 Target Dep.rate 2를 입력해 주세요.")
                 return None
             if rate1 <= 0 or rate2 <= 0:
-                QMessageBox.warning(self, "Input", "Target Dep.rate 1/2??0蹂대떎 而ㅼ빞 ?⑸땲??")
+                QMessageBox.warning(self, "Input", "Target Dep.rate 1/2는 모두 0보다 커야 합니다.")
                 return None
             if abs(rate1 - rate2) > 1e-9:
-                QMessageBox.warning(self, "Input", "Power1+Power2 ?숈떆 ?ъ슜 ??Target Dep.rate 1怨?2???숈씪?댁빞 ?⑸땲??")
+                QMessageBox.warning(self, "Input", "Power1+Power2 동시 사용 시 Target Dep.rate 1과 2는 같아야 합니다.")
                 return None
 
             target_rate = rate1
@@ -2222,20 +2269,20 @@ class ProcessWindow(QWidget):
         target_thk = self._read_float("thicknessEdit")
         delay_min = self._read_float("delayEdit")
         if target_thk is None:
-            QMessageBox.warning(self, "Input", "Target Thickness瑜??낅젰?섏꽭??")
+            QMessageBox.warning(self, "Input", "Target Thickness를 입력해 주세요.")
             return None
         if target_thk <= 0:
-            QMessageBox.warning(self, "Input", "Target Thickness??0蹂대떎 而ㅼ빞 ?⑸땲??")
+            QMessageBox.warning(self, "Input", "Target Thickness는 0보다 커야 합니다.")
             return None
         if delay_min is None:
             delay_min = 0.0
         if delay_min < 0:
-            QMessageBox.warning(self, "Input", "Delay(min)? 0 ?댁긽?댁뼱???⑸땲??")
+            QMessageBox.warning(self, "Input", "Delay(min)은 0 이상이어야 합니다.")
             return None
 
         if p1 and p2:
             if not (self._material_1 or self._material_2):
-                QMessageBox.warning(self, "Input", "Power1+Power2 ?숈떆 ?ъ슜 ??Material??理쒖냼 1媛쒕뒗 ?좏깮?댁빞 ?⑸땲??")
+                QMessageBox.warning(self, "Input", "Power1+Power2 동시 사용 시 Material은 최소 1개 선택해야 합니다.")
                 return None
             base_mat = self._material_1 or self._material_2
 
@@ -2252,8 +2299,8 @@ class ProcessWindow(QWidget):
                     QMessageBox.warning(
                         self,
                         "Input",
-                        "Power1+Power2 ?숈떆 ?ъ슜? '?숈씪 臾쇱쭏' 媛?뺤엯?덈떎.\n"
-                        "Material1/Material2媛 ?쒕줈 ?ㅻ쫭?덈떎. ?숈씪?섍쾶 留욎떠二쇱꽭??",
+                        "Power1+Power2 동시 사용은 동일 재료를 가정합니다.\n"
+                        "Material1/Material2 설정이 서로 다릅니다. 동일하게 맞춰 주세요.",
                     )
                     return None
         else:
@@ -2264,10 +2311,10 @@ class ProcessWindow(QWidget):
         zf = float((base_mat or {}).get("z_factor", 0.0) or 0.0)
 
         if not mat_name:
-            QMessageBox.warning(self, "Input", "Material ?대쫫??鍮꾩뼱?덉뒿?덈떎. Material???ㅼ떆 ?좏깮?섏꽭??")
+            QMessageBox.warning(self, "Input", "Material 이름이 비어 있습니다. Material을 다시 선택해 주세요.")
             return None
         if den <= 0 or zf <= 0:
-            QMessageBox.warning(self, "Input", "Material density/z-factor 媛믪씠 ?щ컮瑜댁? ?딆뒿?덈떎.")
+            QMessageBox.warning(self, "Input", "Material density/z-factor 값이 올바르지 않습니다.")
             return None
 
         # ??Process Name (?꾩닔)
@@ -2276,13 +2323,13 @@ class ProcessWindow(QWidget):
         if w is not None and hasattr(w, "text"):
             pname = str(w.text()).strip()
         if require_process_name and not pname:
-            QMessageBox.warning(self, "Input", "Process Name???낅젰?섏꽭??")
+            QMessageBox.warning(self, "Input", "Process Name을 입력해 주세요.")
             return None
 
         proc_cfg = self._normalize_process_config(getattr(self, "_process_cfg", None))
         steps = proc_cfg.get("ramp_steps") or []
         if not steps:
-            QMessageBox.warning(self, "Input", "Process Config??step??鍮꾩뼱 ?덉뒿?덈떎.")
+            QMessageBox.warning(self, "Input", "Process Config의 step이 비어 있습니다.")
             return None
 
         last_adc = -1.0
@@ -2293,19 +2340,19 @@ class ProcessWindow(QWidget):
             hold_sec = float(step.get("hold_sec", 0.0) or 0.0)
 
             if target_adc <= 0:
-                QMessageBox.warning(self, "Input", f"Process Config step {idx}??target_adc??0蹂대떎 而ㅼ빞 ?⑸땲??")
+                QMessageBox.warning(self, "Input", f"Process Config step {idx}의 target_adc는 0보다 커야 합니다.")
                 return None
             if dac_step <= 0:
-                QMessageBox.warning(self, "Input", f"Process Config step {idx}??dac_step? 0蹂대떎 而ㅼ빞 ?⑸땲??")
+                QMessageBox.warning(self, "Input", f"Process Config step {idx}의 dac_step은 0보다 커야 합니다.")
                 return None
             if dac_interval_sec <= 0:
-                QMessageBox.warning(self, "Input", f"Process Config step {idx}??dac_interval_sec??0蹂대떎 而ㅼ빞 ?⑸땲??")
+                QMessageBox.warning(self, "Input", f"Process Config step {idx}의 dac_interval_sec는 0보다 커야 합니다.")
                 return None
             if hold_sec < 0:
-                QMessageBox.warning(self, "Input", f"Process Config step {idx}??hold_sec??0 ?댁긽?댁뼱???⑸땲??")
+                QMessageBox.warning(self, "Input", f"Process Config step {idx}의 hold_sec는 0 이상이어야 합니다.")
                 return None
             if last_adc >= 0 and target_adc < last_adc:
-                QMessageBox.warning(self, "Input", f"Process Config step {idx}??target_adc???댁쟾 step蹂대떎 ?ш굅??媛숈븘???⑸땲??")
+                QMessageBox.warning(self, "Input", f"Process Config step {idx}의 target_adc는 이전 step보다 크거나 같아야 합니다.")
                 return None
 
             last_adc = target_adc

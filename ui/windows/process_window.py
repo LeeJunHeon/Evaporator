@@ -737,13 +737,19 @@ class ProcessWindow(QWidget):
 
         pc = self._process_controller
 
-        # 1) 엔진/컨트롤러가 살아 있으면 "정지 요청"만 보낸다.
+        # 1) 실제 공정 실행 중일 때만 stop 요청
         if pc is not None:
             try:
-                pc.stop()
-                self._append_process_log("[UI] 공정 정지 요청 -> engine safety shutdown 대기")
-                self._set_process_status("공정 정지 요청", "safety shutdown 진행중")
-                return
+                is_running = False
+                if hasattr(pc, "is_running"):
+                    is_running = bool(pc.is_running())
+
+                if is_running:
+                    pc.stop()
+                    self._append_process_log("[UI] 공정 정지 요청 -> engine safety shutdown 대기")
+                    self._set_process_status("공정 정지 요청", "safety shutdown 진행중")
+                    return
+
             except Exception as e:
                 self._append_process_log(f"[STOP FAIL] controller stop failed: {e!r}")
 

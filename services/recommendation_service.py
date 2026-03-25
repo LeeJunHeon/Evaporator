@@ -163,6 +163,11 @@ class RecommendationService:
     ) -> dict[str, Any]:
         basis_weights = [score for score, _ in basis]
         representative_run_ids = [str(cand.get("run_id", "") or "").strip() for _, cand in basis[:3] if cand.get("run_id")]
+        representative_runs = [
+            self._representative_run_payload(score, cand)
+            for score, cand in basis[:5]
+            if cand.get("run_id")
+        ]
 
         step_count = self._weighted_mode(
             basis,
@@ -202,10 +207,34 @@ class RecommendationService:
             "recommended_ramp_steps": ramp_steps,
             "recommended_fine_step_dac": max(1, int(recommended_fine_step_dac)),
             "recommended_rate_stable_sec": max(0.0, float(recommended_rate_stable_sec)),
+            "recommended_runtime_overrides": {
+                "initial_dac": max(0, int(recommended_start_dac)),
+                "initial_dac_source": "recommendation",
+                "applied_recommended_start_dac": True,
+            },
             "confidence": round(confidence, 3),
             "basis_run_count": len(basis),
             "representative_run_ids": representative_run_ids,
+            "representative_runs": representative_runs,
             "recommended_process_config": recommended_cfg,
+        }
+
+    def _representative_run_payload(self, score: float, candidate: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "run_id": str(candidate.get("run_id", "") or "").strip(),
+            "timestamp": candidate.get("finished_ts") or candidate.get("started_ts"),
+            "material_name": str(candidate.get("material_name", "") or "").strip(),
+            "target_rate": candidate.get("target_rate"),
+            "target_thickness": candidate.get("target_thickness"),
+            "result_status": str(candidate.get("result_status", "") or "").strip(),
+            "stable_rate_mean": candidate.get("stable_rate_mean"),
+            "stable_dac_mean": candidate.get("stable_dac_mean"),
+            "overshoot_ratio_peak": candidate.get("overshoot_ratio_peak"),
+            "spike_count": candidate.get("spike_count"),
+            "final_thickness_A": candidate.get("final_thickness_A"),
+            "thickness_error_A": candidate.get("thickness_error_A"),
+            "thickness_error_ratio": candidate.get("thickness_error_ratio"),
+            "score": round(float(score), 3),
         }
 
     def _weighted_mode(self, basis: list[tuple[float, dict[str, Any]]], value_fn: Any) -> Optional[int]:

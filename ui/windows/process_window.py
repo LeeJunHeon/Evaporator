@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Optional, Any, TYPE_CHECKING
 
 from PySide6.QtWidgets import QWidget, QMessageBox, QVBoxLayout, QApplication, QPushButton
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QTimer, Qt
 
 from ui.windows.mainWindow import Ui_Form
 from ui.rt_plot_widget import DepositionPlotWidget
@@ -82,6 +82,8 @@ class ProcessWindow(QWidget):
         self._active_run_cfg: Optional[dict[str, Any]] = None
         self._active_run_profile: Optional[dict[str, Any]] = None
         self._last_recommendation: Optional[dict[str, Any]] = None
+        self._recommended_runtime_overrides: Optional[dict[str, Any]] = None
+        self._recommended_runtime_signature: Optional[dict[str, Any]] = None
 
         # ✅ UI에 "실제로 connect된 STM 인스턴스" 추적용(경고/중복 connect 방지)
         self._stm_ui_bound: bool = False
@@ -202,7 +204,7 @@ class ProcessWindow(QWidget):
             return
 
         try:
-            cfg_btn.setGeometry(0, 548, 92, 32)
+            cfg_btn.setGeometry(0, 548, 86, 32)
         except Exception:
             pass
 
@@ -213,8 +215,20 @@ class ProcessWindow(QWidget):
             self._recommendation_btn = btn
 
         try:
-            btn.setGeometry(99, 548, 92, 32)
+            btn.setGeometry(92, 548, 86, 32)
             btn.setAutoDefault(False)
+        except Exception:
+            pass
+
+        backfill_btn = getattr(self, "_history_backfill_btn", None)
+        if backfill_btn is None:
+            backfill_btn = QPushButton("History Rebuild", parent)
+            backfill_btn.clicked.connect(self._on_history_backfill_clicked)
+            self._history_backfill_btn = backfill_btn
+
+        try:
+            backfill_btn.setGeometry(184, 548, 116, 32)
+            backfill_btn.setAutoDefault(False)
         except Exception:
             pass
 
@@ -240,7 +254,7 @@ class ProcessWindow(QWidget):
         else:
             self._set_process_monitor_text(title)
 
-    def _append_process_log(self, text: str) -> None:
+    def _append_process_log_legacy0(self, text: str) -> None:
         raw = str(text or "").strip()
         if not raw:
             return
@@ -367,6 +381,33 @@ class ProcessWindow(QWidget):
             return None
         return dict(pc.build_run_profile(run_cfg) or {})
 
+    def _build_recommendation_signature(self, run_cfg: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "material_name": str(run_cfg.get("material_name", "") or "").strip(),
+            "density": self._to_float_or_none(run_cfg.get("density")),
+            "z_factor": self._to_float_or_none(run_cfg.get("z_factor")),
+            "target_rate": self._to_float_or_none(run_cfg.get("target_rate")),
+            "target_thickness": self._to_float_or_none(run_cfg.get("target_thickness")),
+            "delay_min": self._to_float_or_none(run_cfg.get("delay_min")),
+            "use_power1": bool(run_cfg.get("use_power1", False)),
+            "use_power2": bool(run_cfg.get("use_power2", False)),
+        }
+
+    def _clear_recommendation_runtime_overrides(self) -> None:
+        self._recommended_runtime_overrides = None
+        self._recommended_runtime_signature = None
+
+    def _matching_recommendation_runtime_overrides(self, run_cfg: dict[str, Any]) -> Optional[dict[str, Any]]:
+        overrides = dict(self._recommended_runtime_overrides or {})
+        signature = dict(self._recommended_runtime_signature or {})
+        if not overrides or not signature:
+            return None
+
+        current = self._build_recommendation_signature(run_cfg)
+        if current != signature:
+            return None
+        return overrides
+
     def _apply_process_config(self, new_cfg: Any, *, log_prefix: str) -> None:
         self._process_cfg = self._normalize_process_config(new_cfg)
 
@@ -410,6 +451,10 @@ class ProcessWindow(QWidget):
             "process_config": dict(run_cfg.get("process_config") or {}),
             "process_config_hash": str(profile.get("process_config_hash", "") or ""),
             "hw_mapping": dict(profile.get("hw_mapping") or {}),
+            "configured_start_dac": profile.get("configured_start_dac"),
+            "initial_dac": profile.get("initial_dac"),
+            "initial_dac_source": str(profile.get("initial_dac_source", "") or ""),
+            "applied_recommended_start_dac": bool(profile.get("applied_recommended_start_dac", False)),
         }
 
         with contextlib.suppress(Exception):
@@ -842,6 +887,10 @@ class ProcessWindow(QWidget):
         if run_cfg is None:
             return
 
+        if self._recommended_runtime_overrides and not run_cfg.get("runtime_recommendation"):
+            self._append_process_log("[RECO] runtime override ignored: inputs changed after recommendation apply")
+            self._clear_recommendation_runtime_overrides()
+
         try:
             run_profile = self._build_run_profile(run_cfg)
         except Exception as exc:
@@ -884,6 +933,12 @@ class ProcessWindow(QWidget):
             f"rate_tol_ratio={proc_cfg.get('rate_tol_ratio')} | "
             f"fine_step_dac={proc_cfg.get('fine_step_dac')}"
         )
+        if run_profile.get("initial_dac") is not None:
+            self._append_process_log(
+                "[CFG] "
+                f"initial_dac={run_profile.get('initial_dac')} | "
+                f"source={run_profile.get('initial_dac_source') or 'runtime'}"
+            )
 
         # 3) PLC precheck
         if not self._check_plc_ready_before_start():
@@ -910,7 +965,7 @@ class ProcessWindow(QWidget):
         self._start_async_preflight(run_cfg)
             
     """
-    def _on_stop_clicked(self) -> None:
+    def _on_stop_clicked_legacy(self) -> None:
         # 0) Start preflight 중이면 우선 취소
         if self._has_active_start_preflight():
             worker = self._start_worker
@@ -1003,7 +1058,7 @@ class ProcessWindow(QWidget):
         self._active_run_cfg = None
         self._active_run_profile = None
 
-    def _split_status_message(self, st: Any) -> tuple[str, list[str], str]:
+    def _split_status_message_legacy(self, st: Any) -> tuple[str, list[str], str]:
         msg = str(self._status_value(st, "message", "") or "").strip()
         if not msg:
             return "", [], ""
@@ -1059,7 +1114,7 @@ class ProcessWindow(QWidget):
         return getattr(st, name, default)
 
     @staticmethod
-    def _format_status_phase(phase: Any) -> str:
+    def _format_status_phase_legacy(phase: Any) -> str:
         raw = str(getattr(phase, "value", phase) or "").strip().upper()
         phase_map = {
             "IDLE": "대기",
@@ -1074,7 +1129,7 @@ class ProcessWindow(QWidget):
         return raw.replace("_", " ").title() if raw else ""
 
     @staticmethod
-    def _format_status_step(step_idx: Any, step_name: Any) -> str:
+    def _format_status_step_legacy(step_idx: Any, step_name: Any) -> str:
         name = str(step_name or "").strip().replace("_", " ")
         try:
             idx = int(step_idx)
@@ -1088,14 +1143,14 @@ class ProcessWindow(QWidget):
         return name
 
     @staticmethod
-    def _same_status_text(left: str, right: str) -> bool:
+    def _same_status_text_legacy(left: str, right: str) -> bool:
         def _norm(text: str) -> str:
             s = str(text or "").strip().upper().replace("_", " ")
             return re.sub(r"\s+", " ", s)
 
         return bool(left and right and _norm(left) == _norm(right))
 
-    def _filter_status_detail_parts(
+    def _filter_status_detail_parts_legacy(
         self,
         parts: list[str],
         *,
@@ -1121,7 +1176,7 @@ class ProcessWindow(QWidget):
 
         return filtered
 
-    def _build_process_status_summary(self, st: Any) -> str:
+    def _build_process_status_summary_legacy(self, st: Any) -> str:
         phase_text = self._format_status_phase(self._status_value(st, "phase", ""))
         step_text = self._format_status_step(
             self._status_value(st, "step_idx", -1),
@@ -1788,6 +1843,7 @@ class ProcessWindow(QWidget):
             new_cfg = getter()
         else:
             new_cfg = getattr(dlg, "config", None)
+        self._clear_recommendation_runtime_overrides()
         self._apply_process_config(new_cfg, log_prefix="[CFG] Process config updated |")
 
     def _on_recommendation_clicked(self) -> None:
@@ -1840,10 +1896,61 @@ class ProcessWindow(QWidget):
             QMessageBox.warning(self, "Recommendation", "Recommended config is empty.")
             return
 
+        runtime_overrides = dlg.recommended_runtime_overrides()
         self._last_recommendation = dict(recommendation)
+        self._recommended_runtime_signature = self._build_recommendation_signature(run_cfg)
+        self._recommended_runtime_overrides = dict(runtime_overrides or {})
         self._apply_process_config(recommended_cfg, log_prefix="[RECO] Applied recommendation |")
 
+        if self._recommended_runtime_overrides:
+            initial_dac = self._recommended_runtime_overrides.get("initial_dac")
+            if initial_dac is not None:
+                self._append_process_log(f"[RECO] start DAC override prepared -> {initial_dac}")
+
     # ================== 그래프 설정 ==================
+    def _on_history_backfill_clicked(self) -> None:
+        svc = self._run_summary_service
+        if svc is None or not hasattr(svc, "backfill_history"):
+            QMessageBox.information(self, "History Rebuild", "History rebuild service is not available.")
+            return
+
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            result = dict(svc.backfill_history() or {})
+        except Exception as exc:
+            QMessageBox.warning(self, "History Rebuild", f"History rebuild failed:\n{exc!r}")
+            self._append_process_log(f"[HISTORY][ERR] rebuild failed: {exc!r}")
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+
+        scanned = int(result.get("scanned", 0) or 0)
+        stored = int(result.get("stored", 0) or 0)
+        updated = int(result.get("updated", 0) or 0)
+        skipped = int(result.get("skipped", 0) or 0)
+        failed = int(result.get("failed", 0) or 0)
+
+        self._append_process_log(
+            "[HISTORY] rebuild complete | "
+            f"scanned={scanned} | stored={stored} | updated={updated} | skipped={skipped} | failed={failed}"
+        )
+
+        errors = list(result.get("errors") or [])
+        detail = ""
+        if errors:
+            detail = "\n\nErrors:\n" + "\n".join(str(err) for err in errors[:10])
+
+        QMessageBox.information(
+            self,
+            "History Rebuild",
+            "History rebuild completed.\n"
+            f"scanned={scanned}\n"
+            f"stored={stored}\n"
+            f"updated={updated}\n"
+            f"skipped={skipped}\n"
+            f"failed={failed}{detail}",
+        )
+
     def _init_rt_plot(self) -> None:
         """ui.graphWidget 자리에 DepositionPlotWidget을 삽입"""
         host = getattr(self.ui, "graphWidget", None)
@@ -2175,6 +2282,7 @@ class ProcessWindow(QWidget):
         self._material_1 = None
         self._material_2 = None
         self._clear_run_power_flags()
+        self._clear_recommendation_runtime_overrides()
 
         with contextlib.suppress(Exception):
             self.ui.materialEdit.setText("Select")
@@ -2394,6 +2502,9 @@ class ProcessWindow(QWidget):
 
             "process_config": proc_cfg,
         }
+        runtime_overrides = self._matching_recommendation_runtime_overrides(cfg)
+        if runtime_overrides:
+            cfg["runtime_recommendation"] = dict(runtime_overrides)
         return cfg
     
     # ================== UI 값 파싱 ==================

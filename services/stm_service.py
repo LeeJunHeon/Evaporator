@@ -33,7 +33,7 @@ from devices.stm100 import STM100, STM100ProtocolError, STM100ValueUnavailableEr
 # STM io_trace 포맷 헬퍼
 # ============================================================
 
-def _format_stm_io_trace(d: dict) -> str:
+def _format_stm_io_trace_legacy0(d: dict) -> str:
     """
     STM100 TX/RX trace dict → 사람이 읽기 쉬운 로그 문자열.
 
@@ -77,7 +77,7 @@ def _format_stm_io_trace(d: dict) -> str:
     return f"[STM] TX={tx!r} → RX={rx!r}"
 
 
-def _format_stm_io_trace(d: dict) -> str:
+def _format_stm_io_trace_legacy1(d: dict) -> str:
     tx = str(d.get("tx", "")).strip().upper()
     rx = str(d.get("rx", "")).strip()
     ok = bool(d.get("ok", True))
@@ -105,6 +105,40 @@ def _format_stm_io_trace(d: dict) -> str:
     if not ok:
         return f"[STM] TX={tx!r} ERROR: rx={rx!r} {detail}".strip()
 
+    return f"[STM] TX={tx!r} RX={rx!r}"
+
+
+def _format_stm_io_trace_legacy2(d: dict) -> str:
+    tx = str(d.get("tx", "") or "").strip().upper()
+    rx = str(d.get("rx", "") or "").strip()
+    ok = bool(d.get("ok", True))
+    detail = str(d.get("detail", "") or "").strip()
+
+    body = rx
+    if body[:1].upper() in ("A", "B") and len(body) > 1:
+        body = body[1:].strip()
+
+    if not ok:
+        suffix = f" ({detail})" if detail else ""
+        return f"[STM] 통신 오류: tx={tx!r} rx={rx!r}{suffix}"
+
+    if tx == "U":
+        try:
+            hz = int(body)
+            return f"[STM] 센서 주파수: {hz / 1_000_000.0:.6f} MHz"
+        except Exception:
+            suffix = f" ({detail})" if detail else ""
+            return f"[STM] 센서 주파수 파싱 실패: tx={tx!r} rx={rx!r}{suffix}"
+
+    if tx == "V":
+        try:
+            return f"[STM] 크리스탈 수명: {float(body):.1f}%"
+        except Exception:
+            suffix = f" ({detail})" if detail else ""
+            return f"[STM] 크리스탈 수명 파싱 실패: tx={tx!r} rx={rx!r}{suffix}"
+
+    if detail:
+        return f"[STM] TX={tx!r} RX={rx!r} ({detail})"
     return f"[STM] TX={tx!r} RX={rx!r}"
 
 

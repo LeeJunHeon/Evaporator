@@ -20,3 +20,11 @@ Thumbs.db
 build/
 dist/
 *.egg-info/
+
+# local test / temp artifacts
+.pytest_cache/
+*.sqlite-wal
+*.sqlite-shm
+evap_backfill_*/
+_tmp_backfill_validation*/
+_tmp_db_probe*/

@@ -7,6 +7,7 @@ import hashlib
 import json
 import re
 import statistics
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -22,6 +23,18 @@ def _to_float_or_none(value: Any) -> Optional[float]:
 
 def _canonical_json(payload: Any) -> str:
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _parse_timestamp(value: Any) -> Optional[float]:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+        with contextlib.suppress(Exception):
+            return datetime.strptime(text, fmt).timestamp()
+    with contextlib.suppress(Exception):
+        return float(text)
+    return None
 
 
 class RunSummaryService:
@@ -70,6 +83,76 @@ class RunSummaryService:
         except Exception as exc:
             self._log_warn(f"run summary exception: {exc!r}")
             return None
+
+    def backfill_history(self) -> dict[str, Any]:
+        stats = {
+            "scanned": 0,
+            "stored": 0,
+            "updated": 0,
+            "skipped": 0,
+            "failed": 0,
+            "errors": [],
+        }
+
+        if self._history_store is None or not hasattr(self._history_store, "upsert_run_summary"):
+            stats["failed"] = 1
+            stats["errors"].append("history store is not available")
+            return stats
+
+        try:
+            if self._log_service is not None and hasattr(self._log_service, "flush"):
+                with contextlib.suppress(Exception):
+                    self._log_service.flush(timeout_ms=4000)
+
+            artifacts = self._scan_history_artifacts()
+            stats["scanned"] = len(artifacts)
+
+            for item in artifacts:
+                try:
+                    summary = self._build_backfill_summary(item)
+                    if not summary:
+                        stats["skipped"] += 1
+                        continue
+
+                    run_id = str(summary.get("run_id", "") or "").strip()
+                    if not run_id:
+                        stats["failed"] += 1
+                        stats["errors"].append(f"missing run_id for {item.get('stem', '')}")
+                        continue
+
+                    existing = None
+                    if self._history_store is not None and hasattr(self._history_store, "get_run_summary"):
+                        existing = self._history_store.get_run_summary(run_id)
+
+                    if existing is not None and self._summaries_equivalent(existing, summary):
+                        stats["skipped"] += 1
+                        continue
+
+                    ok = bool(self._history_store.upsert_run_summary(summary))
+                    if not ok:
+                        stats["failed"] += 1
+                        stats["errors"].append(f"store failed: {run_id}")
+                        continue
+
+                    if existing is None:
+                        stats["stored"] += 1
+                    else:
+                        stats["updated"] += 1
+                except Exception as exc:
+                    stats["failed"] += 1
+                    stats["errors"].append(f"{item.get('stem', '')}: {exc!r}")
+
+            self._log_info(
+                "history backfill complete: "
+                f"scanned={stats['scanned']} stored={stats['stored']} "
+                f"updated={stats['updated']} skipped={stats['skipped']} failed={stats['failed']}"
+            )
+            return stats
+        except Exception as exc:
+            stats["failed"] += 1
+            stats["errors"].append(repr(exc))
+            self._log_warn(f"history backfill failed: {exc!r}")
+            return stats
 
     def build_summary(
         self,
@@ -133,7 +216,13 @@ class RunSummaryService:
         )
 
         started_ts = _to_float_or_none(getattr(result, "started_ts", None))
+        if started_ts is None:
+            started_ts = _parse_timestamp(merged.get("started_ts"))
+        if started_ts is None:
+            started_ts = _parse_timestamp(merged.get("opened_at"))
         finished_ts = _to_float_or_none(getattr(result, "finished_ts", None))
+        if finished_ts is None:
+            finished_ts = _parse_timestamp(merged.get("finished_ts"))
         total_run_time_s = None
         if started_ts is not None and finished_ts is not None and finished_ts >= started_ts:
             total_run_time_s = finished_ts - started_ts
@@ -195,6 +284,10 @@ class RunSummaryService:
             ),
             "dac_first_nonzero": self._first_positive_value(enriched_rows, "selected_dac"),
             "adc_first_nonzero": self._first_positive_value(enriched_rows, "selected_adc"),
+            "configured_start_dac": _to_float_or_none(merged.get("configured_start_dac")),
+            "initial_dac": _to_float_or_none(merged.get("initial_dac")),
+            "initial_dac_source": str(merged.get("initial_dac_source", "") or "").strip(),
+            "applied_recommended_start_dac": 1 if bool(merged.get("applied_recommended_start_dac", False)) else 0,
         }
 
         return summary
@@ -250,6 +343,10 @@ class RunSummaryService:
         merged.setdefault("hw_mapping", dict(merged.get("hw_mapping") or {}))
         merged.setdefault("process_config", dict(merged.get("process_config") or {}))
         merged.setdefault("process_config_hash", self._process_config_hash(merged.get("process_config") or {}))
+        merged.setdefault("configured_start_dac", _to_float_or_none(merged.get("configured_start_dac")))
+        merged.setdefault("initial_dac", _to_float_or_none(merged.get("initial_dac")))
+        merged.setdefault("initial_dac_source", str(merged.get("initial_dac_source", "") or "").strip())
+        merged.setdefault("applied_recommended_start_dac", bool(merged.get("applied_recommended_start_dac", False)))
         return merged
 
     def _enrich_rows(self, rows: list[dict[str, Any]], merged: dict[str, Any]) -> list[dict[str, Any]]:
@@ -272,6 +369,7 @@ class RunSummaryService:
                 "step": str(row.get("step", "") or "").strip(),
                 "detail": str(row.get("detail", "") or "").strip(),
             }
+            item.update(self._parse_telemetry_detail(item["detail"]))
 
             item["selected_dac"] = self._selected_dac_total(item, use_power1=use_power1, use_power2=use_power2)
             item["selected_adc"] = self._selected_adc_total(
@@ -293,6 +391,33 @@ class RunSummaryService:
         if not values:
             return None
         return sum(values)
+
+    def _parse_telemetry_detail(self, detail: str) -> dict[str, Any]:
+        text = str(detail or "").strip()
+        parsed: dict[str, Any] = {
+            "event": "",
+            "target": "",
+            "event_value": "",
+            "detail_extra": "",
+            "tag": "",
+        }
+        if not text:
+            return parsed
+
+        match = re.match(r"^(?P<event>\S+)\s+(?P<target>[^=|]+)=(?P<value>[^|]*)(?:\|\s*(?P<extra>.*))?$", text)
+        if match:
+            parsed["event"] = str(match.group("event") or "").strip()
+            parsed["target"] = str(match.group("target") or "").strip()
+            parsed["event_value"] = str(match.group("value") or "").strip()
+            parsed["detail_extra"] = str(match.group("extra") or "").strip()
+        else:
+            parsed["detail_extra"] = text
+
+        extra = parsed["detail_extra"]
+        tag_match = re.search(r"(?:^|[,|]\s*)tag=([^\s,|]+)", extra)
+        if tag_match:
+            parsed["tag"] = str(tag_match.group(1) or "").strip()
+        return parsed
 
     def _selected_adc_total(
         self,
@@ -357,6 +482,14 @@ class RunSummaryService:
 
     def _find_main_shutter_open(self, rows: list[dict[str, Any]]) -> tuple[Optional[float], Optional[dict[str, Any]]]:
         for row in rows:
+            event = str(row.get("event", "") or "").upper()
+            target = str(row.get("target", "") or "").strip().upper()
+            event_value = str(row.get("event_value", "") or "").strip().lower()
+            if event == "WRITE_COIL" and target == "MAIN_SHUTTER_SW" and event_value in ("1", "true"):
+                return _to_float_or_none(row.get("elapsed_sec")), row
+            if str(row.get("tag", "") or "").strip().upper() == "EVAP_MAIN_SHUTTER_OPEN":
+                return _to_float_or_none(row.get("elapsed_sec")), row
+
             detail = str(row.get("detail", "") or "")
             if "WRITE_COIL MAIN_SHUTTER_SW=1" in detail or "tag=EVAP_MAIN_SHUTTER_OPEN" in detail:
                 return _to_float_or_none(row.get("elapsed_sec")), row
@@ -565,6 +698,300 @@ class RunSummaryService:
             return ""
         payload = _canonical_json(process_config).encode("utf-8")
         return hashlib.sha256(payload).hexdigest()
+
+    def _scan_history_artifacts(self) -> list[dict[str, Any]]:
+        roots: list[Path] = []
+        if self._log_service is not None and hasattr(self._log_service, "get_storage_roots"):
+            with contextlib.suppress(Exception):
+                storage_roots = dict(self._log_service.get_storage_roots(force_resolve=True) or {})
+                for key in ("resolved", "base", "fallback"):
+                    root = storage_roots.get(key)
+                    if root is not None and Path(root) not in roots:
+                        roots.append(Path(root))
+
+        if not roots:
+            roots.append(Path.cwd() / "_Logs")
+
+        discovered: dict[str, dict[str, Any]] = {}
+        for root in roots:
+            for subdir, key, pattern in (
+                ("ProcessLog", "csv", "*.csv"),
+                ("ProcessWindowLog", "log", "*.log"),
+            ):
+                folder = Path(root) / subdir
+                if not folder.exists():
+                    continue
+                for path in sorted(folder.glob(pattern)):
+                    stem = path.stem
+                    entry = discovered.setdefault(
+                        stem,
+                        {
+                            "stem": stem,
+                            "csv": None,
+                            "log": None,
+                            "root": root,
+                        },
+                    )
+                    if entry.get(key) is None:
+                        entry[key] = path
+
+        return [discovered[stem] for stem in sorted(discovered.keys())]
+
+    def _build_backfill_summary(self, artifact: dict[str, Any]) -> Optional[dict[str, Any]]:
+        csv_path = artifact.get("csv")
+        log_path = artifact.get("log")
+        stem = str(artifact.get("stem", "") or "").strip()
+        if csv_path is None and log_path is None:
+            return None
+
+        csv_meta: dict[str, Any] = {}
+        if csv_path is not None:
+            csv_meta, _ = self._load_telemetry_csv(Path(csv_path))
+
+        log_meta = self._load_log_metadata(log_path)
+        inferred_run_id, inferred_recipe = self._parse_run_stem(stem)
+
+        run_id = str(csv_meta.get("run_id", "") or log_meta.get("run_id", "") or "").strip()
+        recipe_name = str(csv_meta.get("recipe_name", "") or log_meta.get("recipe_name", "") or "").strip()
+        if not run_id:
+            run_id = inferred_run_id
+            if not recipe_name:
+                recipe_name = inferred_recipe
+        elif not recipe_name:
+            recipe_name = inferred_recipe
+
+        if not run_id:
+            return None
+
+        started_ts = (
+            _parse_timestamp(csv_meta.get("started_ts"))
+            or _parse_timestamp(csv_meta.get("opened_at"))
+            or log_meta.get("started_ts")
+            or self._path_timestamp(csv_path or log_path)
+        )
+        finished_ts = log_meta.get("finished_ts") or self._path_timestamp(log_path or csv_path)
+
+        result = type(
+            "BackfillResult",
+            (),
+            {
+                "run_id": run_id,
+                "recipe_name": recipe_name,
+                "started_ts": started_ts,
+                "finished_ts": finished_ts,
+                "ok": bool(log_meta.get("result_status") == "success"),
+                "error": None,
+            },
+        )()
+
+        run_profile = {
+            "run_id": run_id,
+            "recipe_name": recipe_name,
+            "process_name": str(
+                csv_meta.get("process_name", "")
+                or csv_meta.get("recipe_name", "")
+                or recipe_name
+                or inferred_recipe
+            ).strip(),
+            "material_name": str(csv_meta.get("material_name", "") or "").strip(),
+            "density": _to_float_or_none(csv_meta.get("density")),
+            "z_factor": _to_float_or_none(csv_meta.get("z_factor")),
+            "target_rate": _to_float_or_none(csv_meta.get("target_rate")),
+            "target_thickness": _to_float_or_none(csv_meta.get("target_thickness")),
+            "delay_min": _to_float_or_none(csv_meta.get("delay_min")),
+            "use_power1": bool(csv_meta.get("use_power1", False)),
+            "use_power2": bool(csv_meta.get("use_power2", False)),
+            "hw_mapping": dict(csv_meta.get("hw_mapping") or {}),
+            "process_config": dict(csv_meta.get("process_config") or {}),
+            "process_config_hash": str(csv_meta.get("process_config_hash", "") or ""),
+            "configured_start_dac": _to_float_or_none(csv_meta.get("configured_start_dac")),
+            "initial_dac": _to_float_or_none(csv_meta.get("initial_dac")),
+            "initial_dac_source": str(csv_meta.get("initial_dac_source", "") or "").strip(),
+            "applied_recommended_start_dac": bool(csv_meta.get("applied_recommended_start_dac", False)),
+            "started_ts": started_ts,
+            "finished_ts": finished_ts,
+        }
+
+        if csv_path is not None:
+            summary = self.build_summary(
+                csv_path=Path(csv_path),
+                log_path=(Path(log_path) if log_path is not None else None),
+                run_profile=run_profile,
+                result=result,
+            )
+            if summary and not summary.get("recipe_name"):
+                summary["recipe_name"] = recipe_name
+            if summary and not summary.get("process_name"):
+                summary["process_name"] = run_profile.get("process_name", "")
+            return summary
+
+        return self._build_log_only_summary(
+            run_id=run_id,
+            recipe_name=recipe_name,
+            run_profile=run_profile,
+            log_meta=log_meta,
+        )
+
+    def _build_log_only_summary(
+        self,
+        *,
+        run_id: str,
+        recipe_name: str,
+        run_profile: dict[str, Any],
+        log_meta: dict[str, Any],
+    ) -> dict[str, Any]:
+        started_ts = log_meta.get("started_ts")
+        finished_ts = log_meta.get("finished_ts")
+        total_run_time_s = None
+        if started_ts is not None and finished_ts is not None and finished_ts >= started_ts:
+            total_run_time_s = finished_ts - started_ts
+
+        process_config = dict(run_profile.get("process_config") or {})
+        hw_mapping = dict(run_profile.get("hw_mapping") or {})
+        return {
+            "run_id": run_id,
+            "recipe_name": recipe_name,
+            "process_name": str(run_profile.get("process_name", "") or recipe_name).strip(),
+            "material_name": str(run_profile.get("material_name", "") or "").strip(),
+            "density": _to_float_or_none(run_profile.get("density")),
+            "z_factor": _to_float_or_none(run_profile.get("z_factor")),
+            "target_rate": _to_float_or_none(run_profile.get("target_rate")),
+            "target_thickness": _to_float_or_none(run_profile.get("target_thickness")),
+            "delay_min": _to_float_or_none(run_profile.get("delay_min")),
+            "use_power1": 1 if bool(run_profile.get("use_power1", False)) else 0,
+            "use_power2": 1 if bool(run_profile.get("use_power2", False)) else 0,
+            "hw_mapping_json": hw_mapping,
+            "process_config_json": process_config,
+            "process_config_hash": str(run_profile.get("process_config_hash", "") or self._process_config_hash(process_config)),
+            "started_ts": started_ts,
+            "finished_ts": finished_ts,
+            "result_status": str(log_meta.get("result_status", "abnormal_end") or "abnormal_end"),
+            "fail_reason": str(log_meta.get("fail_reason", "") or "").strip(),
+            "time_to_target_s": None,
+            "time_to_stable_rate_s": None,
+            "time_to_main_shutter_open_s": None,
+            "total_run_time_s": total_run_time_s,
+            "stable_rate_mean": None,
+            "stable_rate_std": None,
+            "stable_dac_mean": None,
+            "stable_dac_std": None,
+            "stable_adc_mean": None,
+            "stable_adc_std": None,
+            "dac_at_stable_reached": None,
+            "adc_at_stable_reached": None,
+            "dac_at_shutter_open": None,
+            "adc_at_shutter_open": None,
+            "overshoot_peak": None,
+            "overshoot_ratio_peak": None,
+            "spike_count": None,
+            "spike_max_abs": None,
+            "final_thickness_A": None,
+            "thickness_error_A": None,
+            "thickness_error_ratio": None,
+            "sensor_none_duration_s": None,
+            "adc_none_duration_s": None,
+            "ramp_step_count_used": None,
+            "stable_reached_in_step_index": None,
+            "dac_first_nonzero": None,
+            "adc_first_nonzero": None,
+            "configured_start_dac": _to_float_or_none(run_profile.get("configured_start_dac")),
+            "initial_dac": _to_float_or_none(run_profile.get("initial_dac")),
+            "initial_dac_source": str(run_profile.get("initial_dac_source", "") or "").strip(),
+            "applied_recommended_start_dac": 1 if bool(run_profile.get("applied_recommended_start_dac", False)) else 0,
+        }
+
+    def _load_log_metadata(self, log_path: Optional[Path]) -> dict[str, Any]:
+        meta = {
+            "run_id": "",
+            "recipe_name": "",
+            "started_ts": None,
+            "finished_ts": None,
+            "result_status": "abnormal_end",
+            "fail_reason": "",
+        }
+        if log_path is None or not Path(log_path).exists():
+            return meta
+
+        ts_values: list[float] = []
+        try:
+            for raw_line in Path(log_path).read_text(encoding="utf-8", errors="replace").splitlines():
+                line = str(raw_line or "").strip()
+                if not line:
+                    continue
+
+                ts_match = re.match(r"^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]", line)
+                if ts_match:
+                    parsed_ts = _parse_timestamp(ts_match.group(1))
+                    if parsed_ts is not None:
+                        ts_values.append(parsed_ts)
+
+                open_match = re.search(r"\[RUN\]\[OPEN\]\s+run_id=([^\s]+)\s+recipe=(.*)$", line)
+                if open_match:
+                    meta["run_id"] = str(open_match.group(1) or "").strip()
+                    meta["recipe_name"] = str(open_match.group(2) or "").strip()
+
+                stop_match = re.search(r"RUN STOPPED .* mode=([A-Z_]+)", line)
+                if stop_match:
+                    meta["result_status"] = "stopped"
+                    meta["fail_reason"] = stop_match.group(1)
+
+                if "RUN FINISHED OK" in line:
+                    meta["result_status"] = "success"
+                    meta["fail_reason"] = ""
+
+                if "RUN ERROR" in line and meta["result_status"] != "success":
+                    meta["result_status"] = "fail"
+                    error_match = re.search(r"RUN ERROR .* error=(.*)$", line)
+                    meta["fail_reason"] = str(error_match.group(1) or "").strip() if error_match else meta["fail_reason"]
+        except Exception:
+            return meta
+
+        if ts_values:
+            meta["started_ts"] = min(ts_values)
+            meta["finished_ts"] = max(ts_values)
+        return meta
+
+    def _parse_run_stem(self, stem: str) -> tuple[str, str]:
+        text = str(stem or "").strip()
+        match = re.match(r"^(\d{8}_\d{6})(?:_(.*))?$", text)
+        if match:
+            return str(match.group(1) or "").strip(), str(match.group(2) or "").strip()
+        return text, ""
+
+    def _path_timestamp(self, path: Optional[Path]) -> Optional[float]:
+        if path is None:
+            return None
+        with contextlib.suppress(Exception):
+            return float(Path(path).stat().st_mtime)
+        return None
+
+    def _summaries_equivalent(self, existing: dict[str, Any], candidate: dict[str, Any]) -> bool:
+        ignore_keys = {"created_ts"}
+        keys = set(candidate.keys()) - ignore_keys
+        for key in keys:
+            if self._normalize_compare_value(existing.get(key), key=key, row=existing) != self._normalize_compare_value(candidate.get(key), key=key, row=candidate):
+                return False
+        return True
+
+    def _normalize_compare_value(self, value: Any, *, key: str, row: dict[str, Any]) -> Any:
+        if key == "hw_mapping":
+            value = row.get("hw_mapping", value)
+        elif key == "process_config":
+            value = row.get("process_config", value)
+        elif key == "hw_mapping_json":
+            value = row.get("hw_mapping", value)
+        elif key == "process_config_json":
+            value = row.get("process_config", value)
+
+        if isinstance(value, (dict, list, tuple)):
+            return _canonical_json(value)
+        if isinstance(value, float):
+            return round(value, 9)
+        if key in ("applied_recommended_start_dac", "use_power1", "use_power2"):
+            return 1 if bool(value) else 0
+        if value in ("", None):
+            return None
+        return value
 
     def _log_info(self, message: str) -> None:
         if self._log_service is not None and hasattr(self._log_service, "info"):

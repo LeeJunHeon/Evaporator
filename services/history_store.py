@@ -18,6 +18,59 @@ def _json_text(value: Any) -> str:
 
 
 class HistoryStore:
+    _SUMMARY_COLUMNS: tuple[tuple[str, str], ...] = (
+        ("run_id", "TEXT PRIMARY KEY"),
+        ("recipe_name", "TEXT"),
+        ("process_name", "TEXT"),
+        ("material_name", "TEXT"),
+        ("density", "REAL"),
+        ("z_factor", "REAL"),
+        ("target_rate", "REAL"),
+        ("target_thickness", "REAL"),
+        ("delay_min", "REAL"),
+        ("use_power1", "INTEGER"),
+        ("use_power2", "INTEGER"),
+        ("hw_mapping_json", "TEXT"),
+        ("process_config_json", "TEXT"),
+        ("process_config_hash", "TEXT"),
+        ("started_ts", "REAL"),
+        ("finished_ts", "REAL"),
+        ("result_status", "TEXT"),
+        ("fail_reason", "TEXT"),
+        ("time_to_target_s", "REAL"),
+        ("time_to_stable_rate_s", "REAL"),
+        ("time_to_main_shutter_open_s", "REAL"),
+        ("total_run_time_s", "REAL"),
+        ("stable_rate_mean", "REAL"),
+        ("stable_rate_std", "REAL"),
+        ("stable_dac_mean", "REAL"),
+        ("stable_dac_std", "REAL"),
+        ("stable_adc_mean", "REAL"),
+        ("stable_adc_std", "REAL"),
+        ("dac_at_stable_reached", "REAL"),
+        ("adc_at_stable_reached", "REAL"),
+        ("dac_at_shutter_open", "REAL"),
+        ("adc_at_shutter_open", "REAL"),
+        ("overshoot_peak", "REAL"),
+        ("overshoot_ratio_peak", "REAL"),
+        ("spike_count", "INTEGER"),
+        ("spike_max_abs", "REAL"),
+        ("final_thickness_A", "REAL"),
+        ("thickness_error_A", "REAL"),
+        ("thickness_error_ratio", "REAL"),
+        ("sensor_none_duration_s", "REAL"),
+        ("adc_none_duration_s", "REAL"),
+        ("ramp_step_count_used", "INTEGER"),
+        ("stable_reached_in_step_index", "INTEGER"),
+        ("dac_first_nonzero", "REAL"),
+        ("adc_first_nonzero", "REAL"),
+        ("configured_start_dac", "REAL"),
+        ("initial_dac", "REAL"),
+        ("initial_dac_source", "TEXT"),
+        ("applied_recommended_start_dac", "INTEGER"),
+        ("created_ts", "REAL"),
+    )
+
     def __init__(
         self,
         *,
@@ -93,55 +146,13 @@ class HistoryStore:
         return conn
 
     def _ensure_schema(self, conn: sqlite3.Connection) -> None:
+        columns_sql = ",\n                ".join(
+            f"{name} {type_sql}" for name, type_sql in self._SUMMARY_COLUMNS
+        )
         conn.executescript(
-            """
+            f"""
             CREATE TABLE IF NOT EXISTS run_summaries (
-                run_id TEXT PRIMARY KEY,
-                recipe_name TEXT,
-                process_name TEXT,
-                material_name TEXT,
-                density REAL,
-                z_factor REAL,
-                target_rate REAL,
-                target_thickness REAL,
-                delay_min REAL,
-                use_power1 INTEGER,
-                use_power2 INTEGER,
-                hw_mapping_json TEXT,
-                process_config_json TEXT,
-                process_config_hash TEXT,
-                started_ts REAL,
-                finished_ts REAL,
-                result_status TEXT,
-                fail_reason TEXT,
-                time_to_target_s REAL,
-                time_to_stable_rate_s REAL,
-                time_to_main_shutter_open_s REAL,
-                total_run_time_s REAL,
-                stable_rate_mean REAL,
-                stable_rate_std REAL,
-                stable_dac_mean REAL,
-                stable_dac_std REAL,
-                stable_adc_mean REAL,
-                stable_adc_std REAL,
-                dac_at_stable_reached REAL,
-                adc_at_stable_reached REAL,
-                dac_at_shutter_open REAL,
-                adc_at_shutter_open REAL,
-                overshoot_peak REAL,
-                overshoot_ratio_peak REAL,
-                spike_count INTEGER,
-                spike_max_abs REAL,
-                final_thickness_A REAL,
-                thickness_error_A REAL,
-                thickness_error_ratio REAL,
-                sensor_none_duration_s REAL,
-                adc_none_duration_s REAL,
-                ramp_step_count_used INTEGER,
-                stable_reached_in_step_index INTEGER,
-                dac_first_nonzero REAL,
-                adc_first_nonzero REAL,
-                created_ts REAL
+                {columns_sql}
             );
 
             CREATE INDEX IF NOT EXISTS idx_run_summaries_result_status
@@ -157,7 +168,18 @@ class HistoryStore:
             ON run_summaries(process_config_hash);
             """
         )
+        self._ensure_columns(conn)
         conn.commit()
+
+    def _ensure_columns(self, conn: sqlite3.Connection) -> None:
+        existing = {
+            str((row["name"] if isinstance(row, sqlite3.Row) else row[1]) or "").strip()
+            for row in conn.execute("PRAGMA table_info(run_summaries)").fetchall()
+        }
+        for name, type_sql in self._SUMMARY_COLUMNS:
+            if name in existing:
+                continue
+            conn.execute(f"ALTER TABLE run_summaries ADD COLUMN {name} {type_sql}")
 
     def upsert_run_summary(self, summary: dict[str, Any]) -> bool:
         db_path = self._write_db_path()
@@ -173,6 +195,30 @@ class HistoryStore:
             conn.execute(sql, [payload[col] for col in columns])
             conn.commit()
         return True
+
+    def get_run_summary(self, run_id: str) -> Optional[dict[str, Any]]:
+        key = str(run_id or "").strip()
+        if not key:
+            return None
+
+        merged: Optional[dict[str, Any]] = None
+        for db_path in self._db_paths_for_query():
+            if not db_path.exists():
+                continue
+            try:
+                with self._connect(db_path) as conn:
+                    row = conn.execute(
+                        "SELECT * FROM run_summaries WHERE run_id = ?",
+                        [key],
+                    ).fetchone()
+                if row is None:
+                    continue
+                data = self._decode_row(dict(row))
+                if merged is None or float(data.get("finished_ts") or 0.0) >= float(merged.get("finished_ts") or 0.0):
+                    merged = data
+            except Exception:
+                continue
+        return merged
 
     def fetch_run_summaries(
         self,

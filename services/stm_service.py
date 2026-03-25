@@ -77,6 +77,37 @@ def _format_stm_io_trace(d: dict) -> str:
     return f"[STM] TX={tx!r} → RX={rx!r}"
 
 
+def _format_stm_io_trace(d: dict) -> str:
+    tx = str(d.get("tx", "")).strip().upper()
+    rx = str(d.get("rx", "")).strip()
+    ok = bool(d.get("ok", True))
+    detail = str(d.get("detail", "")).strip()
+
+    body = rx
+    if body[:1].upper() in ("A", "B") and len(body) > 1:
+        body = body[1:].strip()
+
+    if tx == "U":
+        try:
+            hz = int(body)
+            return f"[STM] Sensor frequency: {hz:,} Hz ({hz / 1_000_000.0:.6f} MHz)"
+        except Exception:
+            level = "WARNING" if ok else "ERROR"
+            return f"[STM][{level}] Sensor frequency parse failed: tx={tx!r} rx={rx!r} {detail}".strip()
+
+    if tx == "V":
+        try:
+            return f"[STM] Crystal life: {float(body):.1f}%"
+        except Exception:
+            level = "WARNING" if ok else "ERROR"
+            return f"[STM][{level}] Crystal life parse failed: tx={tx!r} rx={rx!r} {detail}".strip()
+
+    if not ok:
+        return f"[STM] TX={tx!r} ERROR: rx={rx!r} {detail}".strip()
+
+    return f"[STM] TX={tx!r} RX={rx!r}"
+
+
 # ============================================================
 # Snapshot
 # ============================================================

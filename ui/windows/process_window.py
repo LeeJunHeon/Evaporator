@@ -195,10 +195,6 @@ class ProcessWindow(QWidget):
         if not s:
             s = fallback
 
-        if " | " in s:
-            head, tail = s.split(" | ", 1)
-            s = f"{head}\n{tail}"
-
         try:
             w.setText(s)
         except Exception:
@@ -208,7 +204,7 @@ class ProcessWindow(QWidget):
         title = str(title or "").strip() or "---"
         detail = str(detail or "").strip()
         if detail:
-            self._set_process_monitor_text(f"{title} | {detail}")
+            self._set_process_monitor_text(f"{title}\n{detail}")
         else:
             self._set_process_monitor_text(title)
 
@@ -219,15 +215,38 @@ class ProcessWindow(QWidget):
 
         # LogService 포맷:
         # [YYYY-MM-DD HH:MM:SS] [LEVEL] [TAG] ...
-        m = re.match(r"^\[(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})\]\s+(.*)$", raw)
+        m = re.match(
+            r"^\[(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})\]\s+\[([A-Z]+)\](?:\s+\[([^\]]+)\])?\s*(.*)$",
+            raw,
+        )
         if m:
-            line = f"[{m.group(2)}] {m.group(3)}"
-        else:
-            ts = datetime.now().strftime("%H:%M:%S")
-            if raw.startswith("["):
-                line = f"[{ts}] {raw}"
+            time_text = m.group(2)
+            level = str(m.group(3) or "").strip().upper()
+            tag = str(m.group(4) or "").strip()
+            body = str(m.group(5) or "").strip()
+
+            prefix_parts: list[str] = []
+            if tag:
+                prefix_parts.append(tag)
+            if level and level not in ("INFO",):
+                prefix_parts.append(level)
+
+            prefix = " ".join(prefix_parts).strip()
+            if prefix and body:
+                line = f"[{time_text}] {prefix} | {body}"
+            elif prefix:
+                line = f"[{time_text}] {prefix}"
+            elif body:
+                line = f"[{time_text}] {body}"
             else:
-                line = f"[{ts}] [INFO] {raw}"
+                line = f"[{time_text}] {level or 'INFO'}"
+        else:
+            m = re.match(r"^\[(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})\]\s+(.*)$", raw)
+            if m:
+                line = f"[{m.group(2)}] {m.group(3)}"
+            else:
+                ts = datetime.now().strftime("%H:%M:%S")
+                line = f"[{ts}] {raw}"
 
         # 1) UI 표시
         _append_text(getattr(self.ui, "logWindow", None), line)
@@ -772,10 +791,22 @@ class ProcessWindow(QWidget):
         self._close_process_run_log()
         self._active_run_id = None
 
-    def _split_status_message(self, st: Any) -> tuple[str, str]:
-        msg = str(getattr(st, "message", "") or "").strip()
-        phase = str(getattr(st, "phase", "") or "").strip()
-        step = str(getattr(st, "step_name", "") or getattr(st, "step", "") or "").strip()
+    def _split_status_message(self, st: Any) -> tuple[str, list[str], str]:
+        msg = str(self._status_value(st, "message", "") or "").strip()
+        if not msg:
+            return "", [], ""
+
+        time_info = ""
+        m = re.match(r"^\[([^\]]+)\]\s*(.*)$", msg)
+        if m:
+            time_info = str(m.group(1) or "").strip()
+            msg = str(m.group(2) or "").strip()
+
+        parts = [part.strip() for part in msg.split(" | ") if str(part).strip()]
+        if not parts:
+            return "", [], time_info
+
+        return parts[0], parts[1:], time_info
 
         # 1) controller가 message를 직접 준 경우
         if msg:
@@ -802,10 +833,150 @@ class ProcessWindow(QWidget):
         self._try_update_last_power(st)
 
         try:
-            title, detail = self._split_status_message(st)
-            self._set_process_status(title, detail)
+            self._set_process_monitor_text(self._build_process_status_summary(st))
         except Exception:
             pass
+
+    @staticmethod
+    def _status_value(st: Any, name: str, default: Any = None) -> Any:
+        if isinstance(st, dict):
+            return st.get(name, default)
+        return getattr(st, name, default)
+
+    @staticmethod
+    def _format_status_phase(phase: Any) -> str:
+        raw = str(getattr(phase, "value", phase) or "").strip().upper()
+        phase_map = {
+            "IDLE": "대기",
+            "RUNNING": "실행 중",
+            "PAUSED": "일시정지",
+            "STOPPING": "정지 중",
+            "FINISHED": "완료",
+            "ERROR": "오류",
+        }
+        if raw in phase_map:
+            return phase_map[raw]
+        return raw.replace("_", " ").title() if raw else ""
+
+    @staticmethod
+    def _format_status_step(step_idx: Any, step_name: Any) -> str:
+        name = str(step_name or "").strip().replace("_", " ")
+        try:
+            idx = int(step_idx)
+        except Exception:
+            idx = -1
+
+        if idx >= 0 and name:
+            return f"{idx + 1}. {name}"
+        if idx >= 0:
+            return f"{idx + 1}"
+        return name
+
+    @staticmethod
+    def _same_status_text(left: str, right: str) -> bool:
+        def _norm(text: str) -> str:
+            s = str(text or "").strip().upper().replace("_", " ")
+            return re.sub(r"\s+", " ", s)
+
+        return bool(left and right and _norm(left) == _norm(right))
+
+    def _filter_status_detail_parts(
+        self,
+        parts: list[str],
+        *,
+        has_rate: bool,
+        has_dac: bool,
+        has_adc: bool,
+    ) -> list[str]:
+        filtered: list[str] = []
+        for part in parts:
+            text = str(part or "").strip()
+            compact = re.sub(r"\s+", "", text.lower())
+            if not compact:
+                continue
+
+            if has_rate and re.fullmatch(r"rate=[+-]?\d+(?:\.\d+)?", compact):
+                continue
+            if has_dac and "/" not in compact and re.fullmatch(r"dac\d*=[+-]?\d+(?:\.\d+)?", compact):
+                continue
+            if has_adc and "/" not in compact and re.fullmatch(r"adc\d*=[+-]?\d+(?:\.\d+)?", compact):
+                continue
+
+            filtered.append(text)
+
+        return filtered
+
+    def _build_process_status_summary(self, st: Any) -> str:
+        phase_text = self._format_status_phase(self._status_value(st, "phase", ""))
+        step_text = self._format_status_step(
+            self._status_value(st, "step_idx", -1),
+            self._status_value(st, "step_name", self._status_value(st, "step", "")),
+        )
+        action, detail_parts, time_info = self._split_status_message(st)
+
+        pressure = self._to_float_or_none(self._status_value(st, "pressure", None))
+        thickness = self._to_float_or_none(self._status_value(st, "thickness_a", None))
+        rate = self._to_float_or_none(self._status_value(st, "rate_a_s", None))
+
+        current_parts: list[str] = []
+        if pressure is not None:
+            current_parts.append(f"압력 {pressure:.2e} Torr")
+        if thickness is not None:
+            current_parts.append(f"두께 {thickness:.1f} A")
+        if rate is not None:
+            current_parts.append(f"증착률 {rate:.3f} A/s")
+
+        device_parts: list[str] = []
+        for label, value, fmt in (
+            ("DAC1", self._status_value(st, "dac1", None), "{:.0f}"),
+            ("DAC2", self._status_value(st, "dac2", None), "{:.0f}"),
+            ("ADC1", self._status_value(st, "adc1", None), "{:.1f}"),
+            ("ADC2", self._status_value(st, "adc2", None), "{:.1f}"),
+        ):
+            num = self._to_float_or_none(value)
+            if num is not None:
+                device_parts.append(f"{label} {fmt.format(num)}")
+
+        detail_parts = self._filter_status_detail_parts(
+            detail_parts,
+            has_rate=(rate is not None),
+            has_dac=any(part.startswith("DAC") for part in device_parts),
+            has_adc=any(part.startswith("ADC") for part in device_parts),
+        )
+
+        progress_parts: list[str] = []
+        if time_info:
+            progress_parts.append(time_info)
+        progress_parts.extend(detail_parts)
+
+        lines: list[str] = []
+
+        header_parts: list[str] = []
+        if phase_text:
+            header_parts.append(f"상태 {phase_text}")
+        if step_text:
+            header_parts.append(f"단계 {step_text}")
+        if header_parts:
+            lines.append(" | ".join(header_parts))
+
+        if action and (not self._same_status_text(action, step_text)) and (not self._same_status_text(action, phase_text)):
+            lines.append(f"동작: {action}")
+
+        if current_parts:
+            lines.append(f"현재값: {' | '.join(current_parts)}")
+
+        if progress_parts and device_parts:
+            lines.append(f"진행/장비: {' | '.join(progress_parts + device_parts)}")
+        elif progress_parts:
+            lines.append(f"진행: {' | '.join(progress_parts)}")
+        elif device_parts:
+            lines.append(f"장비: {' | '.join(device_parts)}")
+
+        if not lines:
+            raw_msg = str(self._status_value(st, "message", "") or "").strip()
+            return raw_msg or "---"
+
+        return "\n".join(lines[:4])
 
     def _get_plot_adc_default_range(self) -> tuple[float, float]:
         cfg = self._normalize_process_config(self._process_cfg)

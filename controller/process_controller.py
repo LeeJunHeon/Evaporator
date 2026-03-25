@@ -31,7 +31,7 @@ from process.models import (
 )
 from process.recipe_io import load_recipe, save_recipe
 from process.engine import ProcessEngine, EngineResult
-from services.plc_service import PLCService
+from services.plc_service import PLCService, _COIL_LABEL
 from services.log_service import LogService
 
 from controller.process_worker import ProcessWorker
@@ -805,45 +805,201 @@ class ProcessController(QObject):
 
         self._worker = None
 
+    def _emit_process_trace_log(self, *, tag: str, msg: str, ok: bool = True) -> None:
+        text = str(msg or "").strip()
+        if not text:
+            return
+
+        try:
+            if ok:
+                self.log.info(text, tag=tag, also_ui=True)
+            else:
+                self.log.warn(text, tag=tag, also_ui=True)
+        except Exception:
+            prefix = f"[{tag}]"
+            if not ok:
+                prefix += "[WARN]"
+            self.sig_ui_log.emit(f"{prefix} {text}")
+
+    @staticmethod
+    def _trim_trace_prefix(msg: str, prefix: str) -> str:
+        text = str(msg or "").strip()
+        head = f"[{prefix}]"
+        if text.startswith(head):
+            return text[len(head):].strip()
+        return text
+
+    @staticmethod
+    def _format_pressure_torr(value: Any) -> str:
+        try:
+            return f"{float(value):.3e} Torr"
+        except Exception:
+            return f"{value} Torr"
+
+    @staticmethod
+    def _extract_named_value(detail: str, key: str) -> Optional[str]:
+        m = re.search(rf"{re.escape(key)}\s*=\s*([^\s|,]+)", str(detail or ""))
+        if not m:
+            return None
+        return str(m.group(1) or "").strip()
+
+    @staticmethod
+    def _extract_detail_paren_text(detail: str) -> str:
+        m = re.search(r"\(([^()]*)\)", str(detail or ""))
+        if not m:
+            return ""
+        return str(m.group(1) or "").strip()
+
+    @staticmethod
+    def _stm_rx_body(rx: str) -> str:
+        body = str(rx or "").strip()
+        if body[:1].upper() in ("A", "B") and len(body) > 1:
+            body = body[1:].strip()
+        return body
+
+    def _format_plc_trace_message(self, d: dict[str, Any]) -> str:
+        cmd = str(d.get("event", "") or "")
+        target = str(d.get("target", "") or "")
+        detail = str(d.get("detail", "") or "").strip()
+        value = d.get("value", "")
+        tag = str(d.get("tag", "") or "").strip()
+        target_upper = target.upper()
+
+        pulse_ms = self._extract_named_value(detail, "pulse_ms")
+        if cmd == "ADC_READBACK":
+            return ""
+
+        if cmd == "CmdWriteCoil":
+            label = _COIL_LABEL.get(target, target)
+            if pulse_ms:
+                msg = f"{label} PULSE"
+                if pulse_ms.isdigit():
+                    msg += f" ({pulse_ms} ms)"
+            else:
+                state = "ON" if bool(value) else "OFF"
+                msg = f"{label} {state}"
+        elif cmd == "CmdWriteReg" and target_upper in ("DAC_POWER_1", "DAC_POWER_2"):
+            ch = "1" if target_upper.endswith("_1") else "2"
+            try:
+                msg = f"DAC {ch} -> {int(round(float(value)))}"
+            except Exception:
+                msg = f"DAC {ch} -> {value}"
+        elif cmd == "CmdWriteReg":
+            msg = f"{target_upper or target} -> {value}"
+        elif cmd == "CmdSetDacCurrent":
+            ch = target.replace("DAC_CH", "").strip() or target
+            msg = f"DAC 전류 CH{ch} -> {value} mA"
+        else:
+            raw_msg = self._trim_trace_prefix(str(d.get("msg", "") or ""), "PLC")
+            msg = raw_msg or f"{cmd or 'PLC'} {target} {value}".strip()
+
+        extra_parts: list[str] = []
+        cleaned_detail = detail
+        if pulse_ms:
+            cleaned_detail = re.sub(r"(?:^|,)\s*(?:momentary=1,?)?\s*pulse_ms=\d+\s*", "", cleaned_detail).strip(" ,|")
+        if cleaned_detail:
+            extra_parts.append(cleaned_detail)
+        if tag and tag not in ("POLL",):
+            extra_parts.append(f"tag={tag}")
+        if extra_parts:
+            msg = f"{msg} ({'; '.join(extra_parts)})"
+        return msg
+
+    def _format_stm_trace_message(self, d: dict[str, Any]) -> str:
+        tx = str(d.get("tx", "") or "")
+        rx = str(d.get("rx", "") or "")
+        detail = str(d.get("detail", "") or "").strip()
+        token = tx[:1].upper() if tx else ""
+        body = self._stm_rx_body(rx)
+
+        if token == "U":
+            try:
+                hz = int(body)
+                return f"Sensor frequency {hz:,} Hz ({hz / 1_000_000.0:.6f} MHz)"
+            except Exception:
+                pass
+        elif token == "V":
+            try:
+                return f"Crystal life {float(body):.1f}%"
+            except Exception:
+                pass
+
+        raw_msg = self._trim_trace_prefix(str(d.get("msg", "") or ""), "STM")
+        if raw_msg:
+            return raw_msg
+
+        msg = f"명령 {tx}" if tx else "STM 응답"
+        if body:
+            msg += f" -> {body}"
+        elif rx:
+            msg += f" -> {rx}"
+        if detail:
+            msg += f" ({detail})"
+        return msg
+
+    def _format_stm_error_message(self, s: str) -> str:
+        text = str(s or "").strip()
+        text = re.sub(r"^\[STMService\]\s*", "", text)
+        lower = text.lower()
+
+        if "connect failed" in lower:
+            return f"연결 실패: {text}"
+        if "poll failed" in lower:
+            return f"측정값 읽기 실패: {text}"
+        if "apply_material_params failed" in lower:
+            return f"막 재료 파라미터 적용 실패: {text}"
+        if "zero_thickness failed" in lower:
+            return f"두께 초기화 실패: {text}"
+        if "read_crystal_health failed" in lower:
+            return f"Crystal health 확인 실패: {text}"
+        if "reload ini" in lower:
+            return f"설정 다시 읽음: {text}"
+        return text or "STM 오류"
+
+    def _format_acs_trace_message(self, d: dict[str, Any]) -> str:
+        token = str(d.get("token", "") or "").strip().upper()
+        detail = str(d.get("detail", "") or "").strip()
+        tx = str(d.get("tx", "") or "").strip()
+        rx = str(d.get("rx", "") or "").strip()
+
+        pressure_text = self._extract_named_value(detail, "pressure")
+        if pressure_text is not None:
+            return f"챔버 압력 {self._format_pressure_torr(pressure_text)}"
+
+        if token == "CON_STATUS":
+            state = self._extract_detail_paren_text(detail) or detail
+            return f"게이지 상태 {state}".strip()
+        if token == "CON_STREAM" and detail:
+            return f"스트림 상태 {detail}"
+        if token.endswith("_PRESSURE") and rx:
+            return f"챔버 압력 {self._format_pressure_torr(rx)}"
+
+        raw_msg = self._trim_trace_prefix(str(d.get("msg", "") or ""), "ACS")
+        if raw_msg:
+            return raw_msg
+
+        lead = token or tx or "ACS"
+        if detail:
+            return f"{lead}: {detail}"
+        if rx:
+            return f"{lead}: {rx}"
+        return lead
+
     def _on_plc_cmd_trace(self, obj: object) -> None:
         try:
             d = dict(obj or {})
         except Exception:
             return
 
-        ok = bool(d.get("ok", True))
-        cmd = str(d.get("event", "") or "")
-        target = str(d.get("target", "") or "")
-        value = d.get("value", "")
-        tag = str(d.get("tag", "") or "")
-        detail = str(d.get("detail", "") or "")
+        msg = self._format_plc_trace_message(d)
+        if not msg:
+            return
 
-        # Cmd 이름 -> 사람이 보기 좋은 event명으로 변환(원하면 그대로 CmdWriteCoil로 찍어도 됨)
-        event = cmd
-        if cmd == "CmdWriteCoil":
-            event = "PULSE_COIL" if ("pulse_ms" in detail or "momentary=1" in detail) else "WRITE_COIL"
-            if isinstance(value, bool):
-                value = int(value)
-        elif cmd == "CmdWriteReg":
-            tu = target.upper()
-            event = "SET_DAC" if tu in ("DAC_POWER_1", "DAC_POWER_2") else "WRITE_REG"
-        elif cmd == "CmdSetDacCurrent":
-            event = "SET_DAC_MA"
-
-        prefix = f"{tag} " if tag else ""
-        msg = f"{prefix}{event} {target} = {value}"
-        if detail:
-            msg += f" ({detail})"
-
-        # ✅ Process Window에 출력
-        try:
-            if ok:
-                self.log.info(msg, tag="PLC", also_ui=True)
-            else:
-                self.log.warn(msg, tag="PLC", also_ui=True)
-        except Exception:
-            # fallback
-            self.sig_ui_log.emit(f"[PLC]{'[WARN]' if not ok else ''} {msg}")
+        self._emit_process_trace_log(
+            tag="PLC",
+            msg=msg,
+            ok=bool(d.get("ok", True)),
+        )
 
     def _on_stm_io_trace(self, obj: object) -> None:
         try:
@@ -851,59 +1007,31 @@ class ProcessController(QObject):
         except Exception:
             return
 
-        ok = bool(d.get("ok", True))
-        tx = str(d.get("tx", "") or "")
-        rx = str(d.get("rx", "") or "")
-        detail = str(d.get("detail", "") or "")
-
-        # 혹시라도 S/T 폴링이 넘어오면 한 번 더 안전하게 차단(스팸 방지)
-        token = (tx[:1].upper() if tx else "")
+        token = (str(d.get("tx", "") or "")[:1].upper() if d.get("tx") else "")
         if token in ("S", "T"):
             return
 
-        msg = f"TX={tx}"
-        if rx:
-            msg += f" | RX={rx}"
-        if detail:
-            msg += f" ({detail})"
-
-        try:
-            if ok:
-                self.log.info(msg, tag="STM", also_ui=True)
-            else:
-                self.log.warn(msg, tag="STM", also_ui=True)
-        except Exception:
-            self.sig_ui_log.emit(f"[STM]{'[WARN]' if not ok else ''} {msg}")
+        self._emit_process_trace_log(
+            tag="STM",
+            msg=self._format_stm_trace_message(d),
+            ok=bool(d.get("ok", True)),
+        )
 
     def _on_stm_connected(self, connected: bool) -> None:
-        """
-        STM 연결/해제 상태를 ProcessWindowLog에 남김.
-        """
-        try:
-            if connected:
-                self.log.info("connected", tag="STM", also_ui=True)
-            else:
-                self.log.warn("disconnected", tag="STM", also_ui=True)
-        except Exception:
-            self.sig_ui_log.emit(f"[STM]{' connected' if connected else ' disconnected'}")
+        self._emit_process_trace_log(
+            tag="STM",
+            msg=("connected" if connected else "disconnected"),
+            ok=bool(connected),
+        )
 
     def _on_stm_error(self, s: str) -> None:
-        """
-        STMService에서 올라오는 모든 오류를 ProcessWindowLog에 남김.
-        (poll 실패/재연결/SET 실패 등 포함)
-        """
-        msg = str(s)
-        try:
-            self.log.warn(msg, tag="STM", also_ui=True)
-        except Exception:
-            self.sig_ui_log.emit(f"[STM][WARN] {msg}")
+        self._emit_process_trace_log(
+            tag="STM",
+            msg=self._format_stm_error_message(s),
+            ok=False,
+        )
 
     def _on_acs_io_trace(self, obj: object) -> None:
-        # ✅ ACS2000(압력)은 프로그램 부팅부터 CON 스트림을 켜두기 때문에
-        #    공정이 돌지 않아도(=idle) 압력 변화가 계속 발생한다.
-        #    Process 창(logWindow)은 “공정 중” 로그만 보여야 하므로,
-        #    공정 미실행 상태에서는 ACS trace를 UI에 올리지 않는다.
-        #    (연결/오류는 main.py에서 HMI 로그창으로 이미 표시됨)
         if not self.is_running():
             return
 
@@ -912,20 +1040,11 @@ class ProcessController(QObject):
         except Exception:
             return
 
-        ok = bool(d.get("ok", True))
-        token = str(d.get("token", "") or "")
-        detail = str(d.get("detail", "") or "")
-        tx = str(d.get("tx", "") or "")
-        rx = str(d.get("rx", "") or "")
-
-        msg = f"{token} {detail}".strip()
-        if not msg:
-            msg = f"TX={tx} | RX={rx}".strip()
-
-        if ok:
-            self.log.info(msg, tag="ACS", also_ui=True)
-        else:
-            self.log.warn(msg, tag="ACS", also_ui=True)
+        self._emit_process_trace_log(
+            tag="ACS",
+            msg=self._format_acs_trace_message(d),
+            ok=bool(d.get("ok", True)),
+        )
 
     # --------------------------------------------------------
     # UI log helpers

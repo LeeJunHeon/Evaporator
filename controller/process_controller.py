@@ -505,6 +505,47 @@ class ProcessController(QObject):
         if cfg["adc_none_abort_s"] < 0:
             raise ValueError("process_config.adc_none_abort_s는 0 이상이어야 합니다.")
 
+        def _optional_int(name: str, default_val: int, min_v: int | None = None) -> int:
+            try:
+                value = int(proc_src.get(name, default_val))
+            except Exception:
+                value = int(default_val)
+            if min_v is not None:
+                value = max(min_v, value)
+            return value
+
+        def _optional_float(name: str, default_val: float, min_v: float | None = None, max_v: float | None = None) -> float:
+            try:
+                value = float(proc_src.get(name, default_val))
+            except Exception:
+                value = float(default_val)
+            if min_v is not None:
+                value = max(min_v, value)
+            if max_v is not None:
+                value = min(max_v, value)
+            return value
+
+        hold_max_dac_delta = _optional_int("hold_max_dac_delta", cfg["fine_step_dac"], 1)
+        hold_pi_ki = _optional_float("hold_pi_ki", max(0.0, hold_max_dac_delta * 0.8), 0.0)
+        hold_control_mode = str(proc_src.get("hold_control_mode", "PI") or "").strip().upper() or "PI"
+        if hold_control_mode not in {"PI", "STEP"}:
+            hold_control_mode = "PI"
+
+        cfg.update({
+            "hold_control_mode": hold_control_mode,
+            "hold_pi_kp": _optional_float("hold_pi_kp", max(1.0, hold_max_dac_delta * 5.0), 0.0),
+            "hold_pi_ki": hold_pi_ki,
+            "hold_integral_limit": _optional_float(
+                "hold_integral_limit",
+                max(1.0, (2.0 * hold_max_dac_delta) / max(hold_pi_ki, 1e-6)),
+                0.1,
+            ),
+            "rate_filter_alpha": _optional_float("rate_filter_alpha", 0.35, 0.01, 1.0),
+            "rate_jump_guard_ratio": _optional_float("rate_jump_guard_ratio", 0.50, 0.0),
+            "rate_jump_guard_abs": _optional_float("rate_jump_guard_abs", 0.15, 0.0),
+            "hold_max_dac_delta": hold_max_dac_delta,
+        })
+
         return cfg
 
     def _build_runtime_evap_meta(
@@ -544,6 +585,14 @@ class ProcessController(QObject):
             "rate_stable_sec": process_config["rate_stable_sec"],
             "hold_control_interval_s": process_config["hold_control_interval_s"],
             "fine_step_dac": process_config["fine_step_dac"],
+            "hold_control_mode": process_config["hold_control_mode"],
+            "hold_pi_kp": process_config["hold_pi_kp"],
+            "hold_pi_ki": process_config["hold_pi_ki"],
+            "hold_integral_limit": process_config["hold_integral_limit"],
+            "rate_filter_alpha": process_config["rate_filter_alpha"],
+            "rate_jump_guard_ratio": process_config["rate_jump_guard_ratio"],
+            "rate_jump_guard_abs": process_config["rate_jump_guard_abs"],
+            "hold_max_dac_delta": process_config["hold_max_dac_delta"],
             "rate_abort_ratio": process_config["rate_abort_ratio"],
             "rate_abort_sec": process_config["rate_abort_sec"],
             "sensor_none_abort_s": process_config["sensor_none_abort_s"],

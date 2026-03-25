@@ -48,6 +48,7 @@ class HistoryRecommendationDialog(QDialog):
         self.setWindowTitle("Recommendation")
         self.setModal(True)
         self.resize(760, 700)
+        self.setMinimumSize(820, 720)
 
         self._recommendation = dict(recommendation or {})
         self._accepted_apply = False
@@ -103,6 +104,8 @@ class HistoryRecommendationDialog(QDialog):
         self.stepsTable.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.stepsTable.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
         self.stepsTable.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.stepsTable.setWordWrap(False)
+        self.stepsTable.setMinimumHeight(170)
         root.addWidget(self.stepsTable)
 
         ramp_steps = list(self._recommendation.get("recommended_ramp_steps") or [])
@@ -131,12 +134,18 @@ class HistoryRecommendationDialog(QDialog):
         self.runTable.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.runTable.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.runTable.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
-        self.runTable.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.runTable.setAlternatingRowColors(True)
+        self.runTable.setWordWrap(False)
+        self.runTable.setMinimumHeight(240)
+        self.runTable.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        self.runTable.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        for col in range(2, 8):
+            self.runTable.horizontalHeader().setSectionResizeMode(col, QHeaderView.ResizeMode.Stretch)
         root.addWidget(self.runTable, 1)
 
         self.runDetail = QPlainTextEdit(self)
         self.runDetail.setReadOnly(True)
-        self.runDetail.setMaximumHeight(140)
+        self.runDetail.setMinimumHeight(150)
         root.addWidget(self.runDetail)
 
         self._populate_representative_runs()

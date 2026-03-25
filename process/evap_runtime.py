@@ -166,6 +166,91 @@ def _evap_adjust_dac(
     return max(0, dac - step)
 
 
+def _filter_hold_rate(
+    raw_rate: Optional[float],
+    prev_filtered: Optional[float],
+    *,
+    alpha: float,
+    max_jump_abs: float,
+) -> tuple[Optional[float], bool, bool]:
+    if raw_rate is None:
+        return prev_filtered, False, False
+
+    sample = float(raw_rate)
+    if sample < 0.0:
+        return prev_filtered, False, False
+
+    filtered = sample
+    jump_clamped = False
+
+    if prev_filtered is not None:
+        prev = float(prev_filtered)
+        if max_jump_abs > 0.0 and abs(sample - prev) > max_jump_abs:
+            sample = prev + max_jump_abs if sample > prev else prev - max_jump_abs
+            jump_clamped = True
+        a = min(1.0, max(0.01, float(alpha)))
+        filtered = prev + a * (sample - prev)
+
+    return filtered, True, jump_clamped
+
+
+def _compute_hold_pi_delta(
+    *,
+    current_dac: int,
+    target_rate: float,
+    filtered_rate: Optional[float],
+    interval_s: float,
+    tol_ratio: float,
+    kp: float,
+    ki: float,
+    integral_state: float,
+    integral_limit: float,
+    max_delta: int,
+    dac_max: int,
+) -> tuple[int, float, Optional[float], bool]:
+    if filtered_rate is None or target_rate <= 0.0:
+        return 0, integral_state, None, False
+
+    error = float(target_rate) - float(filtered_rate)
+    tolerance = abs(float(target_rate)) * float(tol_ratio)
+
+    if abs(error) <= tolerance:
+        return 0, integral_state * 0.5, error, True
+
+    dt = max(0.1, float(interval_s))
+    error_ratio = error / max(abs(float(target_rate)), 1e-6)
+    next_integral = integral_state + (error_ratio * dt)
+    next_integral = max(-abs(float(integral_limit)), min(abs(float(integral_limit)), next_integral))
+
+    max_step = max(1, int(max_delta))
+    p_term = float(kp) * error_ratio
+    i_term = float(ki) * next_integral
+    delta_f = p_term + i_term
+    delta_f = max(-float(max_step), min(float(max_step), delta_f))
+
+    at_low = int(current_dac) <= 0
+    at_high = int(current_dac) >= int(dac_max)
+    if (at_low and delta_f < 0.0) or (at_high and delta_f > 0.0):
+        next_integral = integral_state
+        i_term = float(ki) * next_integral
+        delta_f = p_term + i_term
+        delta_f = max(-float(max_step), min(float(max_step), delta_f))
+
+    delta = 0
+    if abs(delta_f) >= 0.5:
+        delta = int(round(delta_f))
+    elif delta_f > 0.0:
+        delta = 1
+    elif delta_f < 0.0:
+        delta = -1
+
+    next_dac = max(0, min(int(dac_max), int(current_dac) + int(delta)))
+    if next_dac == int(current_dac):
+        return 0, next_integral, error, True
+
+    return int(next_dac - int(current_dac)), next_integral, error, True
+
+
 def _sum_selected_values(
     use_p1: bool,
     use_p2: bool,
@@ -316,6 +401,26 @@ def _load_runtime_process_config(meta: dict, *, step_name: str) -> dict:
     sensor_none_abort_s = _require_float("sensor_none_abort_s")
     adc_none_abort_s = _require_float("adc_none_abort_s")
 
+    hold_max_dac_delta = int(process_config.get("hold_max_dac_delta", fine_step_dac) or fine_step_dac)
+    if hold_max_dac_delta <= 0:
+        hold_max_dac_delta = max(1, fine_step_dac)
+
+    hold_control_mode = str(process_config.get("hold_control_mode", "PI") or "").strip().upper() or "PI"
+    if hold_control_mode not in {"PI", "STEP"}:
+        hold_control_mode = "PI"
+
+    hold_pi_kp = float(process_config.get("hold_pi_kp", max(1.0, hold_max_dac_delta * 5.0)) or max(1.0, hold_max_dac_delta * 5.0))
+    hold_pi_ki = float(process_config.get("hold_pi_ki", max(0.0, hold_max_dac_delta * 0.8)) or max(0.0, hold_max_dac_delta * 0.8))
+    hold_integral_limit = float(
+        process_config.get(
+            "hold_integral_limit",
+            max(1.0, (2.0 * hold_max_dac_delta) / max(hold_pi_ki, 1e-6)),
+        ) or max(1.0, (2.0 * hold_max_dac_delta) / max(hold_pi_ki, 1e-6))
+    )
+    rate_filter_alpha = float(process_config.get("rate_filter_alpha", 0.35) or 0.35)
+    rate_jump_guard_ratio = float(process_config.get("rate_jump_guard_ratio", 0.50) or 0.50)
+    rate_jump_guard_abs = float(process_config.get("rate_jump_guard_abs", 0.15) or 0.15)
+
     if dac_max <= 0:
         _raise_engine_failed(step_name, "EVAP: process_config.dac_max must be > 0")
     if not (0.0 < rate_tol_ratio < 1.0):
@@ -335,6 +440,13 @@ def _load_runtime_process_config(meta: dict, *, step_name: str) -> dict:
     if adc_none_abort_s <= 0:
         _raise_engine_failed(step_name, "EVAP: process_config.adc_none_abort_s must be > 0")
 
+    hold_pi_kp = max(0.0, hold_pi_kp)
+    hold_pi_ki = max(0.0, hold_pi_ki)
+    hold_integral_limit = max(0.1, hold_integral_limit)
+    rate_filter_alpha = min(1.0, max(0.01, rate_filter_alpha))
+    rate_jump_guard_ratio = max(0.0, rate_jump_guard_ratio)
+    rate_jump_guard_abs = max(0.0, rate_jump_guard_abs)
+
     return {
         "step_count": step_count,
         "ramp_steps": ramp_steps,
@@ -347,6 +459,14 @@ def _load_runtime_process_config(meta: dict, *, step_name: str) -> dict:
         "rate_abort_sec": rate_abort_sec,
         "sensor_none_abort_s": sensor_none_abort_s,
         "adc_none_abort_s": adc_none_abort_s,
+        "hold_control_mode": hold_control_mode,
+        "hold_pi_kp": hold_pi_kp,
+        "hold_pi_ki": hold_pi_ki,
+        "hold_integral_limit": hold_integral_limit,
+        "rate_filter_alpha": rate_filter_alpha,
+        "rate_jump_guard_ratio": rate_jump_guard_ratio,
+        "rate_jump_guard_abs": rate_jump_guard_abs,
+        "hold_max_dac_delta": hold_max_dac_delta,
     }
 
 def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep) -> None:
@@ -397,6 +517,14 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
     rate_stable_sec = float(proc_cfg["rate_stable_sec"])
     hold_control_interval_s = float(proc_cfg["hold_control_interval_s"])
     fine_step_dac = int(proc_cfg["fine_step_dac"])
+    hold_control_mode = str(proc_cfg.get("hold_control_mode", "PI") or "PI").strip().upper() or "PI"
+    hold_pi_kp = float(proc_cfg.get("hold_pi_kp", 0.0) or 0.0)
+    hold_pi_ki = float(proc_cfg.get("hold_pi_ki", 0.0) or 0.0)
+    hold_integral_limit = float(proc_cfg.get("hold_integral_limit", 1.0) or 1.0)
+    rate_filter_alpha = float(proc_cfg.get("rate_filter_alpha", 0.35) or 0.35)
+    rate_jump_guard_ratio = float(proc_cfg.get("rate_jump_guard_ratio", 0.50) or 0.50)
+    rate_jump_guard_abs = float(proc_cfg.get("rate_jump_guard_abs", 0.15) or 0.15)
+    hold_max_dac_delta = int(proc_cfg.get("hold_max_dac_delta", fine_step_dac) or fine_step_dac)
     rate_abort_ratio = float(proc_cfg["rate_abort_ratio"])
     rate_abort_sec = float(proc_cfg["rate_abort_sec"])
     sensor_none_abort_s = float(proc_cfg["sensor_none_abort_s"])
@@ -731,6 +859,19 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         last_hold_control_m = 0.0
         rate_abort_start_ts: Optional[float] = None
         abort_threshold = target_rate * rate_abort_ratio
+        filtered_rate: Optional[float] = None
+        hold_integral = 0.0
+
+        engine._tele_event(
+            event="HOLD_CONTROL_MODE",
+            target="MODE",
+            value=hold_control_mode,
+            detail=(
+                f"pi_enabled={1 if hold_control_mode == 'PI' else 0}, "
+                f"kp={hold_pi_kp:.3f}, ki={hold_pi_ki:.3f}, "
+                f"alpha={rate_filter_alpha:.3f}, max_delta={hold_max_dac_delta}, tag=EVAP_HOLD_CONTROL"
+            ),
+        )
 
         while True:
             engine._check_stop_pause(recipe, step)
@@ -739,6 +880,14 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
             rt = _read_rate_or_abort(where="hold")
             adc_total = _read_adc_or_abort(where="hold")
             th = _read_thickness_or_abort(where="hold")
+
+            jump_guard_abs = max(rate_jump_guard_abs, abs(target_rate) * rate_jump_guard_ratio)
+            filtered_rate, control_rate_valid, jump_clamped = _filter_hold_rate(
+                rt,
+                filtered_rate,
+                alpha=rate_filter_alpha,
+                max_jump_abs=jump_guard_abs,
+            )
 
             # STM ZERO 이후에는 현재 thickness 자체를 증착 두께로 본다.
             dep_th = max(0.0, th)
@@ -765,24 +914,88 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
             # hold_control_interval_s 주기 제어
             now_m = time.monotonic()
             if (now_m - last_hold_control_m) >= hold_control_interval_s:
-                new_dac = _evap_adjust_dac(
-                    dac,
-                    rt,
-                    target_rate,
-                    tol_ratio=rate_tol_ratio,
-                    fine_step_dac=fine_step_dac,
-                    dac_max=dac_max,
-                )
-                if new_dac != dac:
-                    dac = int(new_dac)
+                control_delta = 0
+                control_error: Optional[float] = None
+                control_mode_used = hold_control_mode
+
+                try:
+                    if hold_control_mode == "PI":
+                        control_delta, hold_integral, control_error, pi_used = _compute_hold_pi_delta(
+                            current_dac=dac,
+                            target_rate=target_rate,
+                            filtered_rate=(filtered_rate if control_rate_valid else None),
+                            interval_s=hold_control_interval_s,
+                            tol_ratio=rate_tol_ratio,
+                            kp=hold_pi_kp,
+                            ki=hold_pi_ki,
+                            integral_state=hold_integral,
+                            integral_limit=hold_integral_limit,
+                            max_delta=hold_max_dac_delta,
+                            dac_max=dac_max,
+                        )
+                        if not pi_used:
+                            control_mode_used = "PI_WAIT"
+                    else:
+                        new_dac = _evap_adjust_dac(
+                            dac,
+                            (filtered_rate if control_rate_valid else None),
+                            target_rate,
+                            tol_ratio=rate_tol_ratio,
+                            fine_step_dac=fine_step_dac,
+                            dac_max=dac_max,
+                        )
+                        control_delta = int(new_dac - dac)
+                        if control_rate_valid and filtered_rate is not None:
+                            control_error = float(target_rate) - float(filtered_rate)
+                except Exception as control_exc:
+                    control_mode_used = "STEP_FALLBACK"
+                    control_delta = 0
+                    control_error = None
+                    engine._tele_event(
+                        event="HOLD_CONTROL_WARN",
+                        target="MODE",
+                        value=hold_control_mode,
+                        detail=f"fallback=STEP, error={control_exc!r}, tag=EVAP_HOLD_CONTROL",
+                    )
+                    new_dac = _evap_adjust_dac(
+                        dac,
+                        (filtered_rate if control_rate_valid else None),
+                        target_rate,
+                        tol_ratio=rate_tol_ratio,
+                        fine_step_dac=fine_step_dac,
+                        dac_max=dac_max,
+                    )
+                    control_delta = int(new_dac - dac)
+
+                if control_delta != 0:
+                    dac = max(0, min(dac_max, int(dac + control_delta)))
                     _evap_apply_dac(engine, use_p1, use_p2, dac, tag="EVAP_HOLD_CONTROL")
+
+                engine._tele_event(
+                    event="HOLD_CONTROL",
+                    target="DAC",
+                    value=dac,
+                    detail=(
+                        f"mode={control_mode_used}, "
+                        f"pi_enabled={1 if hold_control_mode == 'PI' else 0}, "
+                        f"raw_rate={rt:.6f}, "
+                        f"filtered_rate={'' if filtered_rate is None else f'{filtered_rate:.6f}'}, "
+                        f"error={'' if control_error is None else f'{control_error:.6f}'}, "
+                        f"delta={control_delta}, "
+                        f"integral={hold_integral:.6f}, "
+                        f"jump_clamped={1 if jump_clamped else 0}, "
+                        f"tag=EVAP_HOLD_CONTROL"
+                    ),
+                )
                 last_hold_control_m = now_m
 
             engine._emit_status(
                 message=(
                     f"HOLD | remain {remain_th:.1f}Å "
                     f"( {dep_th:.1f}/{target_th:.1f}Å ) | "
-                    f"rate={rt:.3f} | ADC={adc_total:.1f} | DAC={dac}"
+                    f"rate={rt:.3f}"
+                    f"{'' if filtered_rate is None else f' | filtered={filtered_rate:.3f}'} | "
+                    f"ADC={adc_total:.1f} | DAC={dac}"
                 ),
                 force=True,
             )

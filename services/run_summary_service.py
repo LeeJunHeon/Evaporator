@@ -7,6 +7,7 @@ import hashlib
 import json
 import re
 import statistics
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -710,7 +711,16 @@ class RunSummaryService:
                         roots.append(Path(root))
 
         if not roots:
-            roots.append(Path.cwd() / "_Logs")
+            store = self._history_store
+            if store is not None and hasattr(store, "storage_roots"):
+                with contextlib.suppress(Exception):
+                    for root in list(store.storage_roots() or []):
+                        path = Path(root)
+                        if path not in roots:
+                            roots.append(path)
+
+        if not roots:
+            roots.append(Path(tempfile.gettempdir()) / "Evaporator_Logs")
 
         discovered: dict[str, dict[str, Any]] = {}
         for root in roots:

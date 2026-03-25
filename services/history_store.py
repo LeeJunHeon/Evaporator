@@ -5,6 +5,7 @@ import contextlib
 import json
 import sqlite3
 import time
+import tempfile
 from pathlib import Path
 from typing import Any, Optional
 
@@ -15,6 +16,10 @@ def _ensure_dir(path: Path) -> None:
 
 def _json_text(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _default_history_root(name: str) -> Path:
+    return Path(tempfile.gettempdir()) / name
 
 
 class HistoryStore:
@@ -97,14 +102,17 @@ class HistoryStore:
             with contextlib.suppress(Exception):
                 roots = dict(log_service.get_storage_roots(force_resolve=False) or {})
 
-        primary_root = Path(roots.get("base") or Path.cwd() / "_Logs")
-        fallback_root = Path(roots.get("fallback") or Path.cwd() / "_Logs_local_Evaporator")
+        primary_root = Path(roots.get("base") or _default_history_root("Evaporator_Logs"))
+        fallback_root = Path(roots.get("fallback") or _default_history_root("Evaporator_Logs_local"))
         return cls(
             primary_root=primary_root,
             fallback_root=fallback_root,
             subdir=subdir,
             db_name=db_name,
         )
+
+    def storage_roots(self) -> list[Path]:
+        return list(self._roots_for_query())
 
     def _db_path_for_root(self, root: Path) -> Path:
         return Path(root) / self._subdir / self._db_name

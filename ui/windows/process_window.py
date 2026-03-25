@@ -1,4 +1,4 @@
-# process_window.py
+﻿# process_window.py
 from __future__ import annotations
 
 import gc
@@ -10,7 +10,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Any, TYPE_CHECKING
 
-from PySide6.QtWidgets import QWidget, QMessageBox, QVBoxLayout, QApplication, QPushButton
+from PySide6.QtWidgets import (
+    QWidget,
+    QMessageBox,
+    QVBoxLayout,
+    QApplication,
+    QPushButton,
+    QGridLayout,
+    QSizePolicy,
+)
 from PySide6.QtCore import QTimer, Qt
 
 from ui.windows.mainWindow import Ui_Form
@@ -26,7 +34,7 @@ from controller.process_start_worker import (
 if TYPE_CHECKING:
     from ui.windows.hmi_window import HmiWindow
 
-# ✅ 파일 위치가 root든 ui 폴더든 둘 다 버티도록
+# ???뚯씪 ?꾩튂媛 root??ui ?대뜑??????踰꾪떚?꾨줉
 _BASE_DIR = Path(__file__).resolve().parent
 while not (_BASE_DIR / "config").exists() and _BASE_DIR != _BASE_DIR.parent:
     _BASE_DIR = _BASE_DIR.parent
@@ -51,7 +59,7 @@ def _append_text(widget: Any, text: str) -> None:
         pass
 
 # ============================================================
-# Process 창
+# Process 李?
 # ============================================================
 class ProcessWindow(QWidget):
     def __init__(self):
@@ -59,14 +67,14 @@ class ProcessWindow(QWidget):
         self.ui = Ui_Form()
         self.ui.setupUi(self)
 
-        # ✅ 공정별 ProcessWindowLog 파일 식별자
+        # ??怨듭젙蹂?ProcessWindowLog ?뚯씪 ?앸퀎??
         self._active_run_id: Optional[str] = None
 
         self.setWindowTitle("Process")
         self.ui.stackedWidget.setCurrentIndex(1)  # Process page
 
         self.hmi_window: Optional[HmiWindow] = None
-        self._close_stop_guard = False   # ✅ closeEvent에서 stop 중복 실행 방지
+        self._close_stop_guard = False   # ??closeEvent?먯꽌 stop 以묐났 ?ㅽ뻾 諛⑹?
 
         self._process_controller: Any = None
         self._log_service: Any = None
@@ -75,7 +83,7 @@ class ProcessWindow(QWidget):
         self._run_summary_service: Any = None
         self._recommendation_service: Any = None
 
-        # ✅ Start preflight 상태
+        # ??Start preflight ?곹깭
         self._start_worker: Optional[ProcessStartWorker] = None
         self._start_in_progress: bool = False
         self._pending_run_cfg: Optional[dict[str, Any]] = None
@@ -85,20 +93,20 @@ class ProcessWindow(QWidget):
         self._recommended_runtime_overrides: Optional[dict[str, Any]] = None
         self._recommended_runtime_signature: Optional[dict[str, Any]] = None
 
-        # ✅ UI에 "실제로 connect된 STM 인스턴스" 추적용(경고/중복 connect 방지)
+        # ??UI??"?ㅼ젣濡?connect??STM ?몄뒪?댁뒪" 異붿쟻??寃쎄퀬/以묐났 connect 諛⑹?)
         self._stm_ui_bound: bool = False
         self._stm_ui_stm: Any = None
 
         self._material_1 = None
         self._material_2 = None
 
-        # 공정 시작 시점 power 선택 상태 latch
+        # 怨듭젙 ?쒖옉 ?쒖젏 power ?좏깮 ?곹깭 latch
         self._run_use_power1: Optional[bool] = None
         self._run_use_power2: Optional[bool] = None
 
-        # 현재 하드웨어 임시 우회 정책
-        # - Power2는 현재 장비 문제로 start path에서 비활성
-        # - Power1 actual feedback은 임시로 ADC2를 사용
+        # ?꾩옱 ?섎뱶?⑥뼱 ?꾩떆 ?고쉶 ?뺤콉
+        # - Power2???꾩옱 ?λ퉬 臾몄젣濡?start path?먯꽌 鍮꾪솢??
+        # - Power1 actual feedback? ?꾩떆濡?ADC2瑜??ъ슜
         self._power2_temporarily_disabled: bool = True
         self._power1_feedback_uses_adc2: bool = True
 
@@ -108,30 +116,30 @@ class ProcessWindow(QWidget):
         self.ui.startProcess.clicked.connect(self._on_start_clicked)
         self.ui.stopProcess.clicked.connect(self._on_stop_clicked)
 
-        # ✅ Process Config 버튼 연결
+        # ??Process Config 踰꾪듉 ?곌껐
         cfg_btn = getattr(self.ui, "processConfigBtn", None)
         if cfg_btn is not None and hasattr(cfg_btn, "clicked"):
             cfg_btn.clicked.connect(self._open_process_config_dialog)
         self._setup_recommendation_ui()
 
-        # ✅ 새 프로세스 설정(ADC step 기반) 보관
+        # ?????꾨줈?몄뒪 ?ㅼ젙(ADC step 湲곕컲) 蹂닿?
         self._process_cfg: dict[str, Any] = self._default_process_config()
 
         # =========================
-        # ✅ RT 표시(1초) + 그래프
+        # ??RT ?쒖떆(1珥? + 洹몃옒??
         # =========================
         self._last_rate: Optional[float] = None
         self._last_thickness: Optional[float] = None
 
-        # ✅ 이제 _last_power 는 "그래프 오른쪽 축에 넣을 값"
-        #    현재 단계에서는 ADC total 우선값으로 사용
+        # ???댁젣 _last_power ??"洹몃옒???ㅻⅨ履?異뺤뿉 ?ｌ쓣 媛?
+        #    ?꾩옱 ?④퀎?먯꽌??ADC total ?곗꽑媛믪쑝濡??ъ슜
         self._last_power: Optional[float] = None
 
         self._plot: Optional[DepositionPlotWidget] = None
-        self._init_rt_plot()  # graphWidget 자리에 plot 삽입
+        self._init_rt_plot()  # graphWidget ?먮━??plot ?쎌엯
 
         self._rt_timer = QTimer(self)
-        self._rt_timer.setInterval(1000)  # ✅ 1초
+        self._rt_timer.setInterval(1000)  # ??1珥?
         self._rt_timer.timeout.connect(self._tick_rt_ui)
 
         self._setup_process_monitor_ui()
@@ -152,8 +160,8 @@ class ProcessWindow(QWidget):
         self._run_summary_service = run_summary_service
         self._recommendation_service = recommendation_service
 
-        # PROCESS 로그는 위젯 후킹에 의존하지 않고
-        # _append_process_log()에서 명시적으로 run_line()까지 보낸다.
+        # PROCESS 濡쒓렇???꾩젽 ?꾪궧???섏〈?섏? ?딄퀬
+        # _append_process_log()?먯꽌 紐낆떆?곸쑝濡?run_line()源뚯? 蹂대궦??
 
         pc = self._process_controller
         if pc is not None:
@@ -179,6 +187,8 @@ class ProcessWindow(QWidget):
         if w is None:
             return
 
+        self._adjust_process_page_layout()
+
         try:
             if hasattr(w, "setStyleSheet"):
                 w.setStyleSheet(
@@ -186,51 +196,112 @@ class ProcessWindow(QWidget):
                     "border: 1px solid #d0d0d0;"
                     "border-radius: 2px;"
                     "color: #111111;"
-                    "padding: 6px 10px;"
-                    "font-size: 18px;"
+                    "padding: 4px 10px;"
+                    "font-size: 16px;"
                     "font-weight: 700;"
                 )
 
             if hasattr(w, "setWordWrap"):
                 w.setWordWrap(True)
+            if hasattr(w, "setAlignment"):
+                w.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
 
         except Exception:
             pass
+
+    def _adjust_process_page_layout(self) -> None:
+        monitor = getattr(self.ui, "processMonitor_Process", None)
+        graph = getattr(self.ui, "graphWidget", None)
+        log_window = getattr(self.ui, "logWindow", None)
+
+        with contextlib.suppress(Exception):
+            if monitor is not None:
+                monitor.setGeometry(210, 5, 891, 92)
+
+        with contextlib.suppress(Exception):
+            if graph is not None:
+                graph.setGeometry(209, 104, 891, 377)
+
+        with contextlib.suppress(Exception):
+            if log_window is not None:
+                log_window.setGeometry(210, 490, 891, 191)
 
     def _setup_recommendation_ui(self) -> None:
-        cfg_btn = getattr(self.ui, "processConfigBtn", None)
         parent = getattr(self.ui, "page_2", None)
-        if cfg_btn is None or parent is None:
+        cfg_btn = getattr(self.ui, "processConfigBtn", None)
+        recipe_btn = getattr(self.ui, "recipeBtn", None)
+        start_btn = getattr(self.ui, "startProcess", None)
+        stop_btn = getattr(self.ui, "stopProcess", None)
+        if parent is None or any(btn is None for btn in (cfg_btn, recipe_btn, start_btn, stop_btn)):
             return
 
-        try:
-            cfg_btn.setGeometry(0, 548, 86, 32)
-        except Exception:
-            pass
+        panel = getattr(self, "_process_action_panel", None)
+        if panel is None:
+            panel = QWidget(parent)
+            panel.setObjectName("processActionPanel")
+            layout = QGridLayout(panel)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setHorizontalSpacing(8)
+            layout.setVerticalSpacing(4)
+            self._process_action_panel = panel
+        else:
+            layout = panel.layout()
+            if not isinstance(layout, QGridLayout):
+                layout = QGridLayout(panel)
+                layout.setContentsMargins(0, 0, 0, 0)
+                layout.setHorizontalSpacing(8)
+                layout.setVerticalSpacing(4)
 
         btn = getattr(self, "_recommendation_btn", None)
         if btn is None:
-            btn = QPushButton("Recommend", parent)
+            btn = QPushButton("Recommend", panel)
             btn.clicked.connect(self._on_recommendation_clicked)
             self._recommendation_btn = btn
 
-        try:
-            btn.setGeometry(92, 548, 86, 32)
-            btn.setAutoDefault(False)
-        except Exception:
-            pass
-
         backfill_btn = getattr(self, "_history_backfill_btn", None)
         if backfill_btn is None:
-            backfill_btn = QPushButton("History Rebuild", parent)
+            backfill_btn = QPushButton("History Rebuild", panel)
             backfill_btn.clicked.connect(self._on_history_backfill_clicked)
             self._history_backfill_btn = backfill_btn
 
-        try:
-            backfill_btn.setGeometry(184, 548, 116, 32)
-            backfill_btn.setAutoDefault(False)
-        except Exception:
-            pass
+        panel.setGeometry(0, 548, 191, 148)
+
+        buttons = (cfg_btn, btn, backfill_btn, recipe_btn, start_btn, stop_btn)
+        for button in buttons:
+            with contextlib.suppress(Exception):
+                button.setParent(panel)
+                button.setAutoDefault(False)
+                button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+        for action_btn in (cfg_btn, btn, backfill_btn, recipe_btn):
+            with contextlib.suppress(Exception):
+                action_btn.setFixedHeight(32)
+
+        for run_btn in (start_btn, stop_btn):
+            with contextlib.suppress(Exception):
+                run_btn.setFixedHeight(40)
+
+        while layout.count():
+            item = layout.takeAt(0)
+            child = item.widget()
+            if child is not None:
+                child.hide()
+
+        layout.addWidget(cfg_btn, 0, 0)
+        layout.addWidget(btn, 0, 1)
+        layout.addWidget(backfill_btn, 1, 0, 1, 2)
+        layout.addWidget(recipe_btn, 2, 0, 1, 2)
+        layout.addWidget(start_btn, 3, 0)
+        layout.addWidget(stop_btn, 3, 1)
+        layout.setColumnStretch(0, 1)
+        layout.setColumnStretch(1, 1)
+
+        for button in buttons:
+            with contextlib.suppress(Exception):
+                button.show()
+
+        with contextlib.suppress(Exception):
+            panel.raise_()
 
     def _set_process_monitor_text(self, text: str, *, fallback: str = "---") -> None:
         w = getattr(self.ui, "processMonitor_Process", None)
@@ -253,55 +324,6 @@ class ProcessWindow(QWidget):
             self._set_process_monitor_text(f"{title}\n{detail}")
         else:
             self._set_process_monitor_text(title)
-
-    def _append_process_log_legacy0(self, text: str) -> None:
-        raw = str(text or "").strip()
-        if not raw:
-            return
-
-        # LogService 포맷:
-        # [YYYY-MM-DD HH:MM:SS] [LEVEL] [TAG] ...
-        m = re.match(
-            r"^\[(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})\]\s+\[([A-Z]+)\](?:\s+\[([^\]]+)\])?\s*(.*)$",
-            raw,
-        )
-        if m:
-            time_text = m.group(2)
-            level = str(m.group(3) or "").strip().upper()
-            tag = str(m.group(4) or "").strip()
-            body = str(m.group(5) or "").strip()
-
-            prefix_parts: list[str] = []
-            if tag:
-                prefix_parts.append(tag)
-            if level and level not in ("INFO",):
-                prefix_parts.append(level)
-
-            prefix = " ".join(prefix_parts).strip()
-            if prefix and body:
-                line = f"[{time_text}] {prefix} | {body}"
-            elif prefix:
-                line = f"[{time_text}] {prefix}"
-            elif body:
-                line = f"[{time_text}] {body}"
-            else:
-                line = f"[{time_text}] {level or 'INFO'}"
-        else:
-            m = re.match(r"^\[(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})\]\s+(.*)$", raw)
-            if m:
-                line = f"[{m.group(2)}] {m.group(3)}"
-            else:
-                ts = datetime.now().strftime("%H:%M:%S")
-                line = f"[{ts}] {raw}"
-
-        # 1) UI 표시
-        _append_text(getattr(self.ui, "logWindow", None), line)
-
-        # 2) run이 실제로 열려 있을 때만 run log 저장
-        ls = self._log_service
-        if self._active_run_id and ls is not None and hasattr(ls, "run_line"):
-            with contextlib.suppress(Exception):
-                ls.run_line(line)
 
     @staticmethod
     def _strip_process_log_tag_prefix(body: str, tag: str) -> str:
@@ -480,34 +502,34 @@ class ProcessWindow(QWidget):
 
     def _bind_stm_ui(self, stm):
         """
-        ✅ 핵심: disconnect는 '현재 self._stm_service'가 아니라
-                '실제로 UI에 connect 되었던 STM 인스턴스'에서만 해야 한다.
+        ???듭떖: disconnect??'?꾩옱 self._stm_service'媛 ?꾨땲??
+                '?ㅼ젣濡?UI??connect ?섏뿀??STM ?몄뒪?댁뒪'?먯꽌留??댁빞 ?쒕떎.
         """
         if stm is None:
             self._unbind_stm_ui()
             return
 
-        # 이미 같은 stm에 바인딩되어 있으면 중복 connect 방지
+        # ?대? 媛숈? stm??諛붿씤?⑸릺???덉쑝硫?以묐났 connect 諛⑹?
         if self._stm_ui_bound and (self._stm_ui_stm is stm):
             return
 
-        # 이전에 UI에 연결돼 있던 stm만 정확히 해제
+        # ?댁쟾??UI???곌껐???덈뜕 stm留??뺥솗???댁젣
         self._unbind_stm_ui()
 
-        # 새 stm에 연결
+        # ??stm???곌껐
         stm.sig_rate.connect(self._on_stm_rate)
         stm.sig_thickness.connect(self._on_stm_thickness)
 
-        # 바인딩 상태 기록
+        # 諛붿씤???곹깭 湲곕줉
         self._stm_ui_stm = stm
         self._stm_ui_bound = True
 
 
     def _unbind_stm_ui(self):
         """
-        ✅ '연결했던 적이 없는 객체'에서 disconnect를 시도하면
-        Failed to disconnect RuntimeWarning이 뜬다.
-        ✅ 그래서: UI에 연결했던 stm을 따로 기억해두고 그 stm만 disconnect한다.
+        ??'?곌껐?덈뜕 ?곸씠 ?녿뒗 媛앹껜'?먯꽌 disconnect瑜??쒕룄?섎㈃
+        Failed to disconnect RuntimeWarning???щ떎.
+        ??洹몃옒?? UI???곌껐?덈뜕 stm???곕줈 湲곗뼲?대몢怨?洹?stm留?disconnect?쒕떎.
         """
         stm = self._stm_ui_stm
         if (not self._stm_ui_bound) or (stm is None):
@@ -515,7 +537,7 @@ class ProcessWindow(QWidget):
             self._stm_ui_bound = False
             return
 
-        # 안전장치: PySide가 disconnect 실패를 RuntimeWarning으로 찍는 경우까지 억제
+        # ?덉쟾?μ튂: PySide媛 disconnect ?ㅽ뙣瑜?RuntimeWarning?쇰줈 李띾뒗 寃쎌슦源뚯? ?듭젣
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)
 
@@ -533,7 +555,7 @@ class ProcessWindow(QWidget):
         self._stm_ui_bound = False
 
     def _on_stm_rate(self, rate):
-        # ✅ 값만 저장 (UI/그래프는 1초 타이머에서)
+        # ??媛믩쭔 ???(UI/洹몃옒?꾨뒗 1珥???대㉧?먯꽌)
         try:
             self._last_rate = float(rate)
         except Exception:
@@ -547,8 +569,8 @@ class ProcessWindow(QWidget):
     
     def _check_plc_ready_before_start(self) -> bool:
         """
-        Start 버튼 눌렀을 때 PLC 연결 상태를 먼저 확인한다.
-        PLC가 끊긴 상태면 STM 연결/공정 시작으로 넘어가지 않게 막는다.
+        Start 踰꾪듉 ?뚮?????PLC ?곌껐 ?곹깭瑜?癒쇱? ?뺤씤?쒕떎.
+        PLC媛 ?딄릿 ?곹깭硫?STM ?곌껐/怨듭젙 ?쒖옉?쇰줈 ?섏뼱媛吏 ?딄쾶 留됰뒗??
         """
         def _abort(msg: str) -> bool:
             self._append_process_log(f"[PRECHECK][BLOCK] PLC: {msg}")
@@ -556,51 +578,51 @@ class ProcessWindow(QWidget):
             return False
 
         if self.hmi_window is None:
-            return _abort("HMI window가 없습니다. PLC 상태를 확인할 수 없습니다.")
+            return _abort("HMI window媛 ?놁뒿?덈떎. PLC ?곹깭瑜??뺤씤?????놁뒿?덈떎.")
 
         binder = getattr(self.hmi_window, "_plc_binder", None)
         if binder is None:
-            return _abort("plc_binder가 없습니다. PLC 연결 상태를 확인할 수 없습니다.")
+            return _abort("plc_binder媛 ?놁뒿?덈떎. PLC ?곌껐 ?곹깭瑜??뺤씤?????놁뒿?덈떎.")
 
         try:
             plc = binder.get_plc_service()
         except Exception as e:
-            return _abort(f"PLC 서비스 조회 실패: {e!r}")
+            return _abort(f"PLC ?쒕퉬??議고쉶 ?ㅽ뙣: {e!r}")
 
         if plc is None:
-            return _abort("PLC 서비스가 없습니다.")
+            return _abort("PLC ?쒕퉬?ㅺ? ?놁뒿?덈떎.")
 
         try:
             connected = False
 
-            # 1순위: plc_service.is_connected()가 있으면 사용
+            # 1?쒖쐞: plc_service.is_connected()媛 ?덉쑝硫??ъ슜
             is_connected_fn = getattr(plc, "is_connected", None)
             if callable(is_connected_fn):
                 connected = bool(is_connected_fn())
             else:
-                # 2순위: latest snapshot의 connected 값 사용
+                # 2?쒖쐞: latest snapshot??connected 媛??ъ슜
                 snap = plc.get_last_snapshot() if hasattr(plc, "get_last_snapshot") else None
                 connected = bool(getattr(snap, "connected", False))
 
             if not connected:
-                return _abort("PLC가 연결되지 않았습니다.\nPLC 연결 후 다시 시작하세요.")
+                return _abort("PLC媛 ?곌껐?섏? ?딆븯?듬땲??\nPLC ?곌껐 ???ㅼ떆 ?쒖옉?섏꽭??")
 
         except Exception as e:
-            return _abort(f"PLC 연결 상태 확인 실패: {e!r}")
+            return _abort(f"PLC ?곌껐 ?곹깭 ?뺤씤 ?ㅽ뙣: {e!r}")
 
         self._append_process_log("[PRECHECK] PLC OK: connected")
         return True
 
     def _prepare_stm_service_for_start(self) -> bool:
         """
-        Start 직후 UI thread에서는
-        - FTM ON 요청
-        - STMService 객체 생성/start
-        - ProcessController에 runtime device 주입
-        까지만 수행한다.
+        Start 吏곹썑 UI thread?먯꽌??
+        - FTM ON ?붿껌
+        - STMService 媛앹껜 ?앹꽦/start
+        - ProcessController??runtime device 二쇱엯
+        源뚯?留??섑뻾?쒕떎.
 
-        실제 연결 대기 / crystal health check는
-        ProcessStartWorker(QThread)에서 처리한다.
+        ?ㅼ젣 ?곌껐 ?湲?/ crystal health check??
+        ProcessStartWorker(QThread)?먯꽌 泥섎━?쒕떎.
         """
         if self.hmi_window is None:
             self._append_process_log("[DEV][ERR] hmi_window is None -> cannot prepare STM")
@@ -611,7 +633,7 @@ class ProcessWindow(QWidget):
             self._append_process_log("[DEV][ERR] ini_path is None -> cannot prepare STM")
             return False
 
-        # 이전 STM 정리 (start 직전이므로 FTM OFF까지 포함한 best-effort cleanup)
+        # ?댁쟾 STM ?뺣━ (start 吏곸쟾?대?濡?FTM OFF源뚯? ?ы븿??best-effort cleanup)
         self._shutdown_stm_with_ftm_off_best_effort()
 
         binder = getattr(self.hmi_window, "_plc_binder", None)
@@ -635,7 +657,7 @@ class ProcessWindow(QWidget):
             if pc is not None and hasattr(pc, "replace_runtime_devices"):
                 pc.replace_runtime_devices(stm=stm, acs=self._acs_service)
             else:
-                self._append_process_log("[DEV][WARN] ProcessController.replace_runtime_devices() 없음")
+                self._append_process_log("[DEV][WARN] ProcessController.replace_runtime_devices() ?놁쓬")
 
             self._append_process_log("[DEV] STM service prepared (health/preflight pending)")
             return True
@@ -666,7 +688,7 @@ class ProcessWindow(QWidget):
                 stop_btn.setEnabled(True)
 
         if busy:
-            self._set_process_status("STM 준비중", "장비 연결 및 crystal 상태 확인")
+            self._set_process_status("STM 以鍮꾩쨷", "?λ퉬 ?곌껐 諛?crystal ?곹깭 ?뺤씤")
 
     def _cleanup_start_worker(self) -> None:
         worker = self._start_worker
@@ -688,7 +710,7 @@ class ProcessWindow(QWidget):
     def _start_async_preflight(self, run_cfg: dict[str, Any]) -> None:
         stm = self._stm_service
         if stm is None:
-            QMessageBox.warning(self, "STM", "STM 서비스가 준비되지 않았습니다.")
+            QMessageBox.warning(self, "STM", "STM ?쒕퉬?ㅺ? 以鍮꾨릺吏 ?딆븯?듬땲??")
             self._close_process_run_log()
             self._clear_run_power_flags()
             self._active_run_id = None
@@ -717,7 +739,7 @@ class ProcessWindow(QWidget):
 
     def _on_start_preflight_progress(self, text: str) -> None:
         self._append_process_log(f"[PRECHECK] {text}")
-        self._set_process_status("STM 준비중", text)
+        self._set_process_status("STM 以鍮꾩쨷", text)
 
     def _abort_start_preflight(self, *, show_warning: bool, title: str, message: str) -> None:
         with contextlib.suppress(Exception):
@@ -726,8 +748,8 @@ class ProcessWindow(QWidget):
         with contextlib.suppress(Exception):
             self._shutdown_stm_with_ftm_off_best_effort()
 
-        # ✅ 여기서는 사용자 입력값을 지우지 않는다.
-        #    preflight 실패했다고 process name / thickness / rate까지 초기화하면 UX가 나빠진다.
+        # ???ш린?쒕뒗 ?ъ슜???낅젰媛믪쓣 吏?곗? ?딅뒗??
+        #    preflight ?ㅽ뙣?덈떎怨?process name / thickness / rate源뚯? 珥덇린?뷀븯硫?UX媛 ?섎튌吏꾨떎.
         self._pending_run_cfg = None
 
         self._cleanup_start_worker()
@@ -735,9 +757,9 @@ class ProcessWindow(QWidget):
 
         if message:
             self._append_process_log(f"[PRECHECK][ABORT] {message}")
-            self._set_process_status("STM 준비 실패", message)
+            self._set_process_status("STM 以鍮??ㅽ뙣", message)
         else:
-            self._set_process_status("STM 준비 실패")
+            self._set_process_status("STM 以鍮??ㅽ뙣")
 
         self._close_process_run_log()
         self._active_run_id = None
@@ -755,7 +777,7 @@ class ProcessWindow(QWidget):
             self._abort_start_preflight(
                 show_warning=False,
                 title="Process",
-                message="STM preflight가 취소되었습니다.",
+                message="STM preflight媛 痍⑥냼?섏뿀?듬땲??",
             )
             return
 
@@ -763,7 +785,7 @@ class ProcessWindow(QWidget):
             self._abort_start_preflight(
                 show_warning=True,
                 title="STM Pre-check",
-                message=str(getattr(result, "message", "STM preflight 실패")),
+                message=str(getattr(result, "message", "STM preflight ?ㅽ뙣")),
             )
             return
 
@@ -782,14 +804,14 @@ class ProcessWindow(QWidget):
             self._abort_start_preflight(
                 show_warning=True,
                 title="Process",
-                message="start_from_ui가 구현되어 있지 않습니다.",
+                message="start_from_ui媛 援ы쁽?섏뼱 ?덉? ?딆뒿?덈떎.",
             )
             return
 
         try:
             pc.start_from_ui(run_cfg, run_id=self._active_run_id)
-            self._append_process_log("[PRECHECK] STM preflight 성공 -> 공정 시작")
-            self._set_process_status("공정 시작", "STM preflight 완료")
+            self._append_process_log("[PRECHECK] STM preflight ?깃났 -> 怨듭젙 ?쒖옉")
+            self._set_process_status("怨듭젙 ?쒖옉", "STM preflight ?꾨즺")
             self._pending_run_cfg = None
             self._set_start_busy(False)
         except Exception as e:
@@ -872,17 +894,17 @@ class ProcessWindow(QWidget):
 
         pc = self._process_controller
         if pc is None:
-            QMessageBox.warning(self, "Process", "ProcessController가 연결되지 않았습니다.")
+            QMessageBox.warning(self, "Process", "ProcessController媛 ?곌껐?섏? ?딆븯?듬땲??")
             return
 
         try:
             if hasattr(pc, "is_running") and pc.is_running():
-                QMessageBox.information(self, "Process", "이미 공정이 실행 중입니다.")
+                QMessageBox.information(self, "Process", "?대? 怨듭젙???ㅽ뻾 以묒엯?덈떎.")
                 return
         except Exception:
             pass
 
-        # 1) UI 입력 검증
+        # 1) UI ?낅젰 寃利?
         run_cfg = self._collect_ui_run_cfg(require_process_name=True)
         if run_cfg is None:
             return
@@ -901,13 +923,13 @@ class ProcessWindow(QWidget):
             QMessageBox.warning(self, "Process", "Run profile is not available.")
             return
         
-        self._set_process_status("공정 시작 요청", "PLC / STM pre-check 진행")
+        self._set_process_status("怨듭젙 ?쒖옉 ?붿껌", "PLC / STM pre-check 吏꾪뻾")
 
         self._latch_run_power_flags(run_cfg)
         self._active_run_cfg = dict(run_cfg)
         self._active_run_profile = dict(run_profile)
 
-        # 2) run_id 생성 + run 로그 open
+        # 2) run_id ?앹꽦 + run 濡쒓렇 open
         run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
         self._open_process_run_log(run_id, run_cfg, run_profile)
 
@@ -931,7 +953,9 @@ class ProcessWindow(QWidget):
             "[CFG] "
             f"dac_max={proc_cfg.get('dac_max')} | "
             f"rate_tol_ratio={proc_cfg.get('rate_tol_ratio')} | "
-            f"fine_step_dac={proc_cfg.get('fine_step_dac')}"
+            f"fine_step_dac={proc_cfg.get('fine_step_dac')} | "
+            f"hold_mode={proc_cfg.get('hold_control_mode', 'PI')} | "
+            f"hold_max_delta={proc_cfg.get('hold_max_dac_delta', proc_cfg.get('fine_step_dac'))}"
         )
         if run_profile.get("initial_dac") is not None:
             self._append_process_log(
@@ -949,9 +973,9 @@ class ProcessWindow(QWidget):
             self._active_run_profile = None
             return
 
-        # 4) STM service 준비(여기서는 blocking wait 안 함)
+        # 4) STM service 以鍮??ш린?쒕뒗 blocking wait ????
         if not self._prepare_stm_service_for_start():
-            QMessageBox.warning(self, "Device Connect Failed", "STM 준비 실패")
+            QMessageBox.warning(self, "Device Connect Failed", "STM 以鍮??ㅽ뙣")
             with contextlib.suppress(Exception):
                 self._shutdown_stm_with_ftm_off_best_effort()
             self._close_process_run_log()
@@ -961,60 +985,9 @@ class ProcessWindow(QWidget):
             self._active_run_profile = None
             return
 
-        # 5) 실제 연결 대기 / crystal health는 worker로 넘긴다
+        # 5) ?ㅼ젣 ?곌껐 ?湲?/ crystal health??worker濡??섍릿??
         self._start_async_preflight(run_cfg)
             
-    """
-    def _on_stop_clicked_legacy(self) -> None:
-        # 0) Start preflight 중이면 우선 취소
-        if self._has_active_start_preflight():
-            worker = self._start_worker
-            if worker is not None:
-                with contextlib.suppress(Exception):
-                    worker.request_cancel()
-            self._append_process_log("[UI] STM preflight 취소 요청")
-            self._set_process_status("STM 준비 취소 요청")
-            return
-
-        pc = self._process_controller
-
-        # 1) 실제 공정 실행 중일 때만 stop 요청
-        if pc is not None:
-            try:
-                is_running = False
-                if hasattr(pc, "is_running"):
-                    is_running = bool(pc.is_running())
-
-                if is_running:
-                    pc.stop()
-                    self._append_process_log("[UI] 공정 정지 요청 -> engine safety shutdown 대기")
-                    self._set_process_status("공정 정지 요청", "safety shutdown 진행중")
-                    return
-
-            except Exception as e:
-                self._append_process_log(f"[STOP FAIL] controller stop failed: {e!r}")
-
-        # 2) controller stop 요청이 안 되는 경우에만 emergency fallback
-        try:
-            self._emergency_safe_shutdown_plc_best_effort()
-            self._append_process_log("[SAFE] emergency fallback shutdown executed")
-            self._set_process_status("비상 종료 수행", "PLC fallback shutdown")
-        except Exception as e:
-            self._append_process_log(f"[SAFE][FAIL] emergency shutdown failed: {e!r}")
-            self._set_process_status("비상 종료 실패", f"{e!r}")
-
-        with contextlib.suppress(Exception):
-            self._rt_stop()
-        with contextlib.suppress(Exception):
-            self._shutdown_stm_with_ftm_off_best_effort()
-        with contextlib.suppress(Exception):
-            self._reset_process_ui(reset_monitor=False)
-
-        self._close_process_run_log()
-        self._active_run_id = None
-
-    """
-
     def _on_stop_clicked(self) -> None:
         if self._has_active_start_preflight():
             worker = self._start_worker
@@ -1058,47 +1031,6 @@ class ProcessWindow(QWidget):
         self._active_run_cfg = None
         self._active_run_profile = None
 
-    def _split_status_message_legacy(self, st: Any) -> tuple[str, list[str], str]:
-        msg = str(self._status_value(st, "message", "") or "").strip()
-        if not msg:
-            return "", [], ""
-
-        time_info = ""
-        m = re.match(r"^\[([^\]]+)\]\s*(.*)$", msg)
-        if m:
-            time_info = str(m.group(1) or "").strip()
-            msg = str(m.group(2) or "").strip()
-
-        parts = [part.strip() for part in msg.split(" | ") if str(part).strip()]
-        if not parts:
-            return "", [], time_info
-
-        return parts[0], parts[1:], time_info
-        """
-
-        # 1) controller가 message를 직접 준 경우
-        if msg:
-            if " | " in msg:
-                title, detail = msg.split(" | ", 1)
-                return (title.strip() or "---", detail.strip())
-
-            if phase:
-                return (phase, msg)
-
-            return ("진행 상태", msg)
-
-        # 2) phase / step 조합
-        if phase and step:
-            return (phase, step)
-        if phase:
-            return (phase, "")
-        if step:
-            return ("진행중", step)
-
-        return ("---", "")
-
-        """
-
     def _on_status(self, st: Any) -> None:
         self._try_update_last_power(st)
 
@@ -1112,141 +1044,6 @@ class ProcessWindow(QWidget):
         if isinstance(st, dict):
             return st.get(name, default)
         return getattr(st, name, default)
-
-    @staticmethod
-    def _format_status_phase_legacy(phase: Any) -> str:
-        raw = str(getattr(phase, "value", phase) or "").strip().upper()
-        phase_map = {
-            "IDLE": "대기",
-            "RUNNING": "실행 중",
-            "PAUSED": "일시정지",
-            "STOPPING": "정지 중",
-            "FINISHED": "완료",
-            "ERROR": "오류",
-        }
-        if raw in phase_map:
-            return phase_map[raw]
-        return raw.replace("_", " ").title() if raw else ""
-
-    @staticmethod
-    def _format_status_step_legacy(step_idx: Any, step_name: Any) -> str:
-        name = str(step_name or "").strip().replace("_", " ")
-        try:
-            idx = int(step_idx)
-        except Exception:
-            idx = -1
-
-        if idx >= 0 and name:
-            return f"{idx + 1}. {name}"
-        if idx >= 0:
-            return f"{idx + 1}"
-        return name
-
-    @staticmethod
-    def _same_status_text_legacy(left: str, right: str) -> bool:
-        def _norm(text: str) -> str:
-            s = str(text or "").strip().upper().replace("_", " ")
-            return re.sub(r"\s+", " ", s)
-
-        return bool(left and right and _norm(left) == _norm(right))
-
-    def _filter_status_detail_parts_legacy(
-        self,
-        parts: list[str],
-        *,
-        has_rate: bool,
-        has_dac: bool,
-        has_adc: bool,
-    ) -> list[str]:
-        filtered: list[str] = []
-        for part in parts:
-            text = str(part or "").strip()
-            compact = re.sub(r"\s+", "", text.lower())
-            if not compact:
-                continue
-
-            if has_rate and re.fullmatch(r"rate=[+-]?\d+(?:\.\d+)?", compact):
-                continue
-            if has_dac and "/" not in compact and re.fullmatch(r"dac\d*=[+-]?\d+(?:\.\d+)?", compact):
-                continue
-            if has_adc and "/" not in compact and re.fullmatch(r"adc\d*=[+-]?\d+(?:\.\d+)?", compact):
-                continue
-
-            filtered.append(text)
-
-        return filtered
-
-    def _build_process_status_summary_legacy(self, st: Any) -> str:
-        phase_text = self._format_status_phase(self._status_value(st, "phase", ""))
-        step_text = self._format_status_step(
-            self._status_value(st, "step_idx", -1),
-            self._status_value(st, "step_name", self._status_value(st, "step", "")),
-        )
-        action, detail_parts, time_info = self._split_status_message(st)
-
-        pressure = self._to_float_or_none(self._status_value(st, "pressure", None))
-        thickness = self._to_float_or_none(self._status_value(st, "thickness_a", None))
-        rate = self._to_float_or_none(self._status_value(st, "rate_a_s", None))
-
-        current_parts: list[str] = []
-        if pressure is not None:
-            current_parts.append(f"압력 {pressure:.2e} Torr")
-        if thickness is not None:
-            current_parts.append(f"두께 {thickness:.1f} A")
-        if rate is not None:
-            current_parts.append(f"증착률 {rate:.3f} A/s")
-
-        device_parts: list[str] = []
-        for label, value, fmt in (
-            ("DAC1", self._status_value(st, "dac1", None), "{:.0f}"),
-            ("DAC2", self._status_value(st, "dac2", None), "{:.0f}"),
-            ("ADC1", self._status_value(st, "adc1", None), "{:.1f}"),
-            ("ADC2", self._status_value(st, "adc2", None), "{:.1f}"),
-        ):
-            num = self._to_float_or_none(value)
-            if num is not None:
-                device_parts.append(f"{label} {fmt.format(num)}")
-
-        detail_parts = self._filter_status_detail_parts(
-            detail_parts,
-            has_rate=(rate is not None),
-            has_dac=any(part.startswith("DAC") for part in device_parts),
-            has_adc=any(part.startswith("ADC") for part in device_parts),
-        )
-
-        progress_parts: list[str] = []
-        if time_info:
-            progress_parts.append(time_info)
-        progress_parts.extend(detail_parts)
-
-        lines: list[str] = []
-
-        header_parts: list[str] = []
-        if phase_text:
-            header_parts.append(f"상태 {phase_text}")
-        if step_text:
-            header_parts.append(f"단계 {step_text}")
-        if header_parts:
-            lines.append(" | ".join(header_parts))
-
-        if action and (not self._same_status_text(action, step_text)) and (not self._same_status_text(action, phase_text)):
-            lines.append(f"동작: {action}")
-
-        if current_parts:
-            lines.append(f"현재값: {' | '.join(current_parts)}")
-
-        if progress_parts and device_parts:
-            lines.append(f"진행/장비: {' | '.join(progress_parts + device_parts)}")
-        elif progress_parts:
-            lines.append(f"진행: {' | '.join(progress_parts)}")
-        elif device_parts:
-            lines.append(f"장비: {' | '.join(device_parts)}")
-
-        if not lines:
-            raw_msg = str(self._status_value(st, "message", "") or "").strip()
-            return raw_msg or "---"
-
-        return "\n".join(lines[:4])
 
     def _split_status_message(self, st: Any) -> tuple[str, list[str], list[str], list[str]]:
         msg = str(self._status_value(st, "message", "") or "").strip()
@@ -1341,7 +1138,7 @@ class ProcessWindow(QWidget):
             return True
         if not re.search(r"\d", text):
             return False
-        keywords = ("남은", "경과", "다음", "후", "sec", "secs", "second", "seconds", "ms", "min", "mins", "minute", "minutes", "초", "분")
+        keywords = ("남은", "경과", "다음", "초", "sec", "secs", "second", "seconds", "ms", "min", "mins", "minute", "minutes", "분")
         lower = text.lower()
         return any(keyword in text or keyword in lower for keyword in keywords)
 
@@ -1434,8 +1231,8 @@ class ProcessWindow(QWidget):
 
     def _try_update_last_power(self, st: Any) -> None:
         """
-        그래프용 power는 이제 ADC total 우선.
-        아직 engine.py 가 adc를 status에 안 넣는 동안은 DAC fallback 허용.
+        洹몃옒?꾩슜 power???댁젣 ADC total ?곗꽑.
+        ?꾩쭅 engine.py 媛 adc瑜?status?????ｋ뒗 ?숈븞? DAC fallback ?덉슜.
         """
         def _set_pair(v1: Any, v2: Any) -> bool:
             graph_power, _display_adc1, _display_adc2 = self._resolve_power_feedback_for_ui(
@@ -1448,7 +1245,7 @@ class ProcessWindow(QWidget):
             return True
 
         try:
-            # dict 형태
+            # dict ?뺥깭
             if isinstance(st, dict):
                 for k in ("adc_total", "power_actual", "actual_power", "power_read", "adc"):
                     if k in st and st[k] is not None:
@@ -1459,7 +1256,7 @@ class ProcessWindow(QWidget):
                     if _set_pair(st.get("adc1"), st.get("adc2")):
                         return
 
-                # fallback: 아직 adc 미구현이면 dac 사용
+                # fallback: ?꾩쭅 adc 誘멸뎄?꾩씠硫?dac ?ъ슜
                 for k in ("power", "power_dac", "dac", "dac_power", "power_cmd", "dac_cmd"):
                     if k in st and st[k] is not None:
                         self._last_power = float(st[k])
@@ -1470,7 +1267,7 @@ class ProcessWindow(QWidget):
                         return
                 return
 
-            # 객체 형태
+            # 媛앹껜 ?뺥깭
             for name in ("adc_total", "power_actual", "actual_power", "power_read", "adc"):
                 if hasattr(st, name):
                     v = getattr(st, name)
@@ -1503,12 +1300,12 @@ class ProcessWindow(QWidget):
 
             self._append_process_log(f"[ERROR] {where} | {msg}")
 
-            detail = f"{where} | {msg}" if where and msg else (where or msg or "상세 메시지 없음")
-            self._set_process_status("오류 발생", detail)
+            detail = f"{where} | {msg}" if where and msg else (where or msg or "?곸꽭 硫붿떆吏 ?놁쓬")
+            self._set_process_status("?ㅻ쪟 諛쒖깮", detail)
 
         except Exception:
             self._append_process_log(f"[ERROR] {err!r}")
-            self._set_process_status("오류 발생", f"{err!r}")
+            self._set_process_status("?ㅻ쪟 諛쒖깮", f"{err!r}")
 
     def _on_finished(self, result: Any) -> None:
         run_profile = dict(self._active_run_profile or {})
@@ -1534,20 +1331,20 @@ class ProcessWindow(QWidget):
 
                 if ok:
                     self._append_process_log(f"[FINISHED][OK] run_id={rid}")
-                    self._set_process_status("공정 완료", f"run_id={rid}" if rid else "")
+                    self._set_process_status("怨듭젙 ?꾨즺", f"run_id={rid}" if rid else "")
                 else:
                     self._append_process_log(f"[FINISHED][ABNORMAL] run_id={rid}")
 
-                    # 이미 오류 상태면 유지
-                    if not current_status.startswith("오류 발생"):
+                    # ?대? ?ㅻ쪟 ?곹깭硫??좎?
+                    if not current_status.startswith("?ㅻ쪟 諛쒖깮"):
                         if rid:
-                            self._set_process_status("공정 종료", f"run_id={rid}")
+                            self._set_process_status("怨듭젙 醫낅즺", f"run_id={rid}")
                         else:
-                            self._set_process_status("공정 종료", "정지 또는 비정상 종료")
+                            self._set_process_status("怨듭젙 醫낅즺", "?뺤? ?먮뒗 鍮꾩젙??醫낅즺")
 
             except Exception as e:
                 self._append_process_log(f"[FINISHED][WARN] finalize failed: {e!r}")
-                self._set_process_status("공정 종료")
+                self._set_process_status("怨듭젙 醫낅즺")
 
         finally:
             with contextlib.suppress(Exception):
@@ -1571,8 +1368,8 @@ class ProcessWindow(QWidget):
 
     def _wait_process_stop(self, timeout_s: float = 3.0) -> bool:
         """
-        closeEvent에서 stop 요청 후 공정 worker가 실제로 멈췄는지
-        짧게 기다린다.
+        closeEvent?먯꽌 stop ?붿껌 ??怨듭젙 worker媛 ?ㅼ젣濡?硫덉톬?붿?
+        吏㏐쾶 湲곕떎由곕떎.
         """
         pc = self._process_controller
         if pc is None:
@@ -1600,11 +1397,11 @@ class ProcessWindow(QWidget):
     
     def _estimate_stop_wait_timeout_s(self) -> float:
         """
-        closeEvent에서 stop 요청 후 얼마나 기다릴지 계산.
-        engine shutdown ramp 기준:
-        - 1초마다 100 감소
-        - max(dac1, dac2) 기준으로 대기시간 추정
-        - 여유 버퍼 추가
+        closeEvent?먯꽌 stop ?붿껌 ???쇰쭏??湲곕떎由댁? 怨꾩궛.
+        engine shutdown ramp 湲곗?:
+        - 1珥덈쭏??100 媛먯냼
+        - max(dac1, dac2) 湲곗??쇰줈 ?湲곗떆媛?異붿젙
+        - ?ъ쑀 踰꾪띁 異붽?
         """
         dac1 = 0.0
         dac2 = 0.0
@@ -1617,12 +1414,12 @@ class ProcessWindow(QWidget):
             pass
 
         max_dac = max(dac1, dac2, 0.0)
-        ramp_s = max_dac / 100.0   # 1초에 100 감소 기준
-        timeout_s = ramp_s + 5.0   # 버퍼 5초
+        ramp_s = max_dac / 100.0   # 1珥덉뿉 100 媛먯냼 湲곗?
+        timeout_s = ramp_s + 5.0   # 踰꾪띁 5珥?
         return max(3.0, min(timeout_s, 30.0))
 
     def closeEvent(self, event):
-        # 1) 먼저 stop / cancel 요청
+        # 1) 癒쇱? stop / cancel ?붿껌
         if not getattr(self, "_close_stop_guard", False):
             self._close_stop_guard = True
             try:
@@ -1630,7 +1427,7 @@ class ProcessWindow(QWidget):
             except Exception:
                 pass
 
-        # 2) Start preflight가 살아 있으면 먼저 기다린다
+        # 2) Start preflight媛 ?댁븘 ?덉쑝硫?癒쇱? 湲곕떎由곕떎
         if self._has_active_start_preflight():
             stopped = True
             try:
@@ -1643,14 +1440,14 @@ class ProcessWindow(QWidget):
                 QMessageBox.warning(
                     self,
                     "Process",
-                    "STM 준비 작업이 아직 종료되지 않았습니다.\n"
-                    "잠시 후 다시 닫아주세요."
+                    "STM 以鍮??묒뾽???꾩쭅 醫낅즺?섏? ?딆븯?듬땲??\n"
+                    "?좎떆 ???ㅼ떆 ?レ븘二쇱꽭??"
                 )
                 self._close_stop_guard = False
                 event.ignore()
                 return
 
-        # 3) 실제 공정이 돌고 있었다면 기존 shutdown wait
+        # 3) ?ㅼ젣 怨듭젙???뚭퀬 ?덉뿀?ㅻ㈃ 湲곗〈 shutdown wait
         timeout_s = 3.0
         try:
             timeout_s = self._estimate_stop_wait_timeout_s()
@@ -1668,8 +1465,8 @@ class ProcessWindow(QWidget):
             QMessageBox.warning(
                 self,
                 "Process",
-                "공정 정지 완료를 아직 확인하지 못했습니다.\n"
-                "DAC ramp-down 종료 후 다시 닫아주세요."
+                "怨듭젙 ?뺤? ?꾨즺瑜??꾩쭅 ?뺤씤?섏? 紐삵뻽?듬땲??\n"
+                "DAC ramp-down 醫낅즺 ???ㅼ떆 ?レ븘二쇱꽭??"
             )
             self._close_stop_guard = False
             event.ignore()
@@ -1685,7 +1482,7 @@ class ProcessWindow(QWidget):
         if not sel:
             return
 
-        # ✅ source 버튼은 물질 정보만 관리
+        # ??source 踰꾪듉? 臾쇱쭏 ?뺣낫留?愿由?
         data = {
             "material": getattr(sel, "material", ""),
             "density_g_cm3": getattr(sel, "density_g_cm3", 0.0),
@@ -1721,6 +1518,14 @@ class ProcessWindow(QWidget):
             "rate_stable_sec": 3.0,
             "hold_control_interval_s": 1.0,
             "fine_step_dac": 10,
+            "hold_control_mode": "PI",
+            "hold_pi_kp": 50.0,
+            "hold_pi_ki": 8.0,
+            "hold_integral_limit": 2.5,
+            "rate_filter_alpha": 0.35,
+            "rate_jump_guard_ratio": 0.50,
+            "rate_jump_guard_abs": 0.15,
+            "hold_max_dac_delta": 10,
             "rate_abort_ratio": 0.30,
             "rate_abort_sec": 5.0,
             "sensor_none_abort_s": 5.0,
@@ -1776,7 +1581,7 @@ class ProcessWindow(QWidget):
                 dac_interval_sec = 30.0
 
             try:
-                hold_src = d.get("hold_sec", d.get("delay_s", 0.0))   # delay_s만 호환 허용
+                hold_src = d.get("hold_sec", d.get("delay_s", 0.0))   # delay_s留??명솚 ?덉슜
                 hold_sec = max(0.0, float(hold_src))
             except Exception:
                 hold_sec = 0.0
@@ -1800,6 +1605,20 @@ class ProcessWindow(QWidget):
         step_count = max(1, min(10, step_count))
         steps = steps[:step_count]
 
+        fine_step_dac = _as_int(src, "fine_step_dac", 10, 1)
+        hold_max_dac_delta = _as_int(src, "hold_max_dac_delta", fine_step_dac, 1)
+        hold_pi_kp = _as_float(src, "hold_pi_kp", max(1.0, hold_max_dac_delta * 5.0), 0.0)
+        hold_pi_ki = _as_float(src, "hold_pi_ki", max(0.0, hold_max_dac_delta * 0.8), 0.0)
+        hold_integral_limit = _as_float(
+            src,
+            "hold_integral_limit",
+            max(1.0, (2.0 * hold_max_dac_delta) / max(hold_pi_ki, 1e-6)),
+            0.1,
+        )
+        hold_control_mode = str(src.get("hold_control_mode", default["hold_control_mode"]) or "").strip().upper() or "PI"
+        if hold_control_mode not in {"PI", "STEP"}:
+            hold_control_mode = "PI"
+
         return {
             "step_count": len(steps),
             "ramp_steps": steps,
@@ -1807,7 +1626,15 @@ class ProcessWindow(QWidget):
             "rate_tol_ratio": _as_float(src, "rate_tol_ratio", 0.05, 0.001, 1.0),
             "rate_stable_sec": _as_float(src, "rate_stable_sec", 3.0, 0.0),
             "hold_control_interval_s": _as_float(src, "hold_control_interval_s", 1.0, 0.1),
-            "fine_step_dac": _as_int(src, "fine_step_dac", 10, 1),
+            "fine_step_dac": fine_step_dac,
+            "hold_control_mode": hold_control_mode,
+            "hold_pi_kp": hold_pi_kp,
+            "hold_pi_ki": hold_pi_ki,
+            "hold_integral_limit": hold_integral_limit,
+            "rate_filter_alpha": _as_float(src, "rate_filter_alpha", 0.35, 0.01, 1.0),
+            "rate_jump_guard_ratio": _as_float(src, "rate_jump_guard_ratio", 0.50, 0.0),
+            "rate_jump_guard_abs": _as_float(src, "rate_jump_guard_abs", 0.15, 0.0),
+            "hold_max_dac_delta": hold_max_dac_delta,
             "rate_abort_ratio": _as_float(src, "rate_abort_ratio", 0.30, 0.001, 1.0),
             "rate_abort_sec": _as_float(src, "rate_abort_sec", 5.0, 0.0),
             "sensor_none_abort_s": _as_float(src, "sensor_none_abort_s", 5.0, 0.0),
@@ -1816,8 +1643,8 @@ class ProcessWindow(QWidget):
 
     def _open_process_config_dialog(self) -> None:
         """
-        아직 ui/process_config_dialog.py 가 없더라도
-        프로그램이 바로 죽지 않게 lazy import 로 처리한다.
+        ?꾩쭅 ui/process_config_dialog.py 媛 ?녿뜑?쇰룄
+        ?꾨줈洹몃옩??諛붾줈 二쎌? ?딄쾶 lazy import 濡?泥섎━?쒕떎.
         """
         try:
             from ui.process_config_dialog import ProcessConfigDialog
@@ -1825,7 +1652,7 @@ class ProcessWindow(QWidget):
             QMessageBox.warning(
                 self,
                 "Process Config",
-                f"Process Config dialog import 실패:\n{e!r}"
+                f"Process Config dialog import ?ㅽ뙣:\n{e!r}"
             )
             self._append_process_log(f"[CFG][ERR] dialog import failed: {e!r}")
             return
@@ -1874,7 +1701,7 @@ class ProcessWindow(QWidget):
 
         if not recommendation:
             self._append_process_log("[RECO] no recommendation data")
-            QMessageBox.information(self, "Recommendation", "추천 데이터가 없습니다.")
+            QMessageBox.information(self, "Recommendation", "異붿쿇 ?곗씠?곌? ?놁뒿?덈떎.")
             return
 
         try:
@@ -1907,7 +1734,7 @@ class ProcessWindow(QWidget):
             if initial_dac is not None:
                 self._append_process_log(f"[RECO] start DAC override prepared -> {initial_dac}")
 
-    # ================== 그래프 설정 ==================
+    # ================== 洹몃옒???ㅼ젙 ==================
     def _on_history_backfill_clicked(self) -> None:
         svc = self._run_summary_service
         if svc is None or not hasattr(svc, "backfill_history"):
@@ -1952,12 +1779,12 @@ class ProcessWindow(QWidget):
         )
 
     def _init_rt_plot(self) -> None:
-        """ui.graphWidget 자리에 DepositionPlotWidget을 삽입"""
+        """ui.graphWidget ?먮━??DepositionPlotWidget???쎌엯"""
         host = getattr(self.ui, "graphWidget", None)
         if host is None:
             return
 
-        # 이미 layout이 없으면 생성
+        # ?대? layout???놁쑝硫??앹꽦
         lay = host.layout()
         if lay is None:
             lay = QVBoxLayout(host)
@@ -1965,7 +1792,7 @@ class ProcessWindow(QWidget):
             lay.setSpacing(0)
             host.setLayout(lay)
 
-        # 기존 위젯 제거(중복 방지)
+        # 湲곗〈 ?꾩젽 ?쒓굅(以묐났 諛⑹?)
         while lay.count():
             item = lay.takeAt(0)
             w = item.widget()
@@ -1994,10 +1821,10 @@ class ProcessWindow(QWidget):
             self._rt_timer.stop()
 
     def _tick_rt_ui(self) -> None:
-        """1초마다 lineedit + 그래프 갱신"""
+        """1珥덈쭏??lineedit + 洹몃옒??媛깆떊"""
         rate = self._to_float_or_none(self._last_rate)
 
-        # DAC / ADC 둘 다 읽기
+        # DAC / ADC ?????쎄린
         dac1, dac2 = self._read_plc_power_dac_pair()
         adc1, adc2 = self._read_plc_power_actual_pair()
 
@@ -2011,7 +1838,7 @@ class ProcessWindow(QWidget):
         show_th = self._is_main_deposition()
         th = self._to_float_or_none(self._last_thickness) if show_th else None
 
-        # 1) rate/thickness 표시
+        # 1) rate/thickness ?쒖떆
         try:
             self.ui.currentRateEdit.setText(f"{rate:.3f}" if rate is not None else "---")
         except Exception:
@@ -2022,11 +1849,11 @@ class ProcessWindow(QWidget):
         except Exception:
             pass
 
-        # 2) DAC / actual power 표시
+        # 2) DAC / actual power ?쒖떆
         self._update_dac_power_ui(dac1, dac2)
         self._update_actual_power_ui(display_adc1, display_adc2)
 
-        # 3) 그래프 갱신
+        # 3) 洹몃옒??媛깆떊
         if self._plot is not None:
             try:
                 self._plot.append(
@@ -2042,13 +1869,13 @@ class ProcessWindow(QWidget):
         adc2: Optional[float],
     ) -> tuple[Optional[float], Optional[float], Optional[float]]:
         """
-        반환값:
+        諛섑솚媛?
             graph_power, display_adc1, display_adc2
         """
         use1, use2 = self._selected_power_flags()
 
-        # 현재 하드웨어 임시 우회:
-        # Power1 단독 사용 시 실제 feedback은 ADC2를 사용한다.
+        # ?꾩옱 ?섎뱶?⑥뼱 ?꾩떆 ?고쉶:
+        # Power1 ?⑤룆 ?ъ슜 ???ㅼ젣 feedback? ADC2瑜??ъ슜?쒕떎.
         if use1 and not use2 and self._power1_feedback_uses_adc2:
             fb = self._to_float_or_none(adc2)
             return fb, fb, None
@@ -2058,11 +1885,11 @@ class ProcessWindow(QWidget):
             self._to_float_or_none(adc2),
         )
         return graph_power, self._to_float_or_none(adc1), self._to_float_or_none(adc2)
-    # ================== 그래프 설정 ==================
+    # ================== 洹몃옒???ㅼ젙 ==================
 
     @staticmethod
     def _clamp_nonneg(v: Optional[float]) -> Optional[float]:
-        """음수는 0으로 클램프. (None은 그대로)"""
+        """?뚯닔??0?쇰줈 ?대옩?? (None? 洹몃?濡?"""
         if v is None:
             return None
         try:
@@ -2081,7 +1908,7 @@ class ProcessWindow(QWidget):
             return None
 
     def _is_main_deposition(self) -> bool:
-        """메인 공정(메인 셔터 OPEN)일 때만 True."""
+        """硫붿씤 怨듭젙(硫붿씤 ?뷀꽣 OPEN)???뚮쭔 True."""
         pc = self._process_controller
         try:
             if pc is None or (not pc.is_running()):
@@ -2102,8 +1929,8 @@ class ProcessWindow(QWidget):
         
     def _selected_power_flags(self) -> tuple[bool, bool]:
         """
-        공정/preflight 중에는 시작 시점에 latch된 power 선택 상태를 사용한다.
-        idle 상태에서만 현재 UI 체크박스 값을 읽는다.
+        怨듭젙/preflight 以묒뿉???쒖옉 ?쒖젏??latch??power ?좏깮 ?곹깭瑜??ъ슜?쒕떎.
+        idle ?곹깭?먯꽌留??꾩옱 UI 泥댄겕諛뺤뒪 媛믪쓣 ?쎈뒗??
         """
         if self._run_use_power1 is not None and self._run_use_power2 is not None:
             return bool(self._run_use_power1), bool(self._run_use_power2)
@@ -2122,9 +1949,9 @@ class ProcessWindow(QWidget):
 
     def _sum_selected_pair(self, p1: Optional[float], p2: Optional[float]) -> Optional[float]:
         """
-        선택된 power 기준으로 합산.
-        - 1개 선택: 해당 채널 값
-        - 2개 선택: 합계
+        ?좏깮??power 湲곗??쇰줈 ?⑹궛.
+        - 1媛??좏깮: ?대떦 梨꾨꼸 媛?
+        - 2媛??좏깮: ?⑷퀎
         """
         use1, use2 = self._selected_power_flags()
 
@@ -2142,7 +1969,7 @@ class ProcessWindow(QWidget):
 
     def _read_plc_power_dac_pair(self) -> tuple[Optional[float], Optional[float]]:
         """
-        PLC snapshot에서 DAC command 2채널을 각각 읽는다.
+        PLC snapshot?먯꽌 DAC command 2梨꾨꼸??媛곴컖 ?쎈뒗??
         """
         if self.hmi_window is None:
             return None, None
@@ -2171,8 +1998,8 @@ class ProcessWindow(QWidget):
 
     def _update_dac_power_ui(self, p1: Optional[float], p2: Optional[float]) -> None:
         """
-        DAC 표시칸(currentDac1Edit/currentDac2Edit)에 값 출력.
-        공정/preflight 중에는 현재 체크박스 상태가 아니라 run 시작 시점 latch 기준으로 표시한다.
+        DAC ?쒖떆移?currentDac1Edit/currentDac2Edit)??媛?異쒕젰.
+        怨듭젙/preflight 以묒뿉???꾩옱 泥댄겕諛뺤뒪 ?곹깭媛 ?꾨땲??run ?쒖옉 ?쒖젏 latch 湲곗??쇰줈 ?쒖떆?쒕떎.
         """
         use1, use2 = self._selected_power_flags()
 
@@ -2196,8 +2023,8 @@ class ProcessWindow(QWidget):
         
     def _convert_power_read_to_amp(self, raw: Optional[float]) -> Optional[float]:
         """
-        plc_service.py에서 이미 sanitize + scale 된 값을 그대로 사용한다.
-        예:
+        plc_service.py?먯꽌 ?대? sanitize + scale ??媛믪쓣 洹몃?濡??ъ슜?쒕떎.
+        ??
             0.0
             100.0
             253.4
@@ -2211,7 +2038,7 @@ class ProcessWindow(QWidget):
 
     def _read_plc_power_actual_pair(self) -> tuple[Optional[float], Optional[float]]:
         """
-        PLC snapshot에서 actual power readback 2채널을 읽는다.
+        PLC snapshot?먯꽌 actual power readback 2梨꾨꼸???쎈뒗??
         """
         if self.hmi_window is None:
             return None, None
@@ -2242,8 +2069,8 @@ class ProcessWindow(QWidget):
 
     def _update_actual_power_ui(self, p1: Optional[float], p2: Optional[float]) -> None:
         """
-        기존 actualPower1/2 는 ADC 표시칸으로 사용.
-        공정/preflight 중에는 현재 체크박스 상태가 아니라 run 시작 시점 latch 기준으로 표시한다.
+        湲곗〈 actualPower1/2 ??ADC ?쒖떆移몄쑝濡??ъ슜.
+        怨듭젙/preflight 以묒뿉???꾩옱 泥댄겕諛뺤뒪 ?곹깭媛 ?꾨땲??run ?쒖옉 ?쒖젏 latch 湲곗??쇰줈 ?쒖떆?쒕떎.
         """
         use1, use2 = self._selected_power_flags()
 
@@ -2266,7 +2093,7 @@ class ProcessWindow(QWidget):
             pass
 
     def _reset_process_ui(self, *, reset_monitor: bool = True) -> None:
-        """공정 종료 후: 입력값/물질 선택/그래프/표시값 초기화."""
+        """怨듭젙 醫낅즺 ?? ?낅젰媛?臾쇱쭏 ?좏깮/洹몃옒???쒖떆媛?珥덇린??"""
         for wname in ("processNameEdit", "deprateEdit", "deprateEdit2", "thicknessEdit", "delayEdit"):
             w = getattr(self.ui, wname, None)
             if w is not None and hasattr(w, "setText"):
@@ -2289,7 +2116,7 @@ class ProcessWindow(QWidget):
         with contextlib.suppress(Exception):
             self.ui.materialEdit2.setText("Select")
 
-        # 현재값 표시 초기화
+        # ?꾩옱媛??쒖떆 珥덇린??
         for wname in (
             "currentRateEdit",
             "currentThicknessEdit",
@@ -2314,7 +2141,7 @@ class ProcessWindow(QWidget):
         self._last_thickness = None
         self._last_power = None
 
-    # ================== UI 값 파싱 ==================
+    # ================== UI 媛??뚯떛 ==================
     def _read_float(self, wname: str) -> Optional[float]:
         w = getattr(self.ui, wname, None)
         if w is None or not hasattr(w, "text"):
@@ -2328,91 +2155,91 @@ class ProcessWindow(QWidget):
             return None
 
     def _collect_ui_run_cfg(self, *, require_process_name: bool = True) -> Optional[dict[str, Any]]:
-        # ✅ Power 선택: 1개 또는 2개 허용
+        # ??Power ?좏깮: 1媛??먮뒗 2媛??덉슜
         p1 = bool(getattr(getattr(self.ui, "sourcePower1", None), "isChecked", lambda: False)())
         p2 = bool(getattr(getattr(self.ui, "sourcePower2", None), "isChecked", lambda: False)())
         if not (p1 or p2):
-            QMessageBox.warning(self, "Input", "Power1/Power2 중 최소 1개는 선택해야 합니다.")
+            QMessageBox.warning(self, "Input", "Power1/Power2 以?理쒖냼 1媛쒕뒗 ?좏깮?댁빞 ?⑸땲??")
             return None
 
-        # 아래 Power2 / dual-power 분기는 현재 하드웨어 문제로 인해
-        # 위의 임시 차단에 걸려 실제로는 진입하지 않는다.
-        # 다만 장비 수리 후 다시 활성화할 복구 경로이므로 삭제하지 않고 유지한다.
+        # ?꾨옒 Power2 / dual-power 遺꾧린???꾩옱 ?섎뱶?⑥뼱 臾몄젣濡??명빐
+        # ?꾩쓽 ?꾩떆 李⑤떒??嫄몃젮 ?ㅼ젣濡쒕뒗 吏꾩엯?섏? ?딅뒗??
+        # ?ㅻ쭔 ?λ퉬 ?섎━ ???ㅼ떆 ?쒖꽦?뷀븷 蹂듦뎄 寃쎈줈?대?濡???젣?섏? ?딄퀬 ?좎??쒕떎.
         if self._power2_temporarily_disabled and p2:
             QMessageBox.warning(
                 self,
                 "Input",
-                "현재 장비 상태에서는 Power 2를 사용할 수 없습니다.\n"
-                "임시로 Power 1만 사용해 주세요.\n"
-                "(장비 수리 후 Power2/dual-power 경로를 다시 활성화할 예정)"
+                "?꾩옱 ?λ퉬 ?곹깭?먯꽌??Power 2瑜??ъ슜?????놁뒿?덈떎.\n"
+                "?꾩떆濡?Power 1留??ъ슜??二쇱꽭??\n"
+                "(?λ퉬 ?섎━ ??Power2/dual-power 寃쎈줈瑜??ㅼ떆 ?쒖꽦?뷀븷 ?덉젙)"
             )
             return None
 
-        # ✅ Target Dep.rate: 선택된 power에 해당하는 입력칸만 사용 (fallback 없음)
+        # ??Target Dep.rate: ?좏깮??power???대떦?섎뒗 ?낅젰移몃쭔 ?ъ슜 (fallback ?놁쓬)
         rate1 = self._read_float("deprateEdit")
         rate2 = self._read_float("deprateEdit2")
 
         if p1 and not p2:
-            # Power1만 선택 → Dep.rate 1만 본다
+            # Power1留??좏깮 ??Dep.rate 1留?蹂몃떎
             if rate1 is None:
-                QMessageBox.warning(self, "Input", "Power1 선택 시 Target Dep.rate 1을 입력하세요.")
+                QMessageBox.warning(self, "Input", "Power1 ?좏깮 ??Target Dep.rate 1???낅젰?섏꽭??")
                 return None
             if rate1 <= 0:
-                QMessageBox.warning(self, "Input", "Target Dep.rate 1은 0보다 커야 합니다.")
+                QMessageBox.warning(self, "Input", "Target Dep.rate 1? 0蹂대떎 而ㅼ빞 ?⑸땲??")
                 return None
             target_rate = rate1
 
         elif p2 and not p1:
-            # Power2만 선택 → Dep.rate 2만 본다
+            # Power2留??좏깮 ??Dep.rate 2留?蹂몃떎
             if rate2 is None:
-                QMessageBox.warning(self, "Input", "Power2 선택 시 Target Dep.rate 2를 입력하세요.")
+                QMessageBox.warning(self, "Input", "Power2 ?좏깮 ??Target Dep.rate 2瑜??낅젰?섏꽭??")
                 return None
             if rate2 <= 0:
-                QMessageBox.warning(self, "Input", "Target Dep.rate 2는 0보다 커야 합니다.")
+                QMessageBox.warning(self, "Input", "Target Dep.rate 2??0蹂대떎 而ㅼ빞 ?⑸땲??")
                 return None
             target_rate = rate2
 
         else:
-            # Power1 + Power2 동시 선택
-            # 현재 ProcessController는 target_rate가 1개만 들어가도록 설계되어 있어서(= 엔진도 1개 목표로 동작),
-            # 두 값을 다르게 받으면 이후 단계에서 모순/오동작 가능 → 둘 다 입력 + 동일값 강제
+            # Power1 + Power2 ?숈떆 ?좏깮
+            # ?꾩옱 ProcessController??target_rate媛 1媛쒕쭔 ?ㅼ뼱媛?꾨줉 ?ㅺ퀎?섏뼱 ?덉뼱??= ?붿쭊??1媛?紐⑺몴濡??숈옉),
+            # ??媛믪쓣 ?ㅻⅤ寃?諛쏆쑝硫??댄썑 ?④퀎?먯꽌 紐⑥닚/?ㅻ룞??媛?????????낅젰 + ?숈씪媛?媛뺤젣
             if rate1 is None:
-                QMessageBox.warning(self, "Input", "Power1+Power2 동시 사용 시 Target Dep.rate 1을 입력하세요.")
+                QMessageBox.warning(self, "Input", "Power1+Power2 ?숈떆 ?ъ슜 ??Target Dep.rate 1???낅젰?섏꽭??")
                 return None
             if rate2 is None:
-                QMessageBox.warning(self, "Input", "Power1+Power2 동시 사용 시 Target Dep.rate 2를 입력하세요.")
+                QMessageBox.warning(self, "Input", "Power1+Power2 ?숈떆 ?ъ슜 ??Target Dep.rate 2瑜??낅젰?섏꽭??")
                 return None
             if rate1 <= 0 or rate2 <= 0:
-                QMessageBox.warning(self, "Input", "Target Dep.rate 1/2는 0보다 커야 합니다.")
+                QMessageBox.warning(self, "Input", "Target Dep.rate 1/2??0蹂대떎 而ㅼ빞 ?⑸땲??")
                 return None
             if abs(rate1 - rate2) > 1e-9:
-                QMessageBox.warning(self, "Input", "Power1+Power2 동시 사용 시 Target Dep.rate 1과 2는 동일해야 합니다.")
+                QMessageBox.warning(self, "Input", "Power1+Power2 ?숈떆 ?ъ슜 ??Target Dep.rate 1怨?2???숈씪?댁빞 ?⑸땲??")
                 return None
 
             target_rate = rate1
 
-        # 공통 입력값
+        # 怨듯넻 ?낅젰媛?
         target_thk = self._read_float("thicknessEdit")
         delay_min = self._read_float("delayEdit")
         if target_thk is None:
-            QMessageBox.warning(self, "Input", "Target Thickness를 입력하세요.")
+            QMessageBox.warning(self, "Input", "Target Thickness瑜??낅젰?섏꽭??")
             return None
         if target_thk <= 0:
-            QMessageBox.warning(self, "Input", "Target Thickness는 0보다 커야 합니다.")
+            QMessageBox.warning(self, "Input", "Target Thickness??0蹂대떎 而ㅼ빞 ?⑸땲??")
             return None
         if delay_min is None:
             delay_min = 0.0
         if delay_min < 0:
-            QMessageBox.warning(self, "Input", "Delay(min)은 0 이상이어야 합니다.")
+            QMessageBox.warning(self, "Input", "Delay(min)? 0 ?댁긽?댁뼱???⑸땲??")
             return None
 
         if p1 and p2:
             if not (self._material_1 or self._material_2):
-                QMessageBox.warning(self, "Input", "Power1+Power2 동시 사용 시 Material을 최소 1개는 선택해야 합니다.")
+                QMessageBox.warning(self, "Input", "Power1+Power2 ?숈떆 ?ъ슜 ??Material??理쒖냼 1媛쒕뒗 ?좏깮?댁빞 ?⑸땲??")
                 return None
             base_mat = self._material_1 or self._material_2
 
-            # 둘 다 선택되어 있을 때 둘 다 material이 존재하면 동일성 체크
+            # ?????좏깮?섏뼱 ?덉쓣 ??????material??議댁옱?섎㈃ ?숈씪??泥댄겕
             if self._material_1 and self._material_2:
                 m1 = str(self._material_1.get("material", "")).strip()
                 m2 = str(self._material_2.get("material", "")).strip()
@@ -2425,8 +2252,8 @@ class ProcessWindow(QWidget):
                     QMessageBox.warning(
                         self,
                         "Input",
-                        "Power1+Power2 동시 사용은 '동일 물질' 가정입니다.\n"
-                        "Material1/Material2가 서로 다릅니다. 동일하게 맞춰주세요.",
+                        "Power1+Power2 ?숈떆 ?ъ슜? '?숈씪 臾쇱쭏' 媛?뺤엯?덈떎.\n"
+                        "Material1/Material2媛 ?쒕줈 ?ㅻ쫭?덈떎. ?숈씪?섍쾶 留욎떠二쇱꽭??",
                     )
                     return None
         else:
@@ -2437,25 +2264,25 @@ class ProcessWindow(QWidget):
         zf = float((base_mat or {}).get("z_factor", 0.0) or 0.0)
 
         if not mat_name:
-            QMessageBox.warning(self, "Input", "Material 이름이 비어있습니다. Material을 다시 선택하세요.")
+            QMessageBox.warning(self, "Input", "Material ?대쫫??鍮꾩뼱?덉뒿?덈떎. Material???ㅼ떆 ?좏깮?섏꽭??")
             return None
         if den <= 0 or zf <= 0:
-            QMessageBox.warning(self, "Input", "Material density/z-factor 값이 올바르지 않습니다.")
+            QMessageBox.warning(self, "Input", "Material density/z-factor 媛믪씠 ?щ컮瑜댁? ?딆뒿?덈떎.")
             return None
 
-        # ✅ Process Name (필수)
+        # ??Process Name (?꾩닔)
         pname = ""
         w = getattr(self.ui, "processNameEdit", None)
         if w is not None and hasattr(w, "text"):
             pname = str(w.text()).strip()
         if require_process_name and not pname:
-            QMessageBox.warning(self, "Input", "Process Name을 입력하세요.")
+            QMessageBox.warning(self, "Input", "Process Name???낅젰?섏꽭??")
             return None
 
         proc_cfg = self._normalize_process_config(getattr(self, "_process_cfg", None))
         steps = proc_cfg.get("ramp_steps") or []
         if not steps:
-            QMessageBox.warning(self, "Input", "Process Config의 step이 비어 있습니다.")
+            QMessageBox.warning(self, "Input", "Process Config??step??鍮꾩뼱 ?덉뒿?덈떎.")
             return None
 
         last_adc = -1.0
@@ -2466,19 +2293,19 @@ class ProcessWindow(QWidget):
             hold_sec = float(step.get("hold_sec", 0.0) or 0.0)
 
             if target_adc <= 0:
-                QMessageBox.warning(self, "Input", f"Process Config step {idx}의 target_adc는 0보다 커야 합니다.")
+                QMessageBox.warning(self, "Input", f"Process Config step {idx}??target_adc??0蹂대떎 而ㅼ빞 ?⑸땲??")
                 return None
             if dac_step <= 0:
-                QMessageBox.warning(self, "Input", f"Process Config step {idx}의 dac_step은 0보다 커야 합니다.")
+                QMessageBox.warning(self, "Input", f"Process Config step {idx}??dac_step? 0蹂대떎 而ㅼ빞 ?⑸땲??")
                 return None
             if dac_interval_sec <= 0:
-                QMessageBox.warning(self, "Input", f"Process Config step {idx}의 dac_interval_sec는 0보다 커야 합니다.")
+                QMessageBox.warning(self, "Input", f"Process Config step {idx}??dac_interval_sec??0蹂대떎 而ㅼ빞 ?⑸땲??")
                 return None
             if hold_sec < 0:
-                QMessageBox.warning(self, "Input", f"Process Config step {idx}의 hold_sec는 0 이상이어야 합니다.")
+                QMessageBox.warning(self, "Input", f"Process Config step {idx}??hold_sec??0 ?댁긽?댁뼱???⑸땲??")
                 return None
             if last_adc >= 0 and target_adc < last_adc:
-                QMessageBox.warning(self, "Input", f"Process Config step {idx}의 target_adc는 이전 step보다 크거나 같아야 합니다.")
+                QMessageBox.warning(self, "Input", f"Process Config step {idx}??target_adc???댁쟾 step蹂대떎 ?ш굅??媛숈븘???⑸땲??")
                 return None
 
             last_adc = target_adc
@@ -2507,14 +2334,14 @@ class ProcessWindow(QWidget):
             cfg["runtime_recommendation"] = dict(runtime_overrides)
         return cfg
     
-    # ================== UI 값 파싱 ==================
+    # ================== UI 媛??뚯떛 ==================
 
-    # ================== 공정 종료 함수 ==================
+    # ================== 怨듭젙 醫낅즺 ?⑥닔 ==================
     def _emergency_safe_shutdown_plc_best_effort(self) -> None:
         """
-        비상 fallback 전용 PLC 종료.
-        정상 Stop/Abort/Error 종료는 engine.py 의 safety shutdown 경로가 담당한다.
-        이 함수는 controller/worker stop 요청이 불가능할 때만 사용한다.
+        鍮꾩긽 fallback ?꾩슜 PLC 醫낅즺.
+        ?뺤긽 Stop/Abort/Error 醫낅즺??engine.py ??safety shutdown 寃쎈줈媛 ?대떦?쒕떎.
+        ???⑥닔??controller/worker stop ?붿껌??遺덇??ν븷 ?뚮쭔 ?ъ슜?쒕떎.
         """
         if self.hmi_window is None:
             return
@@ -2530,7 +2357,7 @@ class ProcessWindow(QWidget):
         except Exception as e:
             self._append_process_log(f"[SAFE][WARN] MAIN_SHUTTER close failed: {e!r}")
 
-        # 2) DAC=0은 무조건 시도(미구현이면 그게 버그로 드러나야 함)
+        # 2) DAC=0? 臾댁“嫄??쒕룄(誘멸뎄?꾩씠硫?洹멸쾶 踰꾧렇濡??쒕윭?섏빞 ??
         try:
             binder.enqueue_write_reg("DAC_POWER_1", 0)
             binder.enqueue_write_reg("DAC_POWER_2", 0)
@@ -2547,4 +2374,6 @@ class ProcessWindow(QWidget):
             self._append_process_log(f"[SAFE][WARN] POWER off failed: {e!r}")
 
         self._last_power = 0.0
-    # ================== 공정 종료 함수 ==================
+    # ================== 怨듭젙 醫낅즺 ?⑥닔 ==================
+
+

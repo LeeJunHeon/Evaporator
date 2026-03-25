@@ -651,7 +651,7 @@ class ProcessController(QObject):
         if hasattr(self.plc, "set_process_logging"):
             self.plc.set_process_logging(True)
 
-        self._ui_info("공정 시작 요청")
+        # start/preflight UI 흐름은 ProcessWindow가 담당한다.
         w.start()
 
     def stop(self) -> None:
@@ -704,7 +704,6 @@ class ProcessController(QObject):
             return
         try:
             self._worker.request_stop(mode)
-            self._ui_warn(f"정지 요청: {mode.value}")
         except Exception as e:
             self._ui_warn(f"stop 요청 실패: {e!r}")
 
@@ -792,54 +791,19 @@ class ProcessController(QObject):
     def _on_worker_result(self, result: EngineResult) -> None:
         """
         엔진 실행 결과 수신.
+        - finished status/log/run close는 ProcessWindow가 담당한다.
         """
         self.sig_finished.emit(result)
-
-        rid = getattr(result, "run_id", "")
-        err = getattr(result, "error", None)
-        ok = bool(getattr(result, "ok", False))
-
-        # run 전용 로그는 UI attach 여부와 무관하게 직접 남긴다.
-        try:
-            if ok:
-                self.log.run_line(f"[FINISHED] ok=True run_id={rid}")
-            else:
-                if err:
-                    self.log.run_line(
-                        f"[FINISHED][ERROR] run_id={rid} | {err.where} | {err.message}"
-                    )
-                else:
-                    self.log.run_line(f"[FINISHED][STOP] ok=False run_id={rid}")
-        except Exception:
-            pass
-
-        if ok:
-            self._ui_info(f"공정 완료: run_id={rid}")
-        else:
-            if err:
-                self._ui_warn(f"공정 종료(실패/중단): {err.where} | {err.message}")
-            else:
-                self._ui_warn(f"공정 종료(정지/중단): run_id={rid}")
 
     def _on_worker_finished(self) -> None:
         """
         워커 스레드 종료 cleanup.
+        - run log lifecycle은 ProcessWindow가 담당한다.
         """
         if hasattr(self.plc, "set_process_logging"):
             self.plc.set_process_logging(False)
 
-        try:
-            self.log.run_line("[WORKER] thread finished")
-        except Exception:
-            pass
-
         self._worker = None
-        self._ui_info("공정 스레드 종료")
-
-        try:
-            self.log.close_run()
-        except Exception:
-            pass
 
     def _on_plc_cmd_trace(self, obj: object) -> None:
         try:

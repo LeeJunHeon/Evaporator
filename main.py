@@ -213,14 +213,9 @@ def main():
             except Exception:
                 pass
 
-        # 2) 공정 종료가 끝난 뒤 run 파일 닫기
-        try:
-            if log_service is not None:
-                log_service.close_run()
-        except Exception:
-            pass
+        # run 파일 open/close는 ProcessWindow가 담당한다.
 
-        # 3) 외부 장비 서비스 stop
+        # 2) 외부 장비 서비스 stop
         for svc in (
             getattr(hmi, "_stm_service", None),
             getattr(hmi, "_acs_service", None),

@@ -232,9 +232,9 @@ class ProcessWindow(QWidget):
         # 1) UI 표시
         _append_text(getattr(self.ui, "logWindow", None), line)
 
-        # 2) run log 저장
+        # 2) run이 실제로 열려 있을 때만 run log 저장
         ls = self._log_service
-        if ls is not None and hasattr(ls, "run_line"):
+        if self._active_run_id and ls is not None and hasattr(ls, "run_line"):
             with contextlib.suppress(Exception):
                 ls.run_line(line)
 
@@ -517,8 +517,6 @@ class ProcessWindow(QWidget):
         # ✅ 여기서는 사용자 입력값을 지우지 않는다.
         #    preflight 실패했다고 process name / thickness / rate까지 초기화하면 UX가 나빠진다.
         self._pending_run_cfg = None
-        self._active_run_id = None
-        self._clear_run_power_flags()
 
         self._cleanup_start_worker()
         self._set_start_busy(False)
@@ -530,6 +528,8 @@ class ProcessWindow(QWidget):
             self._set_process_status("STM 준비 실패")
 
         self._close_process_run_log()
+        self._active_run_id = None
+        self._clear_run_power_flags()
 
         if show_warning:
             QMessageBox.warning(self, title, message)
@@ -1047,8 +1047,6 @@ class ProcessWindow(QWidget):
             self._close_stop_guard = False
             event.ignore()
             return
-
-        self._append_process_log("[UI] Process window closed -> engine/preflight stop finished")
 
         if self.hmi_window is not None:
             self.hmi_window.process_window = None

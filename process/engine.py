@@ -210,25 +210,12 @@ class ProcessEngine:
         self._ui_last_message = ""
         self._shutdown_already_executed = False
 
-        # run open
-        try:
-            self.log.open_run(
-                run_id=self._run_id,
-                recipe_name=self._recipe_name,
-                meta={
-                    "started_at": self._ts_str(self._started_ts),
-                    "telemetry_interval_s": float(getattr(recipe, "telemetry_interval_s", 1.0) or 1.0),
-                    # recipe.meta는 너가 ProcessController에서 작게 넣어두는 값만 있으니 부담 적음
-                    "recipe_meta": dict(getattr(recipe, "meta", {}) or {}),
-                },
-            )
-        except Exception as e:
-            # 로그가 죽어도 공정 자체는 진행할 수 있게(단, 운영에서는 로그가 매우 중요하니 에러 출력)
-            self._log_error(f"open_run failed: {e!r}", tag="ENGINE", also_ui=True)
-
+        # run 파일 open/close는 ProcessWindow가 담당한다.
+        # engine은 현재 열려 있는 run에 내부 이벤트만 기록한다.
         self._run_line(
             f"RUN START | run_id={self._run_id} | recipe={self._recipe_name}"
         )
+
         self._emit_status(message="공정 시작")
 
         err_obj: Optional[ProcessError] = None
@@ -302,12 +289,9 @@ class ProcessEngine:
 
         finally:
             finished_ts = time.time()
-            try:
-                self.log.close_run()
-            except Exception:
-                pass
 
-            # 엔진 상태 마무리
+            # run 파일 open/close는 ProcessWindow가 담당한다.
+            # engine은 상태만 마무리한다.
             if self._phase not in (ProcessPhase.FINISHED, ProcessPhase.ERROR):
                 self._phase = ProcessPhase.FINISHED if ok else ProcessPhase.ERROR
 

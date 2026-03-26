@@ -215,7 +215,7 @@ def _compute_hold_pi_delta(
     tolerance = abs(float(target_rate)) * float(tol_ratio)
 
     if abs(error) <= tolerance:
-        return 0, integral_state * 0.5, error, True
+        return 0, integral_state * 0.85, error, True
 
     dt = max(0.1, float(interval_s))
     error_ratio = error / max(abs(float(target_rate)), 1e-6)

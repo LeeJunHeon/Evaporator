@@ -21,6 +21,7 @@ ProcessEngine
 from __future__ import annotations
 
 import concurrent.futures
+import threading
 import time
 import uuid
 import math
@@ -142,8 +143,10 @@ class ProcessEngine:
         self._status_emit_interval_s = max(0.05, float(status_emit_interval_s))
 
         # run control flags
-        self._stop_mode: Optional[StopMode] = None
-        self._paused: bool = False
+        self._stop_event = threading.Event()
+        self._stop_mode_value: Optional[StopMode] = None
+        self._stop_mode_lock = threading.Lock()
+        self._pause_event = threading.Event()
 
         # 내부 상태
         self._phase: ProcessPhase = ProcessPhase.IDLE
@@ -172,13 +175,15 @@ class ProcessEngine:
     # External controls (thread-safe-ish: 단순 플래그)
     # --------------------------------------------------------
     def request_stop(self, mode: StopMode = StopMode.STOP) -> None:
-        self._stop_mode = mode
+        with self._stop_mode_lock:
+            self._stop_mode_value = mode
+        self._stop_event.set()
 
     def request_pause(self) -> None:
-        self._paused = True
+        self._pause_event.set()
 
     def request_resume(self) -> None:
-        self._paused = False
+        self._pause_event.clear()
 
     # --------------------------------------------------------
     # Public entry
@@ -190,8 +195,10 @@ class ProcessEngine:
         # 기본 검증(여기서 한번 더)
         recipe.validate(strict=True)
 
-        self._stop_mode = None
-        self._paused = False
+        with self._stop_mode_lock:
+            self._stop_mode_value = None
+        self._stop_event.clear()
+        self._pause_event.clear()
 
         self._phase = ProcessPhase.RUNNING
         self._recipe_name = recipe.recipe_name
@@ -976,15 +983,19 @@ class ProcessEngine:
     # --------------------------------------------------------
     def _check_stop_pause(self, recipe: ProcessRecipe, step: ProcessStep) -> None:
         # stop 우선
-        if self._stop_mode is not None:
-            raise EngineStopRequested(self._stop_mode)
+        with self._stop_mode_lock:
+            _mode = self._stop_mode_value
+        if _mode is not None:
+            raise EngineStopRequested(_mode)
 
         entered_pause = False
 
         # pause 처리: paused일 때는 stop 요청만 감시하면서 대기
-        while self._paused:
-            if self._stop_mode is not None:
-                raise EngineStopRequested(self._stop_mode)
+        while self._pause_event.is_set():
+            with self._stop_mode_lock:
+                _mode = self._stop_mode_value
+            if _mode is not None:
+                raise EngineStopRequested(_mode)
 
             if not entered_pause:
                 self._phase = ProcessPhase.PAUSED

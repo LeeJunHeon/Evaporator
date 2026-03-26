@@ -184,14 +184,6 @@ class RecommendationService:
             basis,
             lambda cand: _to_float((cand.get("process_config") or {}).get("rate_stable_sec"), 3.0),
         )
-        recommended_start_dac = round(self._weighted_mean(
-            basis,
-            lambda cand: _to_float(
-                cand.get("dac_first_nonzero"),
-                _to_float(((cand.get("process_config") or {}).get("ramp_steps") or [{}])[0].get("dac_step"), 0.0),
-            ),
-        ))
-
         current_cfg = dict(run_profile.get("process_config") or {})
         recommended_cfg = dict(current_cfg)
         recommended_cfg["step_count"] = len(ramp_steps)
@@ -203,15 +195,9 @@ class RecommendationService:
         confidence = max(0.0, min(1.0, mean_score * (0.70 + 0.30 * min(1.0, len(basis) / 5.0))))
 
         return {
-            "recommended_start_dac": max(0, int(recommended_start_dac)),
             "recommended_ramp_steps": ramp_steps,
             "recommended_fine_step_dac": max(1, int(recommended_fine_step_dac)),
             "recommended_rate_stable_sec": max(0.0, float(recommended_rate_stable_sec)),
-            "recommended_runtime_overrides": {
-                "initial_dac": max(0, int(recommended_start_dac)),
-                "initial_dac_source": "recommendation",
-                "applied_recommended_start_dac": True,
-            },
             "confidence": round(confidence, 3),
             "basis_run_count": len(basis),
             "representative_run_ids": representative_run_ids,

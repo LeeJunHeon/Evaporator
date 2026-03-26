@@ -298,13 +298,11 @@ class ProcessController(QObject):
         power = self._extract_power_mode(run_cfg)
         material_cfg = self._extract_material_config(run_cfg)
         process_config = self._build_process_config_from_run_cfg(run_cfg)
-        runtime_recommendation = self._extract_runtime_recommendation(run_cfg, process_config=process_config)
 
         runtime_meta = self._build_runtime_evap_meta(
             power=power,
             material_cfg=material_cfg,
             process_config=process_config,
-            runtime_recommendation=runtime_recommendation,
         )
 
         process_name = self._sanitize_process_name(
@@ -317,7 +315,6 @@ class ProcessController(QObject):
             "material_cfg": material_cfg,
             "process_config": process_config,
             "runtime_meta": runtime_meta,
-            "runtime_recommendation": runtime_recommendation,
             "process_name": process_name,
         }
 
@@ -339,7 +336,6 @@ class ProcessController(QObject):
                 power=ctx["power"],
                 material_cfg=ctx["material_cfg"],
                 process_config=ctx["process_config"],
-                runtime_recommendation=ctx.get("runtime_recommendation") or {},
             ),
         )
         recipe.validate(strict=True)
@@ -356,7 +352,6 @@ class ProcessController(QObject):
 
     def _build_run_profile_from_context(self, ctx: dict[str, Any]) -> dict[str, Any]:
         process_config = self._copy_exact_process_config(ctx["process_config"])
-        runtime_recommendation = dict(ctx.get("runtime_recommendation") or {})
         hw_mapping = {
             "temp_force_power2_sw": bool(ctx["power"]["temp_force_power2_sw"]),
             "power1_feedback_adc2": bool(ctx["power"]["power1_feedback_adc2"]),
@@ -391,10 +386,6 @@ class ProcessController(QObject):
             "process_config": process_config,
             "process_config_hash": process_config_hash,
             "runtime_meta": dict(ctx["runtime_meta"]),
-            "configured_start_dac": runtime_recommendation.get("configured_start_dac"),
-            "initial_dac": runtime_recommendation.get("initial_dac"),
-            "initial_dac_source": str(runtime_recommendation.get("initial_dac_source", "") or ""),
-            "applied_recommended_start_dac": bool(runtime_recommendation.get("applied_recommended_start_dac", False)),
             "fingerprint": fingerprint,
         }
 
@@ -554,9 +545,7 @@ class ProcessController(QObject):
         power: dict[str, Any],
         material_cfg: dict[str, Any],
         process_config: dict[str, Any],
-        runtime_recommendation: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
-        recommendation = dict(runtime_recommendation or {})
         return {
             "use_power1": power["use_power1"],
             "use_power2": power["use_power2"],
@@ -570,10 +559,6 @@ class ProcessController(QObject):
 
             # 핵심: 공정 제어 파라미터는 exact schema로 nested 전달
             "process_config": self._copy_exact_process_config(process_config),
-            "configured_start_dac": recommendation.get("configured_start_dac"),
-            "initial_dac": recommendation.get("initial_dac"),
-            "initial_dac_source": str(recommendation.get("initial_dac_source", "") or ""),
-            "applied_recommended_start_dac": bool(recommendation.get("applied_recommended_start_dac", False)),
         }
     
     def _copy_exact_process_config(self, process_config: dict[str, Any]) -> dict[str, Any]:
@@ -659,9 +644,7 @@ class ProcessController(QObject):
         power: dict[str, Any],
         material_cfg: dict[str, Any],
         process_config: dict[str, Any],
-        runtime_recommendation: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
-        recommendation = dict(runtime_recommendation or {})
         return {
             "process_name": process_name,
             "material_name": material_cfg["material_name"],
@@ -675,10 +658,6 @@ class ProcessController(QObject):
             "target_thickness": material_cfg["target_thickness"],
             "delay_min": material_cfg["delay_min"],
             "process_config": self._copy_exact_process_config(process_config),
-            "configured_start_dac": recommendation.get("configured_start_dac"),
-            "initial_dac": recommendation.get("initial_dac"),
-            "initial_dac_source": str(recommendation.get("initial_dac_source", "") or ""),
-            "applied_recommended_start_dac": bool(recommendation.get("applied_recommended_start_dac", False)),
         }
 
     @staticmethod
@@ -696,24 +675,7 @@ class ProcessController(QObject):
         *,
         process_config: dict[str, Any],
     ) -> dict[str, Any]:
-        raw = dict(run_cfg.get("runtime_recommendation") or {})
-        configured_start_dac = self._to_int_or_none(raw.get("initial_dac"))
-
-        dac_max = self._to_int_or_none(process_config.get("dac_max"))
-        initial_dac = None
-        if configured_start_dac is not None and configured_start_dac > 0:
-            initial_dac = configured_start_dac
-            if dac_max is not None and dac_max > 0:
-                initial_dac = min(initial_dac, dac_max)
-
-        source = str(raw.get("initial_dac_source", "") or "").strip()
-        applied = bool(raw.get("applied_recommended_start_dac", False)) and initial_dac is not None
-        return {
-            "configured_start_dac": configured_start_dac,
-            "initial_dac": initial_dac,
-            "initial_dac_source": source if initial_dac is not None else "",
-            "applied_recommended_start_dac": applied,
-        }
+        return {}
         
     def _extract_power_mode(self, run_cfg: dict[str, Any]) -> dict[str, Any]:
         use_p1 = bool(run_cfg.get("use_power1", False))

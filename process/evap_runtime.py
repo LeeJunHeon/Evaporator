@@ -822,29 +822,6 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         pre_ramp_wait_s = 10.0
         _wait_with_checks(pre_ramp_wait_s, label="EVAP ramp-up 전 ADC 안정화 대기")
 
-        configured_start_dac = meta.get("initial_dac", None)
-        initial_dac = None
-        try:
-            if configured_start_dac is not None:
-                initial_dac = int(round(float(configured_start_dac)))
-        except Exception:
-            initial_dac = None
-
-        if initial_dac is not None and initial_dac > 0:
-            dac = min(dac_max, max(0, initial_dac))
-            source = str(meta.get("initial_dac_source", "") or "runtime").strip() or "runtime"
-            engine._emit_status(
-                message=f"EVAP 초기 DAC 적용 | DAC={dac} | source={source}",
-                force=True,
-            )
-            engine._tele_event(
-                event="SET_INITIAL_DAC",
-                target="DAC",
-                value=dac,
-                detail=f"source={source}",
-            )
-            _evap_apply_dac(engine, use_p1, use_p2, dac, tag="EVAP_INIT_DAC_RECOMMENDED")
-
         # -------------------------
         # 1) 파워 상승
         # -------------------------

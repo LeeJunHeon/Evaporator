@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 from datetime import datetime
@@ -6,35 +6,19 @@ from typing import Any, Optional
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QCheckBox,
     QDialog,
-    QDialogButtonBox,
-    QFormLayout,
+    QFrame,
+    QHBoxLayout,
     QHeaderView,
     QLabel,
-    QPlainTextEdit,
+    QPushButton,
+    QSplitter,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
-
-
-def _float_text(value: Any, *, digits: int = 3, suffix: str = "") -> str:
-    try:
-        number = float(value)
-    except Exception:
-        return "---"
-    return f"{number:.{digits}f}{suffix}"
-
-
-def _timestamp_text(value: Any) -> str:
-    try:
-        ts = float(value)
-        if ts <= 0:
-            return "---"
-        return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
-    except Exception:
-        return "---"
 
 
 class HistoryRecommendationDialog(QDialog):
@@ -45,202 +29,221 @@ class HistoryRecommendationDialog(QDialog):
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Recommendation")
+        self.setWindowTitle("이전 공정 설정 불러오기")
         self.setModal(True)
-        self.resize(760, 580)
-        self.setMinimumSize(700, 520)
+        self.resize(780, 540)
+        self.setMinimumSize(700, 480)
 
         self._recommendation = dict(recommendation or {})
         self._accepted_apply = False
         self._representative_runs = list(self._recommendation.get("representative_runs") or [])
 
+        confidence = float(self._recommendation.get("confidence", 0.0) or 0.0)
+        basis_run_count = int(self._recommendation.get("basis_run_count", 0) or 0)
+        recommended_fine_step_dac = int(self._recommendation.get("recommended_fine_step_dac", 0) or 0)
+        recommended_rate_stable_sec = float(self._recommendation.get("recommended_rate_stable_sec", 0.0) or 0.0)
+
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 12, 12, 12)
         root.setSpacing(8)
 
-        if not self._recommendation:
-            empty = QLabel("추천 데이터가 없습니다.")
-            empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            root.addWidget(empty, 1)
+        # ① 상단 배너
+        banner = QFrame(self)
+        banner.setStyleSheet(
+            "QFrame { background: #f0f4ff; border-radius: 6px; }"
+        )
+        banner_layout = QHBoxLayout(banner)
+        banner_layout.setContentsMargins(8, 8, 8, 8)
 
-            buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, parent=self)
-            buttons.rejected.connect(self.reject)
-            buttons.accepted.connect(self.accept)
-            root.addWidget(buttons)
-            return
+        if basis_run_count >= 1:
+            banner_text = f"유사한 공정 {basis_run_count}건을 참고한 추천입니다  (신뢰도 {confidence*100:.0f}%)"
+            if confidence >= 0.7:
+                banner_color = "#1a7a1a"
+            elif confidence >= 0.4:
+                banner_color = "#b36200"
+            else:
+                banner_color = "#888888"
+        else:
+            banner_text = "추천 데이터가 없습니다"
+            banner_color = "#888888"
 
-        summary_title = QLabel("Summary")
-        summary_title.setStyleSheet("font-weight: 600;")
-        root.addWidget(summary_title)
+        banner_label = QLabel(banner_text, banner)
+        banner_label.setStyleSheet(
+            f"color: {banner_color}; font-weight: bold; background: transparent; border: none;"
+        )
+        banner_layout.addWidget(banner_label)
+        root.addWidget(banner)
 
-        summary_form = QFormLayout()
-        summary_form.setContentsMargins(0, 0, 0, 0)
-        summary_form.setHorizontalSpacing(12)
-        summary_form.setVerticalSpacing(4)
-        root.addLayout(summary_form)
+        # ② 중앙 QSplitter (수평)
+        splitter = QSplitter(Qt.Orientation.Horizontal, self)
 
-        confidence = float(self._recommendation.get("confidence", 0.0) or 0.0)
-        basis_run_count = int(self._recommendation.get("basis_run_count", 0) or 0)
-        recommended_start_dac = int(self._recommendation.get("recommended_start_dac", 0) or 0)
-        recommended_fine_step_dac = int(self._recommendation.get("recommended_fine_step_dac", 0) or 0)
-        recommended_rate_stable_sec = float(self._recommendation.get("recommended_rate_stable_sec", 0.0) or 0.0)
+        # 왼쪽 패널
+        left_widget = QWidget(splitter)
+        left_layout = QVBoxLayout(left_widget)
+        left_layout.setContentsMargins(0, 0, 4, 0)
+        left_layout.setSpacing(4)
 
-        summary_form.addRow("Confidence", QLabel(f"{confidence * 100.0:.1f}%"))
-        summary_form.addRow("Basis Runs", QLabel(str(basis_run_count)))
-        summary_form.addRow("Recommended Start DAC", QLabel(str(recommended_start_dac)))
-        summary_form.addRow("Recommended Fine Step DAC", QLabel(str(recommended_fine_step_dac)))
-        summary_form.addRow("Recommended Rate Stable Sec", QLabel(f"{recommended_rate_stable_sec:.2f}"))
+        runs_title = QLabel("참고한 공정 목록", left_widget)
+        runs_title.setStyleSheet("font-weight: bold;")
+        left_layout.addWidget(runs_title)
 
-        basis_runs = QLabel("\n".join(self._recommendation.get("representative_run_ids", []) or ["---"]))
-        basis_runs.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-        basis_runs.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        summary_form.addRow("Representative Runs", basis_runs)
+        self.runsTable = QTableWidget(left_widget)
+        self.runsTable.setColumnCount(5)
+        self.runsTable.setHorizontalHeaderLabels(["시각", "속도(Å/s)", "두께(Å)", "안정 DAC", "유사도"])
+        self.runsTable.verticalHeader().setVisible(False)
+        self.runsTable.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.runsTable.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.runsTable.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.runsTable.setWordWrap(False)
+        self.runsTable.setAlternatingRowColors(True)
+        self.runsTable.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.runsTable.itemSelectionChanged.connect(self._on_run_selected)
+        self.runsTable.setStyleSheet("""
+            QTableWidget::item:selected {
+                background-color: #ddeeff;
+                color: #111111;
+            }
+            QTableWidget::item:hover {
+                background-color: #eef4ff;
+            }
+        """)
+        left_layout.addWidget(self.runsTable)
 
-        steps_title = QLabel("Recommended Ramp Steps")
-        steps_title.setStyleSheet("font-weight: 600;")
-        root.addWidget(steps_title)
+        splitter.addWidget(left_widget)
 
-        self.stepsTable = QTableWidget(self)
-        self.stepsTable.setColumnCount(4)
-        self.stepsTable.setHorizontalHeaderLabels([
-            "Target ADC",
-            "DAC Step",
-            "Interval (s)",
-            "Hold (s)",
-        ])
+        # 오른쪽 패널
+        right_widget = QWidget(splitter)
+        right_layout = QVBoxLayout(right_widget)
+        right_layout.setContentsMargins(4, 0, 0, 0)
+        right_layout.setSpacing(4)
+
+        steps_title = QLabel("적용될 Ramp Steps", right_widget)
+        steps_title.setStyleSheet("font-weight: bold;")
+        right_layout.addWidget(steps_title)
+
+        steps_sub = QLabel("아래 설정이 Recipe에 적용됩니다", right_widget)
+        steps_sub.setStyleSheet("font-size: 10px; color: #666;")
+        right_layout.addWidget(steps_sub)
+
+        self.stepsTable = QTableWidget(right_widget)
+        self.stepsTable.setColumnCount(5)
+        self.stepsTable.setHorizontalHeaderLabels(["Step", "Target ADC", "DAC Step", "Interval(s)", "Hold(s)"])
         self.stepsTable.verticalHeader().setVisible(False)
         self.stepsTable.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.stepsTable.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
-        self.stepsTable.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.stepsTable.setWordWrap(False)
-        self.stepsTable.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        root.addWidget(self.stepsTable)
+        self.stepsTable.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        right_layout.addWidget(self.stepsTable)
 
-        ramp_steps = list(self._recommendation.get("recommended_ramp_steps") or [])
-        self.stepsTable.setRowCount(len(ramp_steps))
-        for row_idx, step in enumerate(ramp_steps):
-            self._set_table_item(self.stepsTable, row_idx, 0, f"{float(step.get('target_adc', 0.0) or 0.0):.3f}")
-            self._set_table_item(self.stepsTable, row_idx, 1, str(int(step.get("dac_step", 0) or 0)))
-            self._set_table_item(self.stepsTable, row_idx, 2, f"{float(step.get('dac_interval_sec', 0.0) or 0.0):.3f}")
-            self._set_table_item(self.stepsTable, row_idx, 3, f"{float(step.get('hold_sec', 0.0) or 0.0):.3f}")
-        self._set_compact_table_height(self.stepsTable, min_rows=1, max_rows=4)
+        divider = QFrame(right_widget)
+        divider.setFrameShape(QFrame.Shape.HLine)
+        divider.setFrameShadow(QFrame.Shadow.Sunken)
+        right_layout.addWidget(divider)
 
-        runs_title = QLabel("Representative Run Details")
-        runs_title.setStyleSheet("font-weight: 600;")
-        root.addWidget(runs_title)
+        summary_label = QLabel(
+            f"Fine Step DAC: {recommended_fine_step_dac}   |   Rate Stable: {recommended_rate_stable_sec:.1f}s",
+            right_widget,
+        )
+        summary_label.setStyleSheet("font-size: 10px; color: #666;")
+        right_layout.addWidget(summary_label)
 
-        self.runTable = QTableWidget(self)
-        self.runTable.setColumnCount(8)
-        self.runTable.setHorizontalHeaderLabels([
-            "Run ID",
-            "Time",
-            "Rate",
-            "Thickness",
-            "Stable DAC",
-            "Overshoot",
-            "Spikes",
-            "Error",
-        ])
-        self.runTable.verticalHeader().setVisible(False)
-        self.runTable.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.runTable.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.runTable.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
-        self.runTable.setAlternatingRowColors(True)
-        self.runTable.setWordWrap(False)
-        self.runTable.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.runTable.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        self.runTable.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        for col in range(2, 8):
-            self.runTable.horizontalHeader().setSectionResizeMode(col, QHeaderView.ResizeMode.Stretch)
-        root.addWidget(self.runTable)
+        splitter.addWidget(right_widget)
+        splitter.setSizes([350, 430])
 
-        self.runDetail = QPlainTextEdit(self)
-        self.runDetail.setReadOnly(True)
-        self.runDetail.setMinimumHeight(110)
-        self.runDetail.setMaximumHeight(150)
-        root.addWidget(self.runDetail)
+        root.addWidget(splitter, 1)
 
-        self._populate_representative_runs()
-        self._set_compact_table_height(self.runTable, min_rows=1, max_rows=4)
-        self.runTable.itemSelectionChanged.connect(self._on_run_selection_changed)
-        if self.runTable.rowCount() > 0:
-            self.runTable.selectRow(0)
-            self._update_run_detail(0)
-        else:
-            self.runDetail.setPlainText("대표 run 정보가 없습니다.")
+        # ③ 하단 버튼 영역
+        bottom_layout = QHBoxLayout()
+        self.applyConfigCheck = QCheckBox("Config 파라미터도 함께 적용 (권장)", self)
+        self.applyConfigCheck.setChecked(True)
+        self.applyConfigCheck.setToolTip(
+            "fine_step_dac, rate_stable_sec 등 세부 파라미터도 함께 업데이트합니다.\n"
+            "체크 해제 시 Ramp Steps 형태만 적용됩니다."
+        )
+        bottom_layout.addWidget(self.applyConfigCheck)
+        bottom_layout.addStretch(1)
 
-        buttons = QDialogButtonBox(parent=self)
-        self.applyButton = buttons.addButton("Apply", QDialogButtonBox.ButtonRole.AcceptRole)
-        self.closeButton = buttons.addButton(QDialogButtonBox.StandardButton.Close)
+        apply_btn = QPushButton("이 설정 사용하기", self)
+        apply_btn.clicked.connect(self._on_apply_clicked)
+        cancel_btn = QPushButton("취소", self)
+        cancel_btn.clicked.connect(self.reject)
+        bottom_layout.addWidget(apply_btn)
+        bottom_layout.addWidget(cancel_btn)
+        root.addLayout(bottom_layout)
 
-        self.applyButton.clicked.connect(self._on_apply_clicked)
-        buttons.rejected.connect(self.reject)
-        root.addWidget(buttons)
+        # 테이블 데이터 채우기
+        self._populate_runs_table()
+        self._populate_steps_table()
 
-    def _set_compact_table_height(self, table: QTableWidget, *, min_rows: int, max_rows: int) -> None:
-        row_count = max(int(table.rowCount()), int(min_rows))
-        visible_rows = min(row_count, int(max_rows))
-        header_h = int(table.horizontalHeader().height())
-        row_h = int(table.verticalHeader().defaultSectionSize())
-        if table.rowCount() > 0:
-            with_row = int(table.rowHeight(0))
-            if with_row > 0:
-                row_h = with_row
-        frame_h = int(table.frameWidth()) * 2
-        height = header_h + frame_h + (row_h * visible_rows) + 2
-        table.setMinimumHeight(height)
-        table.setMaximumHeight(height)
+        # 첫 번째 행 자동 선택
+        if self.runsTable.rowCount() > 0:
+            self.runsTable.selectRow(0)
 
     def _set_table_item(self, table: QTableWidget, row: int, col: int, text: str) -> None:
         item = QTableWidgetItem(text)
         item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
         table.setItem(row, col, item)
 
-    def _populate_representative_runs(self) -> None:
-        runs = list(self._representative_runs)
-        self.runTable.setRowCount(len(runs))
+    def _populate_runs_table(self) -> None:
+        runs = self._representative_runs
+        self.runsTable.setRowCount(len(runs))
         for row_idx, run in enumerate(runs):
-            self._set_table_item(self.runTable, row_idx, 0, str(run.get("run_id", "") or ""))
-            self._set_table_item(self.runTable, row_idx, 1, _timestamp_text(run.get("timestamp")))
-            self._set_table_item(self.runTable, row_idx, 2, _float_text(run.get("target_rate"), digits=3))
-            self._set_table_item(self.runTable, row_idx, 3, _float_text(run.get("target_thickness"), digits=1))
-            self._set_table_item(self.runTable, row_idx, 4, _float_text(run.get("stable_dac_mean"), digits=1))
-            self._set_table_item(self.runTable, row_idx, 5, _float_text(run.get("overshoot_ratio_peak"), digits=3))
-            self._set_table_item(self.runTable, row_idx, 6, str(run.get("spike_count", "---") if run.get("spike_count") is not None else "---"))
-            self._set_table_item(
-                self.runTable,
-                row_idx,
-                7,
-                _float_text(run.get("thickness_error_A"), digits=1),
-            )
+            try:
+                ts = float(run.get("timestamp", 0) or 0)
+                time_text = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M") if ts > 0 else "---"
+            except Exception:
+                time_text = "---"
+            try:
+                rate_text = f"{float(run.get('target_rate', 0.0) or 0.0):.3f}"
+            except Exception:
+                rate_text = "---"
+            try:
+                thickness_text = f"{float(run.get('target_thickness', 0.0) or 0.0):.1f}"
+            except Exception:
+                thickness_text = "---"
+            try:
+                stable_dac_text = f"{float(run.get('stable_dac_mean', 0.0) or 0.0):.1f}"
+            except Exception:
+                stable_dac_text = "---"
+            try:
+                score = float(run.get("score", 0.0) or 0.0)
+                score_text = f"{score*100:.0f}%"
+            except Exception:
+                score_text = "---"
+            self._set_table_item(self.runsTable, row_idx, 0, time_text)
+            self._set_table_item(self.runsTable, row_idx, 1, rate_text)
+            self._set_table_item(self.runsTable, row_idx, 2, thickness_text)
+            self._set_table_item(self.runsTable, row_idx, 3, stable_dac_text)
+            self._set_table_item(self.runsTable, row_idx, 4, score_text)
 
-    def _on_run_selection_changed(self) -> None:
-        row = self.runTable.currentRow()
-        self._update_run_detail(row)
+    def _populate_steps_table(self) -> None:
+        ramp_steps = list(self._recommendation.get("recommended_ramp_steps") or [])
+        self.stepsTable.setRowCount(len(ramp_steps))
+        for row_idx, step in enumerate(ramp_steps):
+            self._set_table_item(self.stepsTable, row_idx, 0, str(row_idx + 1))
+            try:
+                target_adc_text = f"{float(step.get('target_adc', 0.0) or 0.0):.1f}"
+            except Exception:
+                target_adc_text = "---"
+            try:
+                dac_step_text = str(int(step.get("dac_step", 0) or 0))
+            except Exception:
+                dac_step_text = "---"
+            try:
+                interval_text = f"{float(step.get('dac_interval_sec', 0.0) or 0.0):.1f}"
+            except Exception:
+                interval_text = "---"
+            try:
+                hold_text = f"{float(step.get('hold_sec', 0.0) or 0.0):.1f}"
+            except Exception:
+                hold_text = "---"
+            self._set_table_item(self.stepsTable, row_idx, 1, target_adc_text)
+            self._set_table_item(self.stepsTable, row_idx, 2, dac_step_text)
+            self._set_table_item(self.stepsTable, row_idx, 3, interval_text)
+            self._set_table_item(self.stepsTable, row_idx, 4, hold_text)
 
-    def _update_run_detail(self, row: int) -> None:
-        if row < 0 or row >= len(self._representative_runs):
-            self.runDetail.setPlainText("대표 run 정보가 없습니다.")
-            return
-
-        run = dict(self._representative_runs[row] or {})
-        lines = [
-            f"run_id: {run.get('run_id', '') or '---'}",
-            f"time: {_timestamp_text(run.get('timestamp'))}",
-            f"material: {run.get('material_name', '') or '---'}",
-            f"result: {run.get('result_status', '') or '---'}",
-            f"target_rate: {_float_text(run.get('target_rate'), digits=3)} A/s",
-            f"target_thickness: {_float_text(run.get('target_thickness'), digits=1)} A",
-            f"stable_rate_mean: {_float_text(run.get('stable_rate_mean'), digits=3)} A/s",
-            f"stable_dac_mean: {_float_text(run.get('stable_dac_mean'), digits=1)}",
-            f"overshoot_ratio_peak: {_float_text(run.get('overshoot_ratio_peak'), digits=3)}",
-            f"spike_count: {run.get('spike_count', '---') if run.get('spike_count') is not None else '---'}",
-            f"final_thickness_A: {_float_text(run.get('final_thickness_A'), digits=1)}",
-            f"thickness_error_A: {_float_text(run.get('thickness_error_A'), digits=1)}",
-            f"thickness_error_ratio: {_float_text(run.get('thickness_error_ratio'), digits=4)}",
-            f"similarity_score: {_float_text(run.get('score'), digits=3)}",
-        ]
-        self.runDetail.setPlainText("\n".join(lines))
+    def _on_run_selected(self) -> None:
+        pass
 
     def _on_apply_clicked(self) -> None:
         self._accepted_apply = True
@@ -249,26 +252,15 @@ class HistoryRecommendationDialog(QDialog):
     def applied(self) -> bool:
         return bool(self._accepted_apply)
 
-    def recommended_process_config(self) -> Optional[dict[str, Any]]:
+    def recommended_process_config(self) -> Optional[dict]:
         cfg = self._recommendation.get("recommended_process_config")
         if not isinstance(cfg, dict):
             return None
-        return dict(cfg)
+        result = dict(cfg)
+        if not self.applyConfigCheck.isChecked():
+            result = {
+                "ramp_steps": result.get("ramp_steps"),
+                "step_count": result.get("step_count"),
+            }
+        return result
 
-    def recommended_runtime_overrides(self) -> Optional[dict[str, Any]]:
-        overrides = self._recommendation.get("recommended_runtime_overrides")
-        if isinstance(overrides, dict):
-            return dict(overrides)
-
-        start_dac = self._recommendation.get("recommended_start_dac")
-        try:
-            initial_dac = int(round(float(start_dac)))
-        except Exception:
-            return None
-        if initial_dac <= 0:
-            return None
-        return {
-            "initial_dac": initial_dac,
-            "initial_dac_source": "recommendation",
-            "applied_recommended_start_dac": True,
-        }

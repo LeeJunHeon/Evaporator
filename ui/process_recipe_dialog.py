@@ -49,8 +49,6 @@ class ProcessRecipeDialog(QDialog):
         initial_config: Optional[dict[str, Any]] = None,
         recommend_callback: Optional[Callable[[dict[str, Any], QWidget], Optional[dict[str, Any]]]] = None,
         history_callback: Optional[Callable[[QWidget], Optional[dict[str, Any]]]] = None,
-        runtime_overrides: Optional[dict[str, Any]] = None,
-        runtime_signature: Optional[dict[str, Any]] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
@@ -61,8 +59,6 @@ class ProcessRecipeDialog(QDialog):
 
         self._recommend_callback = recommend_callback
         self._history_callback = history_callback
-        self._recommended_runtime_overrides = dict(runtime_overrides or {})
-        self._recommended_runtime_signature = dict(runtime_signature or {})
         self._last_recommendation: Optional[dict[str, Any]] = None
         self._config_state = self._normalize_config(initial_config or self._default_config())
         self._step_rows: list[dict[str, Any]] = []
@@ -198,9 +194,9 @@ class ProcessRecipeDialog(QDialog):
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(8)
 
-        info = QLabel("Recipe controls ramp-step shape. Recommend and History Rebuild are scoped here.")
-        info.setWordWrap(True)
-        root.addWidget(info)
+        self.infoLabel = QLabel("Ramp Step 설정   |   이전 성공 공정을 불러오려면 아래 버튼을 사용하세요")
+        self.infoLabel.setWordWrap(True)
+        root.addWidget(self.infoLabel)
 
         scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
@@ -251,13 +247,26 @@ class ProcessRecipeDialog(QDialog):
         body_root.addStretch(1)
 
         command_row = QHBoxLayout()
-        self.recommendButton = QPushButton("Recommend", self)
-        self.historyButton = QPushButton("History Rebuild", self)
-        self.recommendButton.clicked.connect(self._on_recommend_clicked)
+        self.historyButton = QPushButton("로그 스캔", self)
+        self.historyButton.setFlat(True)
+        self.historyButton.setStyleSheet("color: #666666;")
+        self.historyButton.setToolTip(
+            "NAS에 저장된 공정 로그를 읽어 추천 데이터베이스를 갱신합니다.\n"
+            "처음 사용하거나 새 로그가 쌓였을 때 실행하세요."
+        )
         self.historyButton.clicked.connect(self._on_history_clicked)
-        command_row.addWidget(self.recommendButton)
+        self.hintLabel = QLabel("처음 사용 시:  로그 스캔 → 이전 설정 불러오기 순으로 진행하세요", self)
+        self.hintLabel.setStyleSheet("font-size: 10px; color: #888888;")
+        self.recommendButton = QPushButton("이전 설정 불러오기", self)
+        self.recommendButton.setToolTip(
+            "같은 소재의 이전 성공 공정 설정을 불러옵니다.\n"
+            "로그 스캔을 먼저 실행해야 데이터가 나타납니다."
+        )
+        self.recommendButton.clicked.connect(self._on_recommend_clicked)
         command_row.addWidget(self.historyButton)
+        command_row.addWidget(self.hintLabel)
         command_row.addStretch(1)
+        command_row.addWidget(self.recommendButton)
         root.addLayout(command_row)
 
         buttons = QDialogButtonBox(
@@ -450,16 +459,6 @@ class ProcessRecipeDialog(QDialog):
         merged["ramp_steps"] = steps
         return self._normalize_config(merged)
 
-    def recommended_runtime_overrides(self) -> Optional[dict[str, Any]]:
-        if not self._recommended_runtime_overrides:
-            return None
-        return dict(self._recommended_runtime_overrides)
-
-    def recommended_runtime_signature(self) -> Optional[dict[str, Any]]:
-        if not self._recommended_runtime_signature:
-            return None
-        return dict(self._recommended_runtime_signature)
-
     def last_recommendation(self) -> Optional[dict[str, Any]]:
         if not self._last_recommendation:
             return None
@@ -475,8 +474,10 @@ class ProcessRecipeDialog(QDialog):
         cfg = payload.get("process_config")
         if isinstance(cfg, dict):
             self._load_config(cfg)
-        self._recommended_runtime_overrides = dict(payload.get("runtime_overrides") or {})
-        self._recommended_runtime_signature = dict(payload.get("signature") or {})
+            confidence = float((payload.get("recommendation") or {}).get("confidence", 0.0) or 0.0)
+            self.infoLabel.setText(f"✓ 이전 공정 설정이 적용되었습니다  (신뢰도 {confidence*100:.0f}%)")
+            self.infoLabel.setStyleSheet("color: #1a7a1a; font-weight: bold;")
+            self.hintLabel.setVisible(False)
         self._last_recommendation = dict(payload.get("recommendation") or {})
 
     def _on_history_clicked(self) -> None:

@@ -91,8 +91,6 @@ class ProcessWindow(QWidget):
         self._active_run_cfg: Optional[dict[str, Any]] = None
         self._active_run_profile: Optional[dict[str, Any]] = None
         self._last_recommendation: Optional[dict[str, Any]] = None
-        self._recommended_runtime_overrides: Optional[dict[str, Any]] = None
-        self._recommended_runtime_signature: Optional[dict[str, Any]] = None
 
         # ??UI??"?ㅼ젣濡?connect??STM ?몄뒪?댁뒪" 異붿쟻??寃쎄퀬/以묐났 connect 諛⑹?)
         self._stm_ui_bound: bool = False
@@ -704,33 +702,6 @@ class ProcessWindow(QWidget):
             return None
         return dict(pc.build_run_profile(run_cfg) or {})
 
-    def _build_recommendation_signature(self, run_cfg: dict[str, Any]) -> dict[str, Any]:
-        return {
-            "material_name": str(run_cfg.get("material_name", "") or "").strip(),
-            "density": self._to_float_or_none(run_cfg.get("density")),
-            "z_factor": self._to_float_or_none(run_cfg.get("z_factor")),
-            "target_rate": self._to_float_or_none(run_cfg.get("target_rate")),
-            "target_thickness": self._to_float_or_none(run_cfg.get("target_thickness")),
-            "delay_min": self._to_float_or_none(run_cfg.get("delay_min")),
-            "use_power1": bool(run_cfg.get("use_power1", False)),
-            "use_power2": bool(run_cfg.get("use_power2", False)),
-        }
-
-    def _clear_recommendation_runtime_overrides(self) -> None:
-        self._recommended_runtime_overrides = None
-        self._recommended_runtime_signature = None
-
-    def _matching_recommendation_runtime_overrides(self, run_cfg: dict[str, Any]) -> Optional[dict[str, Any]]:
-        overrides = dict(self._recommended_runtime_overrides or {})
-        signature = dict(self._recommended_runtime_signature or {})
-        if not overrides or not signature:
-            return None
-
-        current = self._build_recommendation_signature(run_cfg)
-        if current != signature:
-            return None
-        return overrides
-
     def _apply_process_config(self, new_cfg: Any, *, log_prefix: str) -> None:
         self._process_cfg = self._normalize_process_config(new_cfg)
 
@@ -1209,10 +1180,6 @@ class ProcessWindow(QWidget):
         run_cfg = self._collect_ui_run_cfg(require_process_name=True)
         if run_cfg is None:
             return
-
-        if self._recommended_runtime_overrides and not run_cfg.get("runtime_recommendation"):
-            self._append_process_log("[RECO] runtime override ignored: inputs changed after recommendation apply")
-            self._clear_recommendation_runtime_overrides()
 
         try:
             run_profile = self._build_run_profile(run_cfg)
@@ -1982,8 +1949,6 @@ class ProcessWindow(QWidget):
             initial_config=dict(self._process_cfg),
             recommend_callback=self._request_recommendation_for_config,
             history_callback=self._run_history_rebuild,
-            runtime_overrides=self._recommended_runtime_overrides,
-            runtime_signature=self._recommended_runtime_signature,
             parent=self,
         )
         if not dlg.exec():
@@ -1991,13 +1956,6 @@ class ProcessWindow(QWidget):
 
         self._apply_process_config(dlg.get_config(), log_prefix="[RECIPE] Recipe updated |")
         self._last_recommendation = dlg.last_recommendation()
-        runtime_overrides = dlg.recommended_runtime_overrides()
-        runtime_signature = dlg.recommended_runtime_signature()
-        if runtime_overrides and runtime_signature:
-            self._recommended_runtime_overrides = dict(runtime_overrides)
-            self._recommended_runtime_signature = dict(runtime_signature)
-        else:
-            self._clear_recommendation_runtime_overrides()
 
     def _request_recommendation_for_config(
         self,
@@ -2032,7 +1990,18 @@ class ProcessWindow(QWidget):
 
         if not recommendation:
             self._append_process_log("[RECO] no recommendation data")
-            QMessageBox.information(owner, "Recommendation", "추천 데이터가 없습니다.")
+            material_name = str((run_profile or {}).get("material_name", "") or "미지정").strip()
+            reply = QMessageBox.question(
+                owner,
+                "이전 공정 기록 없음",
+                f"'{material_name}' 소재의 공정 기록을 찾을 수 없습니다.\n\n"
+                "로그 스캔을 실행하면 NAS에 저장된 공정 기록을 불러올 수 있습니다.\n"
+                "지금 로그 스캔을 실행하시겠습니까?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                self._run_history_rebuild(parent=owner)
             return None
 
         try:
@@ -2054,22 +2023,11 @@ class ProcessWindow(QWidget):
             QMessageBox.warning(owner, "Recommendation", "Recommended config is empty.")
             return None
 
-        runtime_overrides = dlg.recommended_runtime_overrides()
-        signature = self._build_recommendation_signature(run_cfg)
-        payload = {
+        self._append_process_log("[RECO] recommendation prepared for recipe apply")
+        return {
             "process_config": self._normalize_process_config(recommended_cfg),
-            "runtime_overrides": dict(runtime_overrides or {}),
-            "signature": signature,
             "recommendation": dict(recommendation),
         }
-
-        overrides = payload["runtime_overrides"]
-        if overrides:
-            initial_dac = overrides.get("initial_dac")
-            if initial_dac is not None:
-                self._append_process_log(f"[RECO] start DAC override prepared -> {initial_dac}")
-        self._append_process_log("[RECO] recommendation prepared for recipe apply")
-        return payload
 
     def _run_history_rebuild(self, parent: Optional[QWidget] = None) -> Optional[dict[str, Any]]:
         owner = parent or self
@@ -2106,17 +2064,20 @@ class ProcessWindow(QWidget):
         if errors:
             detail = "\n\nErrors:\n" + "\n".join(str(err) for err in errors[:10])
 
-        QMessageBox.information(
-            owner,
-            "History Rebuild",
-            "History sync completed.\n"
-            f"scanned={scanned}\n"
-            f"unchanged_skipped={unchanged_skipped}\n"
-            f"changed={changed}\n"
-            f"stored={stored}\n"
-            f"updated={updated}\n"
-            f"failed={failed}{detail}",
-        )
+        if failed == 0:
+            msg = (
+                f"로그 스캔이 완료되었습니다.\n\n"
+                f"새로 추가: {stored}건  |  갱신: {updated}건  |  변동없음: {unchanged_skipped}건\n"
+                f"(전체 스캔: {scanned}건)\n\n"
+                "이제 Recipe 창에서 '이전 설정 불러오기'를 눌러보세요."
+            )
+        else:
+            msg = (
+                f"로그 스캔이 완료되었습니다. (일부 오류)\n\n"
+                f"새로 추가: {stored}건  |  갱신: {updated}건\n"
+                f"실패: {failed}건 (일부 로그 파일을 읽지 못했습니다)"
+            )
+        QMessageBox.information(owner, "로그 스캔 완료", msg)
         return result
 
     def _init_rt_plot(self) -> None:
@@ -2450,7 +2411,6 @@ class ProcessWindow(QWidget):
         self._material_1 = None
         self._material_2 = None
         self._clear_run_power_flags()
-        self._clear_recommendation_runtime_overrides()
 
         with contextlib.suppress(Exception):
             self.ui.materialEdit.setText("Select")
@@ -2630,7 +2590,12 @@ class ProcessWindow(QWidget):
         )
         steps = proc_cfg.get("ramp_steps") or []
         if not steps:
-            QMessageBox.warning(self, "Input", "Process Config의 step이 비어 있습니다.")
+            QMessageBox.warning(
+                self,
+                "Ramp Step 없음",
+                "Ramp Step이 설정되지 않았습니다.\n\n"
+                "Recipe 버튼을 눌러 Step을 먼저 추가한 후 공정을 시작하세요."
+            )
             return None
 
         last_adc = -1.0
@@ -2677,9 +2642,6 @@ class ProcessWindow(QWidget):
 
             "process_config": proc_cfg,
         }
-        runtime_overrides = self._matching_recommendation_runtime_overrides(cfg)
-        if runtime_overrides:
-            cfg["runtime_recommendation"] = dict(runtime_overrides)
         return cfg
     
     # ================== UI 媛??뚯떛 ==================

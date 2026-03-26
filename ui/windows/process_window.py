@@ -272,8 +272,9 @@ class ProcessWindow(QWidget):
         panel.setObjectName("processLeftPanel")
         root = QVBoxLayout(panel)
         root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(6)
+        root.setSpacing(10)
         self._process_left_panel = panel
+        self._process_left_layout = root
 
         def _make_two_col_row(*items: QWidget) -> QWidget:
             row = QWidget(panel)
@@ -336,13 +337,13 @@ class ProcessWindow(QWidget):
 
         for key in ("processNameEdit", "thicknessEdit", "delayEdit", "currentRateEdit", "currentThicknessEdit"):
             with contextlib.suppress(Exception):
-                widgets[key].setMinimumHeight(28)
+                widgets[key].setMinimumHeight(32)
         for key in ("materialEdit", "materialEdit2"):
             with contextlib.suppress(Exception):
-                widgets[key].setMinimumHeight(32)
+                widgets[key].setMinimumHeight(36)
         for key in ("deprateEdit", "deprateEdit2", "currentDac1Edit", "currentDac2Edit", "actualPower1Edit", "actualPower2Edit"):
             with contextlib.suppress(Exception):
-                widgets[key].setMinimumHeight(26)
+                widgets[key].setMinimumHeight(30)
 
         root.addWidget(widgets["evaporatorLabel"])
         root.addWidget(widgets["processNameLabel"])
@@ -371,12 +372,33 @@ class ProcessWindow(QWidget):
             return
 
         x = 4
-        y = 8
+        y = 6
         width = 191
         available_h = max(200, int(parent.height()) - y - 8)
-        desired_h = int(panel.sizeHint().height())
-        panel_h = min(available_h, max(desired_h, 560))
+        panel_h = available_h
         panel.setGeometry(x, y, width, panel_h)
+        self._sync_process_left_layout(panel_h)
+
+    def _sync_process_left_layout(self, panel_height: int) -> None:
+        layout = getattr(self, "_process_left_layout", None)
+        action_panel = getattr(self, "_process_action_panel", None)
+        if layout is None or action_panel is None:
+            return
+
+        total_h = max(560, int(panel_height or 0))
+        base_spacing = 10
+        hint_h = 0
+        gap_count = max(1, layout.count() - 1)
+        with contextlib.suppress(Exception):
+            hint_h = int(layout.sizeHint().height())
+        extra = max(0, total_h - hint_h)
+        spacing = min(14, base_spacing + (extra // gap_count))
+
+        with contextlib.suppress(Exception):
+            layout.setSpacing(spacing)
+        with contextlib.suppress(Exception):
+            action_panel.setMinimumHeight(132)
+            action_panel.setMaximumHeight(140)
 
     def _ensure_process_content_layout(self) -> None:
         monitor = getattr(self.ui, "processMonitor_Process", None)
@@ -526,27 +548,27 @@ class ProcessWindow(QWidget):
                 "y": top,
                 "width": right - left,
                 "height": bottom - top,
-                "compact_height": 124,
+                "compact_height": 132,
                 "right_margin": 8,
                 "bottom_margin": 8,
                 "page_width": max(1, int(parent.width())),
                 "page_height": max(1, int(parent.height())),
-                "min_height": 120,
+                "min_height": 132,
             }
             panel = QWidget(parent)
             panel.setObjectName("processActionPanel")
             layout = QGridLayout(panel)
-            layout.setContentsMargins(2, 2, 2, 2)
-            layout.setHorizontalSpacing(6)
-            layout.setVerticalSpacing(6)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setHorizontalSpacing(8)
+            layout.setVerticalSpacing(8)
             self._process_action_panel = panel
         else:
             layout = panel.layout()
             if not isinstance(layout, QGridLayout):
                 layout = QGridLayout(panel)
-                layout.setContentsMargins(2, 2, 2, 2)
-                layout.setHorizontalSpacing(6)
-                layout.setVerticalSpacing(6)
+                layout.setContentsMargins(0, 0, 0, 0)
+                layout.setHorizontalSpacing(8)
+                layout.setVerticalSpacing(8)
 
         buttons = (cfg_btn, recipe_btn, start_btn, stop_btn)
         for button in buttons:
@@ -555,15 +577,10 @@ class ProcessWindow(QWidget):
                 button.setAutoDefault(False)
                 button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
-        for action_btn in (cfg_btn, recipe_btn):
+        for action_btn in (cfg_btn, recipe_btn, start_btn, stop_btn):
             with contextlib.suppress(Exception):
-                action_btn.setMinimumHeight(40)
-                action_btn.setMaximumHeight(44)
-
-        for run_btn in (start_btn, stop_btn):
-            with contextlib.suppress(Exception):
-                run_btn.setMinimumHeight(48)
-                run_btn.setMaximumHeight(54)
+                action_btn.setMinimumHeight(56)
+                action_btn.setMaximumHeight(60)
 
         while layout.count():
             item = layout.takeAt(0)

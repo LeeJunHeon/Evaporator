@@ -227,6 +227,9 @@ class _CmdReadCrystalHealth:
 # Worker Thread
 # ============================================================
 
+_MAX_UNAVAILABLE_BEFORE_RECONNECT = 10  # 연속 N회 ValueUnavailable → fail 로 간주
+
+
 class STMServiceWorker(QThread):
     """
     STM100 폴링 워커.
@@ -270,6 +273,7 @@ class STMServiceWorker(QThread):
         self._last_snapshot: Optional[STMSnapshot] = None
 
         self._fail_count: int = 0
+        self._unavailable_count: int = 0
         self._next_try: float = 0.0
 
         self._conn_backoff_base_s = float(self._reconnect_interval_s)  # ini 로딩 전 임시
@@ -472,6 +476,7 @@ class STMServiceWorker(QThread):
         except Exception:
             pass
         self._stm = None
+        self._unavailable_count = 0
 
     def _on_stm_io_trace(self, d: dict) -> None:
         """
@@ -504,6 +509,7 @@ class STMServiceWorker(QThread):
         self._safe_close()
         self._set_connected(False)
         self._fail_count = 0
+        self._unavailable_count = 0
         self._next_try = 0.0
         self._conn_backoff_s = float(self._conn_backoff_base_s)  # ✅ 추가
         self.sig_error.emit(f"[STMService] reload ini -> {self._ini_path}")
@@ -671,6 +677,7 @@ class STMServiceWorker(QThread):
             self._stm.connect()
             self._set_connected(True)
             self._fail_count = 0
+            self._unavailable_count = 0
             self._conn_backoff_s = float(self._conn_backoff_base_s)  # ✅ 성공 시 reset
 
             # ✅ (1) power lost flag(B) 정리: L ack (실패해도 연결은 유지)
@@ -722,13 +729,17 @@ class STMServiceWorker(QThread):
             self.sig_snapshot.emit(snap)
 
             self._fail_count = 0
+            self._unavailable_count = 0
             return True
 
         except Exception as e:
-            # ✅ '값 자체가 없음'만 fail 누적 제외
             if isinstance(e, STM100ValueUnavailableError):
-                pass
+                self._unavailable_count += 1
+                # 연속 N회 초과 시 fail 로 간주 → 재연결 트리거
+                if self._unavailable_count > _MAX_UNAVAILABLE_BEFORE_RECONNECT:
+                    self._fail_count += 1
             else:
+                self._unavailable_count = 0
                 self._fail_count += 1
 
             self.sig_error.emit(f"[STMService] poll failed: {e!r} (fail={self._fail_count})")

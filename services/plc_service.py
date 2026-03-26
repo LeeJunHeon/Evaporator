@@ -16,6 +16,7 @@ PLCService
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import threading
 import time
 from dataclasses import dataclass
@@ -93,6 +94,10 @@ _COIL_LABEL: Dict[str, str] = {
 }
 
 _DAC_FULL_SCALE: int = 4095   # DAC 풀스케일 코드 (12-bit)
+
+# PLC Future 블로킹 최대 대기 시간.
+# 워커 스레드가 예기치 않게 종료되었을 때 영구 블로킹을 방지한다.
+_PLC_FUTURE_TIMEOUT_S: float = 10.0
 
 
 def _format_plc_cmd_trace(d: dict) -> str:
@@ -980,19 +985,53 @@ class PLCService(QObject):
     # - UI 스레드에서는 직접 blocking 하지 말고, 공정 워커(QThread)에서 사용 권장
     # -------------------------------
     def submit_write_coil(self, coil_name: str, on: bool, *, momentary: bool = False, pulse_ms: Optional[int] = None, tag: str = ""):
-        import concurrent.futures
         fut = concurrent.futures.Future()
         self._worker.enqueue(CmdWriteCoil(coil_name=str(coil_name), on=bool(on), momentary=bool(momentary), pulse_ms=pulse_ms, tag=tag, reply=fut))
         return fut
 
     def submit_write_reg(self, reg_name: str, value: int, *, tag: str = ""):
-        import concurrent.futures
         fut = concurrent.futures.Future()
         self._worker.enqueue(CmdWriteReg(reg_name=str(reg_name), value=int(value), tag=tag, reply=fut))
         return fut
 
     def submit_set_dac_current(self, ch: int, ma: float, *, tag: str = ""):
-        import concurrent.futures
         fut = concurrent.futures.Future()
         self._worker.enqueue(CmdSetDacCurrent(ch=int(ch), ma=float(ma), tag=tag, reply=fut))
         return fut
+
+    # -------------------------------
+    # blocking (synchronous) write — 타임아웃 보호 포함
+    # Future.result(timeout=_PLC_FUTURE_TIMEOUT_S) 로 대기하며
+    # 워커가 응답 없으면 PLCCommandError 를 raise 한다.
+    # 워커가 종료되어 _finalize_pending_replies() 가 RuntimeError 를
+    # Future 에 set_exception 하면 그 예외가 그대로 상위로 전파된다.
+    # -------------------------------
+    def write_coil(self, coil_name: str, on: bool, *, momentary: bool = False, pulse_ms: Optional[int] = None, tag: str = "") -> bool:
+        """동기 블로킹 코일 쓰기. 타임아웃 또는 워커 오류 시 예외 발생."""
+        fut = self.submit_write_coil(coil_name, on, momentary=momentary, pulse_ms=pulse_ms, tag=tag)
+        try:
+            return fut.result(timeout=_PLC_FUTURE_TIMEOUT_S)
+        except concurrent.futures.TimeoutError:
+            raise PLCCommandError("PLC 응답 타임아웃 (워커 응답 없음)")
+        except Exception:
+            raise
+
+    def write_reg(self, reg_name: str, value: int, *, tag: str = "") -> bool:
+        """동기 블로킹 레지스터 쓰기. 타임아웃 또는 워커 오류 시 예외 발생."""
+        fut = self.submit_write_reg(reg_name, value, tag=tag)
+        try:
+            return fut.result(timeout=_PLC_FUTURE_TIMEOUT_S)
+        except concurrent.futures.TimeoutError:
+            raise PLCCommandError("PLC 응답 타임아웃 (워커 응답 없음)")
+        except Exception:
+            raise
+
+    def set_dac_current(self, ch: int, ma: float, *, tag: str = "") -> int:
+        """동기 블로킹 DAC 전류 설정. 타임아웃 또는 워커 오류 시 예외 발생."""
+        fut = self.submit_set_dac_current(ch, ma, tag=tag)
+        try:
+            return fut.result(timeout=_PLC_FUTURE_TIMEOUT_S)
+        except concurrent.futures.TimeoutError:
+            raise PLCCommandError("PLC 응답 타임아웃 (워커 응답 없음)")
+        except Exception:
+            raise

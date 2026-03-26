@@ -401,6 +401,13 @@ def _load_runtime_process_config(meta: dict, *, step_name: str) -> dict:
     sensor_none_abort_s = _require_float("sensor_none_abort_s")
     adc_none_abort_s = _require_float("adc_none_abort_s")
 
+    spike_abort_ratio = float(process_config.get("spike_abort_ratio", 3.0) or 3.0)
+    spike_grace_s = float(process_config.get("spike_grace_s", 5.0) or 5.0)
+    if spike_abort_ratio < 1.0:
+        spike_abort_ratio = 3.0
+    if spike_grace_s < 0.0:
+        spike_grace_s = 0.0
+
     hold_max_dac_delta = int(process_config.get("hold_max_dac_delta", fine_step_dac) or fine_step_dac)
     if hold_max_dac_delta <= 0:
         hold_max_dac_delta = max(1, fine_step_dac)
@@ -457,6 +464,8 @@ def _load_runtime_process_config(meta: dict, *, step_name: str) -> dict:
         "fine_step_dac": fine_step_dac,
         "rate_abort_ratio": rate_abort_ratio,
         "rate_abort_sec": rate_abort_sec,
+        "spike_abort_ratio": spike_abort_ratio,
+        "spike_grace_s": spike_grace_s,
         "sensor_none_abort_s": sensor_none_abort_s,
         "adc_none_abort_s": adc_none_abort_s,
         "hold_control_mode": hold_control_mode,
@@ -527,6 +536,8 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
     hold_max_dac_delta = int(proc_cfg.get("hold_max_dac_delta", fine_step_dac) or fine_step_dac)
     rate_abort_ratio = float(proc_cfg["rate_abort_ratio"])
     rate_abort_sec = float(proc_cfg["rate_abort_sec"])
+    spike_abort_ratio = float(proc_cfg.get("spike_abort_ratio", 3.0) or 3.0)
+    spike_grace_s = float(proc_cfg.get("spike_grace_s", 5.0) or 5.0)
     sensor_none_abort_s = float(proc_cfg["sensor_none_abort_s"])
     adc_none_abort_s = float(proc_cfg["adc_none_abort_s"])
 
@@ -961,6 +972,7 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
 
         last_hold_control_m = 0.0
         rate_abort_start_ts: Optional[float] = None
+        spike_detected_ts: Optional[float] = None
         abort_threshold = target_rate * rate_abort_ratio
         hold_integral = 0.0
 
@@ -998,18 +1010,35 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
             # abort 조건:
             # dep.rate가 0 이상의 유효값일 때만 저하 판정을 건다.
             # 음수 dep.rate는 센서 이상/순간 튐으로 보고 abort 카운트에 넣지 않는다.
+
+            # 스파이크 감지 (target_rate의 N배 이상이면 센서 오류로 간주)
+            if rt > target_rate * spike_abort_ratio:
+                spike_detected_ts = time.monotonic()
+
+            # rate_abort 판정
             if rt < 0.0:
                 rate_abort_start_ts = None
             elif rt <= abort_threshold:
                 now_m = time.monotonic()
-                if rate_abort_start_ts is None:
-                    rate_abort_start_ts = now_m
-                elif (now_m - rate_abort_start_ts) >= rate_abort_sec:
-                    _raise_engine_failed(
-                        step.name,
-                        f"EVAP: hold 중 dep.rate 저하 abort "
-                        f"(rate={rt:.3f} <= {abort_threshold:.3f}, 지속 {rate_abort_sec:.1f}s)"
+                # 스파이크 직후 유예 중이면 abort 카운터 시작 안 함
+                if spike_detected_ts is not None and (now_m - spike_detected_ts) < spike_grace_s:
+                    rate_abort_start_ts = None
+                    engine._emit_status(
+                        message=(
+                            f"HOLD | dep.rate 저하 감지 — 스파이크 회복 대기 중 "
+                            f"({now_m - spike_detected_ts:.1f}/{spike_grace_s:.1f}s)"
+                        ),
+                        force=True,
                     )
+                else:
+                    if rate_abort_start_ts is None:
+                        rate_abort_start_ts = now_m
+                    elif (now_m - rate_abort_start_ts) >= rate_abort_sec:
+                        _raise_engine_failed(
+                            step.name,
+                            f"EVAP: hold 중 dep.rate 저하 abort "
+                            f"(rate={rt:.3f} <= {abort_threshold:.3f}, 지속 {rate_abort_sec:.1f}s)"
+                        )
             else:
                 rate_abort_start_ts = None
 

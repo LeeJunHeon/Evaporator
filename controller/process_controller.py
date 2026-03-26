@@ -535,6 +535,8 @@ class ProcessController(QObject):
             "rate_jump_guard_ratio": _optional_float("rate_jump_guard_ratio", 0.50, 0.0),
             "rate_jump_guard_abs": _optional_float("rate_jump_guard_abs", 0.15, 0.0),
             "hold_max_dac_delta": hold_max_dac_delta,
+            "spike_abort_ratio": _optional_float("spike_abort_ratio", 3.0, 1.0),
+            "spike_grace_s": _optional_float("spike_grace_s", 5.0, 0.0),
         })
 
         return cfg
@@ -582,6 +584,8 @@ class ProcessController(QObject):
             "rate_abort_sec": process_config["rate_abort_sec"],
             "sensor_none_abort_s": process_config["sensor_none_abort_s"],
             "adc_none_abort_s": process_config["adc_none_abort_s"],
+            "spike_abort_ratio": process_config.get("spike_abort_ratio", 3.0),
+            "spike_grace_s": process_config.get("spike_grace_s", 5.0),
         }
 
     def _build_evap_steps(

@@ -39,6 +39,8 @@ PROCESS_CONFIG_TOOLTIPS = {
     "rate_abort_sec": "Seconds that low-rate abort condition must persist.",
     "sensor_none_abort_s": "Allowed duration for missing STM rate/thickness before abort.",
     "adc_none_abort_s": "Allowed duration for missing ADC feedback before abort.",
+    "spike_abort_ratio": "STM 센서 오류 스파이크 감지 기준.\n목표 dep.rate의 N배 이상이면 스파이크로 간주합니다.\n(기본값 3.0 = 목표의 3배 이상이면 스파이크)",
+    "spike_grace_s": "스파이크 감지 후 rate_abort 판정을 유예하는 시간(초).\n이 시간 동안은 rate가 낮아도 물질 부족으로 판단하지 않습니다.\n(기본값 5.0초)",
 }
 
 
@@ -95,6 +97,8 @@ class ProcessConfigDialog(QDialog):
             "rate_abort_sec": 5.0,
             "sensor_none_abort_s": 5.0,
             "adc_none_abort_s": 5.0,
+            "spike_abort_ratio": 3.0,
+            "spike_grace_s": 5.0,
         }
 
     def _normalize_config(self, cfg: dict[str, Any]) -> dict[str, Any]:
@@ -185,6 +189,8 @@ class ProcessConfigDialog(QDialog):
             "rate_abort_sec": _as_float("rate_abort_sec", 5.0, 0.0),
             "sensor_none_abort_s": _as_float("sensor_none_abort_s", 5.0, 0.0),
             "adc_none_abort_s": _as_float("adc_none_abort_s", 5.0, 0.0),
+            "spike_abort_ratio": _as_float("spike_abort_ratio", 3.0, 1.0),
+            "spike_grace_s": _as_float("spike_grace_s", 5.0, 0.0),
         }
 
     def _build_ui(self) -> None:
@@ -247,11 +253,15 @@ class ProcessConfigDialog(QDialog):
         self.rateAbortSecSpin = self._make_double_spin(0.0, 99999.0, step=1.0, decimals=1)
         self.sensorNoneAbortSpin = self._make_double_spin(0.0, 99999.0, step=1.0, decimals=1)
         self.adcNoneAbortSpin = self._make_double_spin(0.0, 99999.0, step=1.0, decimals=1)
+        self.spikeAbortRatioSpin = self._make_double_spin(1.0, 20.0, step=0.5, decimals=1)
+        self.spikeGraceSSpin = self._make_double_spin(0.0, 30.0, step=0.5, decimals=1)
         self._add_form_row(safety_form, "Max DAC", self.dacMaxSpin, "dac_max")
         self._add_form_row(safety_form, "Rate Abort Ratio", self.rateAbortRatioSpin, "rate_abort_ratio")
         self._add_form_row(safety_form, "Rate Abort Sec", self.rateAbortSecSpin, "rate_abort_sec")
         self._add_form_row(safety_form, "Sensor None Abort (s)", self.sensorNoneAbortSpin, "sensor_none_abort_s")
         self._add_form_row(safety_form, "ADC None Abort (s)", self.adcNoneAbortSpin, "adc_none_abort_s")
+        self._add_form_row(safety_form, "스파이크 감지 배율", self.spikeAbortRatioSpin, "spike_abort_ratio")
+        self._add_form_row(safety_form, "스파이크 유예 시간 (s)", self.spikeGraceSSpin, "spike_grace_s")
         body_root.addWidget(safety_box)
         body_root.addStretch(1)
 
@@ -309,6 +319,8 @@ class ProcessConfigDialog(QDialog):
         self.rateAbortSecSpin.setValue(float(cfg.get("rate_abort_sec", 5.0)))
         self.sensorNoneAbortSpin.setValue(float(cfg.get("sensor_none_abort_s", 5.0)))
         self.adcNoneAbortSpin.setValue(float(cfg.get("adc_none_abort_s", 5.0)))
+        self.spikeAbortRatioSpin.setValue(float(cfg.get("spike_abort_ratio", 3.0)))
+        self.spikeGraceSSpin.setValue(float(cfg.get("spike_grace_s", 5.0)))
 
     def get_config(self) -> dict[str, Any]:
         cfg = dict(self._initial_config)
@@ -331,6 +343,8 @@ class ProcessConfigDialog(QDialog):
                 "rate_abort_sec": float(self.rateAbortSecSpin.value()),
                 "sensor_none_abort_s": float(self.sensorNoneAbortSpin.value()),
                 "adc_none_abort_s": float(self.adcNoneAbortSpin.value()),
+                "spike_abort_ratio": float(self.spikeAbortRatioSpin.value()),
+                "spike_grace_s": float(self.spikeGraceSSpin.value()),
             }
         )
         return self._normalize_config(cfg)

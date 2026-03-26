@@ -72,6 +72,17 @@ class HistoryStore:
         ("applied_recommended_start_dac", "INTEGER"),
         ("created_ts", "REAL"),
     )
+    _ARTIFACT_COLUMNS: tuple[tuple[str, str], ...] = (
+        ("stem", "TEXT PRIMARY KEY"),
+        ("run_id", "TEXT"),
+        ("csv_path", "TEXT"),
+        ("log_path", "TEXT"),
+        ("csv_mtime_ns", "INTEGER"),
+        ("log_mtime_ns", "INTEGER"),
+        ("csv_size", "INTEGER"),
+        ("log_size", "INTEGER"),
+        ("processed_ts", "REAL"),
+    )
 
     def __init__(
         self,
@@ -155,6 +166,9 @@ class HistoryStore:
         columns_sql = ",\n                ".join(
             f"{name} {type_sql}" for name, type_sql in self._SUMMARY_COLUMNS
         )
+        artifact_columns_sql = ",\n                ".join(
+            f"{name} {type_sql}" for name, type_sql in self._ARTIFACT_COLUMNS
+        )
         conn.executescript(
             f"""
             CREATE TABLE IF NOT EXISTS run_summaries (
@@ -172,9 +186,17 @@ class HistoryStore:
 
             CREATE INDEX IF NOT EXISTS idx_run_summaries_cfg_hash
             ON run_summaries(process_config_hash);
+
+            CREATE TABLE IF NOT EXISTS backfill_artifacts (
+                {artifact_columns_sql}
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_backfill_artifacts_run_id
+            ON backfill_artifacts(run_id);
             """
         )
         self._ensure_columns(conn)
+        self._ensure_artifact_columns(conn)
         conn.commit()
 
     def _ensure_columns(self, conn: sqlite3.Connection) -> None:
@@ -186,6 +208,16 @@ class HistoryStore:
             if name in existing:
                 continue
             conn.execute(f"ALTER TABLE run_summaries ADD COLUMN {name} {type_sql}")
+
+    def _ensure_artifact_columns(self, conn: sqlite3.Connection) -> None:
+        existing = {
+            str((row["name"] if isinstance(row, sqlite3.Row) else row[1]) or "").strip()
+            for row in conn.execute("PRAGMA table_info(backfill_artifacts)").fetchall()
+        }
+        for name, type_sql in self._ARTIFACT_COLUMNS:
+            if name in existing:
+                continue
+            conn.execute(f"ALTER TABLE backfill_artifacts ADD COLUMN {name} {type_sql}")
 
     def upsert_run_summary(self, summary: dict[str, Any]) -> bool:
         db_path = self._write_db_path()
@@ -225,6 +257,45 @@ class HistoryStore:
             except Exception:
                 continue
         return merged
+
+    def get_backfill_artifact(self, stem: str) -> Optional[dict[str, Any]]:
+        key = str(stem or "").strip()
+        if not key:
+            return None
+
+        merged: Optional[dict[str, Any]] = None
+        for db_path in self._db_paths_for_query():
+            if not db_path.exists():
+                continue
+            try:
+                with self._connect(db_path) as conn:
+                    row = conn.execute(
+                        "SELECT * FROM backfill_artifacts WHERE stem = ?",
+                        [key],
+                    ).fetchone()
+                if row is None:
+                    continue
+                data = dict(row)
+                if merged is None or float(data.get("processed_ts") or 0.0) >= float(merged.get("processed_ts") or 0.0):
+                    merged = data
+            except Exception:
+                continue
+        return merged
+
+    def upsert_backfill_artifact(self, artifact: dict[str, Any]) -> bool:
+        db_path = self._write_db_path()
+        if db_path is None:
+            return False
+
+        payload = self._normalize_backfill_artifact(artifact)
+        columns = list(payload.keys())
+        placeholders = ", ".join("?" for _ in columns)
+        sql = f"INSERT OR REPLACE INTO backfill_artifacts ({', '.join(columns)}) VALUES ({placeholders})"
+
+        with self._connect(db_path) as conn:
+            conn.execute(sql, [payload[col] for col in columns])
+            conn.commit()
+        return True
 
     def fetch_run_summaries(
         self,
@@ -288,6 +359,25 @@ class HistoryStore:
         if not payload.get("run_id"):
             raise ValueError("run_id is required for history summary")
 
+        return payload
+
+    def _normalize_backfill_artifact(self, artifact: dict[str, Any]) -> dict[str, Any]:
+        payload = dict(artifact or {})
+        stem = str(payload.get("stem", "") or "").strip()
+        if not stem:
+            raise ValueError("stem is required for backfill artifact")
+
+        payload["stem"] = stem
+        payload["run_id"] = str(payload.get("run_id", "") or "").strip()
+        payload["csv_path"] = str(payload.get("csv_path", "") or "").strip()
+        payload["log_path"] = str(payload.get("log_path", "") or "").strip()
+        for key in ("csv_mtime_ns", "log_mtime_ns", "csv_size", "log_size"):
+            value = payload.get(key)
+            try:
+                payload[key] = int(value) if value not in (None, "") else None
+            except Exception:
+                payload[key] = None
+        payload["processed_ts"] = float(payload.get("processed_ts", time.time()) or time.time())
         return payload
 
     def _decode_row(self, row: dict[str, Any]) -> dict[str, Any]:

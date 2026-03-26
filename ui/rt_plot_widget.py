@@ -17,9 +17,9 @@ import math
 from collections import deque
 from typing import Deque, Optional, Tuple, Callable
 
-from PySide6.QtCore import Qt, QPoint
+from PySide6.QtCore import Qt, QPoint, QMargins
 from PySide6.QtGui import QPainter, QBrush, QColor, QPen
-from PySide6.QtWidgets import QWidget, QVBoxLayout
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QSizePolicy
 
 from PySide6.QtCharts import QChart, QChartView, QLineSeries, QValueAxis  # type: ignore
 
@@ -128,6 +128,7 @@ class DepositionPlotWidget(QWidget):
         fixed_power_range: Optional[tuple[float, float]] = None,  # MODIFIED: 고정 Y축 범위 (설정 시 자동 스케일 비활성화)
     ):
         super().__init__(parent)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._max_points = int(max_points)
         self._window_s = float(window_seconds)
         self._power_title = str(power_title)
@@ -155,6 +156,8 @@ class DepositionPlotWidget(QWidget):
         self._power_series.setName(self._power_title)
 
         self._chart = QChart()
+        self._chart.setBackgroundRoundness(0.0)
+        self._chart.setMargins(QMargins(6, 6, 6, 6))
 
         # legend는 숨기고(축 라벨 색으로 구분)
         self._chart.legend().hide()
@@ -197,6 +200,8 @@ class DepositionPlotWidget(QWidget):
             on_double_click=self.reset_to_live,
         )
         self._view.setRenderHint(QPainter.Antialiasing, True)
+        self._view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self._view.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self._view, 1)
 
         self._apply_tick_density(segments=10)

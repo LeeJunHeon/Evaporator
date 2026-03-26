@@ -47,8 +47,8 @@ class HistoryRecommendationDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Recommendation")
         self.setModal(True)
-        self.resize(760, 700)
-        self.setMinimumSize(820, 720)
+        self.resize(760, 580)
+        self.setMinimumSize(700, 520)
 
         self._recommendation = dict(recommendation or {})
         self._accepted_apply = False
@@ -56,7 +56,7 @@ class HistoryRecommendationDialog(QDialog):
 
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 12, 12, 12)
-        root.setSpacing(10)
+        root.setSpacing(8)
 
         if not self._recommendation:
             empty = QLabel("추천 데이터가 없습니다.")
@@ -69,7 +69,14 @@ class HistoryRecommendationDialog(QDialog):
             root.addWidget(buttons)
             return
 
+        summary_title = QLabel("Summary")
+        summary_title.setStyleSheet("font-weight: 600;")
+        root.addWidget(summary_title)
+
         summary_form = QFormLayout()
+        summary_form.setContentsMargins(0, 0, 0, 0)
+        summary_form.setHorizontalSpacing(12)
+        summary_form.setVerticalSpacing(4)
         root.addLayout(summary_form)
 
         confidence = float(self._recommendation.get("confidence", 0.0) or 0.0)
@@ -84,13 +91,14 @@ class HistoryRecommendationDialog(QDialog):
         summary_form.addRow("Recommended Fine Step DAC", QLabel(str(recommended_fine_step_dac)))
         summary_form.addRow("Recommended Rate Stable Sec", QLabel(f"{recommended_rate_stable_sec:.2f}"))
 
-        basis_runs = QPlainTextEdit(self)
-        basis_runs.setReadOnly(True)
-        basis_runs.setMaximumHeight(70)
-        basis_runs.setPlainText("\n".join(self._recommendation.get("representative_run_ids", []) or []))
+        basis_runs = QLabel("\n".join(self._recommendation.get("representative_run_ids", []) or ["---"]))
+        basis_runs.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        basis_runs.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         summary_form.addRow("Representative Runs", basis_runs)
 
-        root.addWidget(QLabel("Recommended Ramp Steps"))
+        steps_title = QLabel("Recommended Ramp Steps")
+        steps_title.setStyleSheet("font-weight: 600;")
+        root.addWidget(steps_title)
 
         self.stepsTable = QTableWidget(self)
         self.stepsTable.setColumnCount(4)
@@ -105,7 +113,7 @@ class HistoryRecommendationDialog(QDialog):
         self.stepsTable.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
         self.stepsTable.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.stepsTable.setWordWrap(False)
-        self.stepsTable.setMinimumHeight(170)
+        self.stepsTable.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         root.addWidget(self.stepsTable)
 
         ramp_steps = list(self._recommendation.get("recommended_ramp_steps") or [])
@@ -115,8 +123,11 @@ class HistoryRecommendationDialog(QDialog):
             self._set_table_item(self.stepsTable, row_idx, 1, str(int(step.get("dac_step", 0) or 0)))
             self._set_table_item(self.stepsTable, row_idx, 2, f"{float(step.get('dac_interval_sec', 0.0) or 0.0):.3f}")
             self._set_table_item(self.stepsTable, row_idx, 3, f"{float(step.get('hold_sec', 0.0) or 0.0):.3f}")
+        self._set_compact_table_height(self.stepsTable, min_rows=1, max_rows=4)
 
-        root.addWidget(QLabel("Representative Run Details"))
+        runs_title = QLabel("Representative Run Details")
+        runs_title.setStyleSheet("font-weight: 600;")
+        root.addWidget(runs_title)
 
         self.runTable = QTableWidget(self)
         self.runTable.setColumnCount(8)
@@ -136,19 +147,21 @@ class HistoryRecommendationDialog(QDialog):
         self.runTable.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.runTable.setAlternatingRowColors(True)
         self.runTable.setWordWrap(False)
-        self.runTable.setMinimumHeight(240)
+        self.runTable.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.runTable.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self.runTable.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         for col in range(2, 8):
             self.runTable.horizontalHeader().setSectionResizeMode(col, QHeaderView.ResizeMode.Stretch)
-        root.addWidget(self.runTable, 1)
+        root.addWidget(self.runTable)
 
         self.runDetail = QPlainTextEdit(self)
         self.runDetail.setReadOnly(True)
-        self.runDetail.setMinimumHeight(150)
+        self.runDetail.setMinimumHeight(110)
+        self.runDetail.setMaximumHeight(150)
         root.addWidget(self.runDetail)
 
         self._populate_representative_runs()
+        self._set_compact_table_height(self.runTable, min_rows=1, max_rows=4)
         self.runTable.itemSelectionChanged.connect(self._on_run_selection_changed)
         if self.runTable.rowCount() > 0:
             self.runTable.selectRow(0)
@@ -163,6 +176,20 @@ class HistoryRecommendationDialog(QDialog):
         self.applyButton.clicked.connect(self._on_apply_clicked)
         buttons.rejected.connect(self.reject)
         root.addWidget(buttons)
+
+    def _set_compact_table_height(self, table: QTableWidget, *, min_rows: int, max_rows: int) -> None:
+        row_count = max(int(table.rowCount()), int(min_rows))
+        visible_rows = min(row_count, int(max_rows))
+        header_h = int(table.horizontalHeader().height())
+        row_h = int(table.verticalHeader().defaultSectionSize())
+        if table.rowCount() > 0:
+            with_row = int(table.rowHeight(0))
+            if with_row > 0:
+                row_h = with_row
+        frame_h = int(table.frameWidth()) * 2
+        height = header_h + frame_h + (row_h * visible_rows) + 2
+        table.setMinimumHeight(height)
+        table.setMaximumHeight(height)
 
     def _set_table_item(self, table: QTableWidget, row: int, col: int, text: str) -> None:
         item = QTableWidgetItem(text)

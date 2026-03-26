@@ -70,7 +70,8 @@ class MaterialCatalogDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Material Catalog")
         self.setModal(True)
-        self.resize(820, 520)
+        self.resize(620, 520)
+        self.setMinimumWidth(560)
 
         self._base_dir = Path(base_dir)
         self._json_path = self._base_dir / "config" / "material_catalog.json"
@@ -84,6 +85,14 @@ class MaterialCatalogDialog(QDialog):
             "※ Source 버튼에서는 재료 상수만 관리합니다."
         )
         self.infoLabel.setWordWrap(True)
+        self.infoLabel.setText(
+            "Double-click to edit. (Material / Density / Z factor)\n"
+            "Source 버튼에서는 재료 상수만 관리합니다."
+        )
+        self.infoLabel.setText(
+            "Double-click to edit. (Material / Density / Z factor)\n"
+            "Source only manages material constants."
+        )
         root.addWidget(self.infoLabel)
 
         self.table = QTableWidget(self)
@@ -101,6 +110,7 @@ class MaterialCatalogDialog(QDialog):
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed)
+        self.table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         root.addWidget(self.table, 1)
 
         btn_row = QHBoxLayout()
@@ -123,6 +133,7 @@ class MaterialCatalogDialog(QDialog):
         # ---------- load ----------
         mats = self._load_json_items()
         self._populate(mats)
+        self._adjust_dialog_width_to_contents()
 
     @classmethod
     def pick(cls, *, base_dir: Path, parent=None) -> Optional[MaterialRow]:
@@ -218,8 +229,35 @@ class MaterialCatalogDialog(QDialog):
                     item.setData(Qt.UserRole, m.note or "")
 
         self.table.blockSignals(False)
+        self.table.resizeColumnsToContents()
         if self.table.rowCount() > 0:
             self.table.selectRow(0)
+
+    def _adjust_dialog_width_to_contents(self) -> None:
+        self.table.resizeColumnsToContents()
+
+        table_width = int(self.table.frameWidth()) * 2
+        if self.table.verticalHeader().isVisible():
+            table_width += int(self.table.verticalHeader().width())
+        for col in range(self.table.columnCount()):
+            table_width += int(self.table.columnWidth(col))
+
+        table_width += int(self.table.verticalScrollBar().sizeHint().width()) + 12
+
+        button_width = (
+            int(self.saveBtn.sizeHint().width())
+            + int(self.applyBtn.sizeHint().width())
+            + int(self.cancelBtn.sizeHint().width())
+            + 48
+        )
+
+        layout = self.layout()
+        margins = layout.contentsMargins() if layout is not None else None
+        side_margins = (int(margins.left()) + int(margins.right())) if margins is not None else 24
+
+        target_width = max(table_width + side_margins + 24, button_width + side_margins + 24, 560)
+        target_width = min(target_width, 700)
+        self.resize(int(target_width), max(520, int(self.height())))
 
     def _collect_rows(self) -> Optional[list[MaterialRow]]:
         mats: list[MaterialRow] = []

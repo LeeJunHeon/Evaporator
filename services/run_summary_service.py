@@ -7,6 +7,7 @@ import hashlib
 import json
 import re
 import statistics
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -89,11 +90,13 @@ class RunSummaryService:
     def backfill_history(self) -> dict[str, Any]:
         stats = {
             "scanned": 0,
+            "unchanged_skipped": 0,
+            "changed": 0,
             "stored": 0,
             "updated": 0,
-            "skipped": 0,
             "failed": 0,
             "errors": [],
+            "skipped": 0,
         }
 
         if self._history_store is None or not hasattr(self._history_store, "upsert_run_summary"):
@@ -111,9 +114,22 @@ class RunSummaryService:
 
             for item in artifacts:
                 try:
+                    artifact_state = self._artifact_state_payload(item)
+                    existing_state = None
+                    if hasattr(self._history_store, "get_backfill_artifact"):
+                        existing_state = self._history_store.get_backfill_artifact(str(item.get("stem", "") or ""))
+
+                    existing_run_id = str((existing_state or {}).get("run_id", "") or "").strip()
+                    if existing_state and self._artifact_state_matches(existing_state, artifact_state):
+                        if not existing_run_id or self._history_store.get_run_summary(existing_run_id) is not None:
+                            stats["unchanged_skipped"] += 1
+                            continue
+
+                    stats["changed"] += 1
                     summary = self._build_backfill_summary(item)
                     if not summary:
-                        stats["skipped"] += 1
+                        stats["failed"] += 1
+                        stats["errors"].append(f"summary build failed: {item.get('stem', '')}")
                         continue
 
                     run_id = str(summary.get("run_id", "") or "").strip()
@@ -127,7 +143,10 @@ class RunSummaryService:
                         existing = self._history_store.get_run_summary(run_id)
 
                     if existing is not None and self._summaries_equivalent(existing, summary):
-                        stats["skipped"] += 1
+                        artifact_state["run_id"] = run_id
+                        artifact_state["processed_ts"] = time.time()
+                        if hasattr(self._history_store, "upsert_backfill_artifact"):
+                            self._history_store.upsert_backfill_artifact(artifact_state)
                         continue
 
                     ok = bool(self._history_store.upsert_run_summary(summary))
@@ -140,14 +159,21 @@ class RunSummaryService:
                         stats["stored"] += 1
                     else:
                         stats["updated"] += 1
+
+                    artifact_state["run_id"] = run_id
+                    artifact_state["processed_ts"] = time.time()
+                    if hasattr(self._history_store, "upsert_backfill_artifact"):
+                        self._history_store.upsert_backfill_artifact(artifact_state)
                 except Exception as exc:
                     stats["failed"] += 1
                     stats["errors"].append(f"{item.get('stem', '')}: {exc!r}")
 
+            stats["skipped"] = stats["unchanged_skipped"]
             self._log_info(
-                "history backfill complete: "
-                f"scanned={stats['scanned']} stored={stats['stored']} "
-                f"updated={stats['updated']} skipped={stats['skipped']} failed={stats['failed']}"
+                "history sync complete: "
+                f"scanned={stats['scanned']} unchanged={stats['unchanged_skipped']} "
+                f"changed={stats['changed']} stored={stats['stored']} "
+                f"updated={stats['updated']} failed={stats['failed']}"
             )
             return stats
         except Exception as exc:
@@ -746,12 +772,69 @@ class RunSummaryService:
                             "csv": None,
                             "log": None,
                             "root": root,
+                            "csv_mtime_ns": None,
+                            "log_mtime_ns": None,
+                            "csv_size": None,
+                            "log_size": None,
                         },
                     )
                     if entry.get(key) is None:
                         entry[key] = path
+                        stat_info = self._artifact_stat(path)
+                        entry[f"{key}_mtime_ns"] = stat_info.get("mtime_ns")
+                        entry[f"{key}_size"] = stat_info.get("size")
 
         return [discovered[stem] for stem in sorted(discovered.keys())]
+
+    def _artifact_stat(self, path: Path) -> dict[str, Optional[int]]:
+        try:
+            stat = Path(path).stat()
+        except Exception:
+            return {"mtime_ns": None, "size": None}
+        return {
+            "mtime_ns": int(getattr(stat, "st_mtime_ns", 0) or 0),
+            "size": int(getattr(stat, "st_size", 0) or 0),
+        }
+
+    def _artifact_state_payload(self, artifact: dict[str, Any]) -> dict[str, Any]:
+        csv_path = artifact.get("csv")
+        log_path = artifact.get("log")
+        return {
+            "stem": str(artifact.get("stem", "") or "").strip(),
+            "run_id": "",
+            "csv_path": str(Path(csv_path)) if csv_path is not None else "",
+            "log_path": str(Path(log_path)) if log_path is not None else "",
+            "csv_mtime_ns": artifact.get("csv_mtime_ns"),
+            "log_mtime_ns": artifact.get("log_mtime_ns"),
+            "csv_size": artifact.get("csv_size"),
+            "log_size": artifact.get("log_size"),
+            "processed_ts": 0.0,
+        }
+
+    def _artifact_state_matches(self, existing: dict[str, Any], current: dict[str, Any]) -> bool:
+        for key in ("csv_path", "log_path"):
+            if str(existing.get(key, "") or "").strip() != str(current.get(key, "") or "").strip():
+                return False
+        for key in ("csv_mtime_ns", "log_mtime_ns", "csv_size", "log_size"):
+            left = existing.get(key)
+            right = current.get(key)
+            if left in ("", None):
+                left = None
+            else:
+                try:
+                    left = int(left)
+                except Exception:
+                    left = None
+            if right in ("", None):
+                right = None
+            else:
+                try:
+                    right = int(right)
+                except Exception:
+                    right = None
+            if left != right:
+                return False
+        return True
 
     def _build_backfill_summary(self, artifact: dict[str, Any]) -> Optional[dict[str, Any]]:
         csv_path = artifact.get("csv")

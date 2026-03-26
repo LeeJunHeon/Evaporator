@@ -27,7 +27,7 @@ class Ui_Form(object):
 
         self._form = Form
         self._hmi_window_size = (1121, 860)
-        self._normal_window_size = (1121, 700)
+        self._normal_window_size = (1121, 860)
 
         Form.resize(*self._hmi_window_size)
         Form.setAutoFillBackground(True)
@@ -1514,6 +1514,42 @@ class Ui_Form(object):
             self._form.resize(*self._hmi_window_size)
         else:
             self._form.resize(*self._normal_window_size)
+        self.adjust_window_layout()
+
+    def adjust_window_layout(self) -> None:
+        form = getattr(self, "_form", None)
+        if form is None:
+            return
+
+        form_w = max(640, int(form.width() or 0))
+        form_h = max(480, int(form.height() or 0))
+        left_margin = 4
+        top_margin = 4
+        side_margin = 4
+        footer_gap = 4
+        footer_h = 156
+        bottom_margin = 4
+
+        stacked_w = max(320, form_w - (left_margin + side_margin))
+        is_hmi = bool(getattr(self.stackedWidget, "currentIndex", lambda: 0)() == 0)
+        if is_hmi:
+            stacked_h = max(300, form_h - footer_h - footer_gap - top_margin - bottom_margin)
+            footer_y = top_margin + stacked_h + footer_gap
+            self.hmiFooter.setGeometry(QRect(left_margin, footer_y, stacked_w, footer_h))
+        else:
+            stacked_h = max(360, form_h - bottom_margin - top_margin)
+            footer_y = top_margin + stacked_h + footer_gap
+            self.hmiFooter.setGeometry(QRect(left_margin, footer_y, stacked_w, footer_h))
+
+        self.stackedWidget.setGeometry(QRect(left_margin, top_margin, stacked_w, stacked_h))
+        for page in (getattr(self, "page", None), getattr(self, "page_2", None)):
+            if page is None:
+                continue
+            try:
+                page.resize(stacked_w, stacked_h)
+                page.setMinimumSize(0, 0)
+            except Exception:
+                pass
 
     # 외부에서 상태 바꾸고 싶으면 이거 사용
     def set_indicator_state(self, name: str, on: bool):

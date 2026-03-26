@@ -13,10 +13,11 @@ from typing import Optional, Any, TYPE_CHECKING
 from PySide6.QtWidgets import (
     QWidget,
     QMessageBox,
+    QGridLayout,
     QVBoxLayout,
     QApplication,
+    QLabel,
     QPushButton,
-    QGridLayout,
     QSizePolicy,
 )
 from PySide6.QtCore import QTimer, Qt
@@ -120,7 +121,10 @@ class ProcessWindow(QWidget):
         cfg_btn = getattr(self.ui, "processConfigBtn", None)
         if cfg_btn is not None and hasattr(cfg_btn, "clicked"):
             cfg_btn.clicked.connect(self._open_process_config_dialog)
-        self._setup_recommendation_ui()
+        recipe_btn = getattr(self.ui, "recipeBtn", None)
+        if recipe_btn is not None and hasattr(recipe_btn, "clicked"):
+            recipe_btn.clicked.connect(self._open_process_recipe_dialog)
+        self._setup_process_action_panel()
 
         # ?????꾨줈?몄뒪 ?ㅼ젙(ADC step 湲곕컲) 蹂닿?
         self._process_cfg: dict[str, Any] = self._default_process_config()
@@ -187,8 +191,6 @@ class ProcessWindow(QWidget):
         if w is None:
             return
 
-        self._adjust_process_page_layout()
-
         try:
             if hasattr(w, "setStyleSheet"):
                 w.setStyleSheet(
@@ -205,32 +207,279 @@ class ProcessWindow(QWidget):
                 w.setWordWrap(True)
             if hasattr(w, "setAlignment"):
                 w.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+            if hasattr(w, "setMargin"):
+                w.setMargin(10)
 
         except Exception:
             pass
+        self._adjust_process_page_layout()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         with contextlib.suppress(Exception):
-            self._adjust_process_page_layout()
+            self.ui.adjust_window_layout()
         with contextlib.suppress(Exception):
-            self._update_process_action_panel_geometry()
+            self._adjust_process_page_layout()
 
     def _adjust_process_page_layout(self) -> None:
+        self._ensure_process_left_layout()
+        self._update_process_left_geometry()
+        self._ensure_process_content_layout()
+        self._update_process_content_geometry()
+        self._update_process_action_panel_geometry()
+
+    def _ensure_process_left_layout(self) -> None:
+        parent = getattr(self.ui, "page_2", None)
+        action_panel = getattr(self, "_process_action_panel", None)
+        names = (
+            "evaporatorLabel",
+            "processNameLabel",
+            "processNameEdit",
+            "sourcePower1",
+            "sourcePower2",
+            "materialLabel",
+            "materialEdit",
+            "materialEdit2",
+            "deprateLabel",
+            "deprateEdit",
+            "deprateEdit2",
+            "thicknessLabel",
+            "thicknessEdit",
+            "delayLabel",
+            "delayEdit",
+            "currentRateLabel",
+            "currentRateEdit",
+            "currentThicknessLabel",
+            "currentThicknessEdit",
+            "currentDac1Label",
+            "currentDac2Label",
+            "currentDac1Edit",
+            "currentDac2Edit",
+            "actualPower1Label",
+            "actualPower2Label",
+            "actualPower1Edit",
+            "actualPower2Edit",
+        )
+        widgets = {name: getattr(self.ui, name, None) for name in names}
+        if parent is None or action_panel is None or any(widget is None for widget in widgets.values()):
+            return
+
+        panel = getattr(self, "_process_left_panel", None)
+        if panel is not None:
+            return
+
+        panel = QWidget(parent)
+        panel.setObjectName("processLeftPanel")
+        root = QVBoxLayout(panel)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(6)
+        self._process_left_panel = panel
+
+        def _make_two_col_row(*items: QWidget) -> QWidget:
+            row = QWidget(panel)
+            grid = QGridLayout(row)
+            grid.setContentsMargins(0, 0, 0, 0)
+            grid.setHorizontalSpacing(8)
+            grid.setVerticalSpacing(4)
+            for idx, item in enumerate(items):
+                with contextlib.suppress(Exception):
+                    item.setParent(row)
+                grid.addWidget(item, 0, idx)
+                grid.setColumnStretch(idx, 1)
+            return row
+
+        def _make_two_line_grid(
+            label1: QWidget,
+            label2: QWidget,
+            edit1: QWidget,
+            edit2: QWidget,
+        ) -> QWidget:
+            row = QWidget(panel)
+            grid = QGridLayout(row)
+            grid.setContentsMargins(0, 0, 0, 0)
+            grid.setHorizontalSpacing(8)
+            grid.setVerticalSpacing(2)
+            for item in (label1, label2, edit1, edit2):
+                with contextlib.suppress(Exception):
+                    item.setParent(row)
+            grid.addWidget(label1, 0, 0)
+            grid.addWidget(label2, 0, 1)
+            grid.addWidget(edit1, 1, 0)
+            grid.addWidget(edit2, 1, 1)
+            grid.setColumnStretch(0, 1)
+            grid.setColumnStretch(1, 1)
+            return row
+
+        for widget in widgets.values():
+            with contextlib.suppress(Exception):
+                widget.setParent(panel)
+                widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        with contextlib.suppress(Exception):
+            action_panel.setParent(panel)
+            action_panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+        power_row = _make_two_col_row(widgets["sourcePower1"], widgets["sourcePower2"])
+        material_row = _make_two_col_row(widgets["materialEdit"], widgets["materialEdit2"])
+        rate_row = _make_two_col_row(widgets["deprateEdit"], widgets["deprateEdit2"])
+        dac_row = _make_two_line_grid(
+            widgets["currentDac1Label"],
+            widgets["currentDac2Label"],
+            widgets["currentDac1Edit"],
+            widgets["currentDac2Edit"],
+        )
+        adc_row = _make_two_line_grid(
+            widgets["actualPower1Label"],
+            widgets["actualPower2Label"],
+            widgets["actualPower1Edit"],
+            widgets["actualPower2Edit"],
+        )
+
+        for key in ("processNameEdit", "thicknessEdit", "delayEdit", "currentRateEdit", "currentThicknessEdit"):
+            with contextlib.suppress(Exception):
+                widgets[key].setMinimumHeight(28)
+        for key in ("materialEdit", "materialEdit2"):
+            with contextlib.suppress(Exception):
+                widgets[key].setMinimumHeight(32)
+        for key in ("deprateEdit", "deprateEdit2", "currentDac1Edit", "currentDac2Edit", "actualPower1Edit", "actualPower2Edit"):
+            with contextlib.suppress(Exception):
+                widgets[key].setMinimumHeight(26)
+
+        root.addWidget(widgets["evaporatorLabel"])
+        root.addWidget(widgets["processNameLabel"])
+        root.addWidget(widgets["processNameEdit"])
+        root.addWidget(power_row)
+        root.addWidget(widgets["materialLabel"])
+        root.addWidget(material_row)
+        root.addWidget(widgets["deprateLabel"])
+        root.addWidget(rate_row)
+        root.addWidget(widgets["thicknessLabel"])
+        root.addWidget(widgets["thicknessEdit"])
+        root.addWidget(widgets["delayLabel"])
+        root.addWidget(widgets["delayEdit"])
+        root.addWidget(widgets["currentRateLabel"])
+        root.addWidget(widgets["currentRateEdit"])
+        root.addWidget(widgets["currentThicknessLabel"])
+        root.addWidget(widgets["currentThicknessEdit"])
+        root.addWidget(dac_row)
+        root.addWidget(adc_row)
+        root.addWidget(action_panel)
+
+    def _update_process_left_geometry(self) -> None:
+        panel = getattr(self, "_process_left_panel", None)
+        parent = getattr(self.ui, "page_2", None)
+        if panel is None or parent is None:
+            return
+
+        x = 4
+        y = 8
+        width = 191
+        available_h = max(200, int(parent.height()) - y - 8)
+        desired_h = int(panel.sizeHint().height())
+        panel_h = min(available_h, max(desired_h, 560))
+        panel.setGeometry(x, y, width, panel_h)
+
+    def _ensure_process_content_layout(self) -> None:
+        monitor = getattr(self.ui, "processMonitor_Process", None)
+        graph = getattr(self.ui, "graphWidget", None)
+        log_window = getattr(self.ui, "logWindow", None)
+        parent = getattr(self.ui, "page_2", None)
+        if parent is None or any(widget is None for widget in (monitor, graph, log_window)):
+            return
+
+        panel = getattr(self, "_process_content_panel", None)
+        if panel is None:
+            widgets = (monitor, graph, log_window)
+            rects = [widget.geometry() for widget in widgets]
+            left = min(int(rect.x()) for rect in rects)
+            top = min(int(rect.y()) for rect in rects)
+            right = max(int(rect.x()) + int(rect.width()) for rect in rects)
+            bottom = max(int(rect.y()) + int(rect.height()) for rect in rects)
+            self._process_content_panel_base = {
+                "x": left,
+                "y": top,
+                "width": right - left,
+                "height": bottom - top,
+                "right_margin": 8,
+                "bottom_margin": 8,
+            }
+            panel = QWidget(parent)
+            panel.setObjectName("processContentPanel")
+            layout = QVBoxLayout(panel)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(8)
+            self._process_content_panel = panel
+        else:
+            layout = panel.layout()
+            if not isinstance(layout, QVBoxLayout):
+                layout = QVBoxLayout(panel)
+                layout.setContentsMargins(0, 0, 0, 0)
+                layout.setSpacing(8)
+
+        for widget in (monitor, graph, log_window):
+            with contextlib.suppress(Exception):
+                widget.setParent(panel)
+
+        while layout.count():
+            item = layout.takeAt(0)
+            child = item.widget()
+            if child is not None:
+                child.hide()
+
+        if isinstance(monitor, QLabel):
+            with contextlib.suppress(Exception):
+                monitor.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        with contextlib.suppress(Exception):
+            graph.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        with contextlib.suppress(Exception):
+            log_window.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.MinimumExpanding)
+
+        layout.addWidget(monitor, 0)
+        layout.addWidget(graph, 5)
+        layout.addWidget(log_window, 2)
+        for widget in (monitor, graph, log_window):
+            with contextlib.suppress(Exception):
+                widget.show()
+
+    def _update_process_content_geometry(self) -> None:
+        panel = getattr(self, "_process_content_panel", None)
+        parent = getattr(self.ui, "page_2", None)
+        base = getattr(self, "_process_content_panel_base", None) or {}
+        if panel is None or parent is None or not base:
+            return
+
+        x = int(base.get("x", 210))
+        y = int(base.get("y", 5))
+        right_margin = max(0, int(base.get("right_margin", 0)))
+        bottom_margin = max(0, int(base.get("bottom_margin", 0)))
+        width = max(760, int(parent.width()) - x - right_margin)
+        height = max(520, int(parent.height()) - y - bottom_margin)
+        panel.setGeometry(x, y, width, height)
+        self._sync_process_content_sizing(height)
+
+    def _sync_process_content_sizing(self, panel_height: int) -> None:
         monitor = getattr(self.ui, "processMonitor_Process", None)
         graph = getattr(self.ui, "graphWidget", None)
         log_window = getattr(self.ui, "logWindow", None)
         if any(widget is None for widget in (monitor, graph, log_window)):
             return
 
+        total_h = max(520, int(panel_height or 0))
+        status_h = max(92, min(122, int(total_h * 0.13)))
+        log_h = max(180, min(250, int(total_h * 0.26)))
+        graph_h = max(220, total_h - status_h - log_h - 16)
+
         with contextlib.suppress(Exception):
-            monitor.setGeometry(210, 5, 891, 56)
+            monitor.setMinimumHeight(status_h)
+            monitor.setMaximumHeight(max(status_h + 16, int(total_h * 0.19)))
         with contextlib.suppress(Exception):
-            graph.setGeometry(209, 68, 891, 413)
+            graph.setMinimumHeight(graph_h)
         with contextlib.suppress(Exception):
-            log_window.setGeometry(210, 490, 891, 191)
+            log_window.setMinimumHeight(log_h)
+            log_window.setMaximumHeight(max(log_h + 24, int(total_h * 0.34)))
 
     def _update_process_action_panel_geometry(self) -> None:
+        if getattr(self, "_process_left_panel", None) is not None:
+            return
         panel = getattr(self, "_process_action_panel", None)
         parent = getattr(self.ui, "page_2", None)
         base = getattr(self, "_process_action_panel_base", None) or {}
@@ -243,19 +492,20 @@ class ProcessWindow(QWidget):
         y = int(base.get("y", 0))
         right_margin = max(0, int(base.get("right_margin", 0)))
         bottom_margin = max(0, int(base.get("bottom_margin", 0)))
-        width = max(int(base.get("width", 191)), page_w - x - right_margin)
+        width = max(180, min(int(base.get("width", 191)), page_w - x - right_margin))
         available_h = max(int(base.get("height", 143)), page_h - y - bottom_margin)
 
         layout = panel.layout()
-        desired_h = int(base.get("height", 143))
+        desired_h = int(base.get("compact_height", base.get("height", 143)))
         if layout is not None:
             with contextlib.suppress(Exception):
                 desired_h = max(desired_h, int(layout.sizeHint().height()) + 10)
 
         panel_h = min(max(desired_h, int(base.get("min_height", desired_h))), available_h)
-        panel.setGeometry(x, y, width, panel_h)
+        anchored_y = max(0, page_h - bottom_margin - panel_h)
+        panel.setGeometry(x, anchored_y, width, panel_h)
 
-    def _setup_recommendation_ui(self) -> None:
+    def _setup_process_action_panel(self) -> None:
         parent = getattr(self.ui, "page_2", None)
         cfg_btn = getattr(self.ui, "processConfigBtn", None)
         recipe_btn = getattr(self.ui, "recipeBtn", None)
@@ -276,55 +526,44 @@ class ProcessWindow(QWidget):
                 "y": top,
                 "width": right - left,
                 "height": bottom - top,
-                "right_margin": max(0, int(parent.width()) - right),
-                "bottom_margin": min(4, max(0, int(parent.height()) - bottom)),
+                "compact_height": 124,
+                "right_margin": 8,
+                "bottom_margin": 8,
                 "page_width": max(1, int(parent.width())),
                 "page_height": max(1, int(parent.height())),
-                "min_height": min(max((bottom - top) + 2, 146), max(146, int(parent.height()) - top)),
+                "min_height": 120,
             }
             panel = QWidget(parent)
             panel.setObjectName("processActionPanel")
             layout = QGridLayout(panel)
-            layout.setContentsMargins(4, 4, 4, 6)
+            layout.setContentsMargins(2, 2, 2, 2)
             layout.setHorizontalSpacing(6)
-            layout.setVerticalSpacing(3)
+            layout.setVerticalSpacing(6)
             self._process_action_panel = panel
         else:
             layout = panel.layout()
             if not isinstance(layout, QGridLayout):
                 layout = QGridLayout(panel)
-                layout.setContentsMargins(4, 4, 4, 6)
+                layout.setContentsMargins(2, 2, 2, 2)
                 layout.setHorizontalSpacing(6)
-                layout.setVerticalSpacing(3)
+                layout.setVerticalSpacing(6)
 
-        btn = getattr(self, "_recommendation_btn", None)
-        if btn is None:
-            btn = QPushButton("Recommend", panel)
-            btn.clicked.connect(self._on_recommendation_clicked)
-            self._recommendation_btn = btn
-
-        backfill_btn = getattr(self, "_history_backfill_btn", None)
-        if backfill_btn is None:
-            backfill_btn = QPushButton("History Rebuild", panel)
-            backfill_btn.clicked.connect(self._on_history_backfill_clicked)
-            self._history_backfill_btn = backfill_btn
-
-        buttons = (cfg_btn, btn, backfill_btn, recipe_btn, start_btn, stop_btn)
+        buttons = (cfg_btn, recipe_btn, start_btn, stop_btn)
         for button in buttons:
             with contextlib.suppress(Exception):
                 button.setParent(panel)
                 button.setAutoDefault(False)
                 button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
-        for action_btn in (cfg_btn, btn, backfill_btn, recipe_btn):
+        for action_btn in (cfg_btn, recipe_btn):
             with contextlib.suppress(Exception):
-                action_btn.setMinimumHeight(30)
-                action_btn.setMaximumHeight(34)
+                action_btn.setMinimumHeight(40)
+                action_btn.setMaximumHeight(44)
 
         for run_btn in (start_btn, stop_btn):
             with contextlib.suppress(Exception):
-                run_btn.setMinimumHeight(36)
-                run_btn.setMaximumHeight(40)
+                run_btn.setMinimumHeight(48)
+                run_btn.setMaximumHeight(54)
 
         while layout.count():
             item = layout.takeAt(0)
@@ -333,11 +572,9 @@ class ProcessWindow(QWidget):
                 child.hide()
 
         layout.addWidget(cfg_btn, 0, 0)
-        layout.addWidget(btn, 0, 1)
-        layout.addWidget(backfill_btn, 1, 0, 1, 2)
-        layout.addWidget(recipe_btn, 2, 0, 1, 2)
-        layout.addWidget(start_btn, 3, 0)
-        layout.addWidget(stop_btn, 3, 1)
+        layout.addWidget(recipe_btn, 0, 1)
+        layout.addWidget(start_btn, 1, 0)
+        layout.addWidget(stop_btn, 1, 1)
         layout.setColumnStretch(0, 1)
         layout.setColumnStretch(1, 1)
 
@@ -1689,17 +1926,13 @@ class ProcessWindow(QWidget):
         }
 
     def _open_process_config_dialog(self) -> None:
-        """
-        ?꾩쭅 ui/process_config_dialog.py 媛 ?녿뜑?쇰룄
-        ?꾨줈洹몃옩??諛붾줈 二쎌? ?딄쾶 lazy import 濡?泥섎━?쒕떎.
-        """
         try:
             from ui.process_config_dialog import ProcessConfigDialog
         except Exception as e:
             QMessageBox.warning(
                 self,
                 "Process Config",
-                f"Process Config dialog import ?ㅽ뙣:\n{e!r}"
+                f"Process Config dialog import failed:\n{e!r}"
             )
             self._append_process_log(f"[CFG][ERR] dialog import failed: {e!r}")
             return
@@ -1720,93 +1953,135 @@ class ProcessWindow(QWidget):
         self._clear_recommendation_runtime_overrides()
         self._apply_process_config(new_cfg, log_prefix="[CFG] Process config updated |")
 
-    def _on_recommendation_clicked(self) -> None:
-        if self._recommendation_service is None or not hasattr(self._recommendation_service, "recommend"):
-            QMessageBox.information(self, "Recommendation", "Recommendation service is not available.")
+    def _open_process_recipe_dialog(self) -> None:
+        try:
+            from ui.process_recipe_dialog import ProcessRecipeDialog
+        except Exception as exc:
+            QMessageBox.warning(self, "Recipe", f"Recipe dialog import failed:\n{exc!r}")
+            self._append_process_log(f"[RECIPE][ERR] dialog import failed: {exc!r}")
             return
 
-        run_cfg = self._collect_ui_run_cfg(require_process_name=False)
-        if run_cfg is None:
+        dlg = ProcessRecipeDialog(
+            initial_config=dict(self._process_cfg),
+            recommend_callback=self._request_recommendation_for_config,
+            history_callback=self._run_history_rebuild,
+            runtime_overrides=self._recommended_runtime_overrides,
+            runtime_signature=self._recommended_runtime_signature,
+            parent=self,
+        )
+        if not dlg.exec():
             return
+
+        self._apply_process_config(dlg.get_config(), log_prefix="[RECIPE] Recipe updated |")
+        self._last_recommendation = dlg.last_recommendation()
+        runtime_overrides = dlg.recommended_runtime_overrides()
+        runtime_signature = dlg.recommended_runtime_signature()
+        if runtime_overrides and runtime_signature:
+            self._recommended_runtime_overrides = dict(runtime_overrides)
+            self._recommended_runtime_signature = dict(runtime_signature)
+        else:
+            self._clear_recommendation_runtime_overrides()
+
+    def _request_recommendation_for_config(
+        self,
+        process_config: dict[str, Any],
+        parent: Optional[QWidget] = None,
+    ) -> Optional[dict[str, Any]]:
+        owner = parent or self
+        if self._recommendation_service is None or not hasattr(self._recommendation_service, "recommend"):
+            QMessageBox.information(owner, "Recommendation", "Recommendation service is not available.")
+            return None
+
+        run_cfg = self._collect_ui_run_cfg(require_process_name=False, process_cfg_override=process_config)
+        if run_cfg is None:
+            return None
 
         try:
             run_profile = self._build_run_profile(run_cfg)
         except Exception as exc:
-            QMessageBox.warning(self, "Recommendation", f"Run profile build failed:\n{exc!r}")
-            return
+            QMessageBox.warning(owner, "Recommendation", f"Run profile build failed:\n{exc!r}")
+            return None
 
         if not run_profile:
-            QMessageBox.warning(self, "Recommendation", "Run profile is not available.")
-            return
+            QMessageBox.warning(owner, "Recommendation", "Run profile is not available.")
+            return None
 
         try:
             recommendation = self._recommendation_service.recommend(run_profile)
         except Exception as exc:
-            QMessageBox.warning(self, "Recommendation", f"Recommendation query failed:\n{exc!r}")
+            QMessageBox.warning(owner, "Recommendation", f"Recommendation query failed:\n{exc!r}")
             self._append_process_log(f"[RECO][ERR] query failed: {exc!r}")
-            return
+            return None
 
         if not recommendation:
             self._append_process_log("[RECO] no recommendation data")
-            QMessageBox.information(self, "Recommendation", "추천 데이터가 없습니다.")
-            return
+            QMessageBox.information(owner, "Recommendation", "추천 데이터가 없습니다.")
+            return None
 
         try:
             from ui.history_recommendation_dialog import HistoryRecommendationDialog
         except Exception as exc:
-            QMessageBox.warning(self, "Recommendation", f"Dialog import failed:\n{exc!r}")
-            return
+            QMessageBox.warning(owner, "Recommendation", f"Dialog import failed:\n{exc!r}")
+            return None
 
-        dlg = HistoryRecommendationDialog(recommendation=recommendation, parent=self)
+        dlg = HistoryRecommendationDialog(recommendation=recommendation, parent=owner)
         if not dlg.exec():
-            return
+            return None
 
         if not dlg.applied():
             self._append_process_log("[RECO] recommendation viewed without apply")
-            return
+            return None
 
         recommended_cfg = dlg.recommended_process_config()
         if not recommended_cfg:
-            QMessageBox.warning(self, "Recommendation", "Recommended config is empty.")
-            return
+            QMessageBox.warning(owner, "Recommendation", "Recommended config is empty.")
+            return None
 
         runtime_overrides = dlg.recommended_runtime_overrides()
-        self._last_recommendation = dict(recommendation)
-        self._recommended_runtime_signature = self._build_recommendation_signature(run_cfg)
-        self._recommended_runtime_overrides = dict(runtime_overrides or {})
-        self._apply_process_config(recommended_cfg, log_prefix="[RECO] Applied recommendation |")
+        signature = self._build_recommendation_signature(run_cfg)
+        payload = {
+            "process_config": self._normalize_process_config(recommended_cfg),
+            "runtime_overrides": dict(runtime_overrides or {}),
+            "signature": signature,
+            "recommendation": dict(recommendation),
+        }
 
-        if self._recommended_runtime_overrides:
-            initial_dac = self._recommended_runtime_overrides.get("initial_dac")
+        overrides = payload["runtime_overrides"]
+        if overrides:
+            initial_dac = overrides.get("initial_dac")
             if initial_dac is not None:
                 self._append_process_log(f"[RECO] start DAC override prepared -> {initial_dac}")
+        self._append_process_log("[RECO] recommendation prepared for recipe apply")
+        return payload
 
-    # ================== 洹몃옒???ㅼ젙 ==================
-    def _on_history_backfill_clicked(self) -> None:
+    def _run_history_rebuild(self, parent: Optional[QWidget] = None) -> Optional[dict[str, Any]]:
+        owner = parent or self
         svc = self._run_summary_service
         if svc is None or not hasattr(svc, "backfill_history"):
-            QMessageBox.information(self, "History Rebuild", "History rebuild service is not available.")
-            return
+            QMessageBox.information(owner, "History Rebuild", "History rebuild service is not available.")
+            return None
 
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             result = dict(svc.backfill_history() or {})
         except Exception as exc:
-            QMessageBox.warning(self, "History Rebuild", f"History rebuild failed:\n{exc!r}")
+            QMessageBox.warning(owner, "History Rebuild", f"History rebuild failed:\n{exc!r}")
             self._append_process_log(f"[HISTORY][ERR] rebuild failed: {exc!r}")
-            return
+            return None
         finally:
             QApplication.restoreOverrideCursor()
 
         scanned = int(result.get("scanned", 0) or 0)
+        unchanged_skipped = int(result.get("unchanged_skipped", result.get("skipped", 0)) or 0)
+        changed = int(result.get("changed", 0) or 0)
         stored = int(result.get("stored", 0) or 0)
         updated = int(result.get("updated", 0) or 0)
-        skipped = int(result.get("skipped", 0) or 0)
         failed = int(result.get("failed", 0) or 0)
 
         self._append_process_log(
-            "[HISTORY] rebuild complete | "
-            f"scanned={scanned} | stored={stored} | updated={updated} | skipped={skipped} | failed={failed}"
+            "[HISTORY] sync complete | "
+            f"scanned={scanned} | unchanged={unchanged_skipped} | changed={changed} | "
+            f"stored={stored} | updated={updated} | failed={failed}"
         )
 
         errors = list(result.get("errors") or [])
@@ -1815,15 +2090,17 @@ class ProcessWindow(QWidget):
             detail = "\n\nErrors:\n" + "\n".join(str(err) for err in errors[:10])
 
         QMessageBox.information(
-            self,
+            owner,
             "History Rebuild",
-            "History rebuild completed.\n"
+            "History sync completed.\n"
             f"scanned={scanned}\n"
+            f"unchanged_skipped={unchanged_skipped}\n"
+            f"changed={changed}\n"
             f"stored={stored}\n"
             f"updated={updated}\n"
-            f"skipped={skipped}\n"
             f"failed={failed}{detail}",
         )
+        return result
 
     def _init_rt_plot(self) -> None:
         """ui.graphWidget ?먮━??DepositionPlotWidget???쎌엯"""
@@ -2201,7 +2478,12 @@ class ProcessWindow(QWidget):
         except Exception:
             return None
 
-    def _collect_ui_run_cfg(self, *, require_process_name: bool = True) -> Optional[dict[str, Any]]:
+    def _collect_ui_run_cfg(
+        self,
+        *,
+        require_process_name: bool = True,
+        process_cfg_override: Optional[dict[str, Any]] = None,
+    ) -> Optional[dict[str, Any]]:
         # ??Power ?좏깮: 1媛??먮뒗 2媛??덉슜
         p1 = bool(getattr(getattr(self.ui, "sourcePower1", None), "isChecked", lambda: False)())
         p2 = bool(getattr(getattr(self.ui, "sourcePower2", None), "isChecked", lambda: False)())
@@ -2326,7 +2608,9 @@ class ProcessWindow(QWidget):
             QMessageBox.warning(self, "Input", "Process Name을 입력해 주세요.")
             return None
 
-        proc_cfg = self._normalize_process_config(getattr(self, "_process_cfg", None))
+        proc_cfg = self._normalize_process_config(
+            process_cfg_override if process_cfg_override is not None else getattr(self, "_process_cfg", None)
+        )
         steps = proc_cfg.get("ramp_steps") or []
         if not steps:
             QMessageBox.warning(self, "Input", "Process Config의 step이 비어 있습니다.")

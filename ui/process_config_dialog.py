@@ -6,17 +6,14 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QWheelEvent
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
-    QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
     QFormLayout,
-    QFrame,
     QGroupBox,
-    QHBoxLayout,
     QLabel,
     QMessageBox,
-    QPushButton,
     QScrollArea,
     QSpinBox,
     QVBoxLayout,
@@ -24,33 +21,24 @@ from PySide6.QtWidgets import (
 )
 
 
-MAX_STEPS = 10
-MIN_STEPS = 1
-_STEP_LABEL_W = 55
-_STEP_CHECK_W = 55
-_STEP_TARGET_W = 120
-_STEP_DAC_W = 100
-_STEP_INTERVAL_W = 100
-_STEP_HOLD_W = 100
-
-
 PROCESS_CONFIG_TOOLTIPS = {
-    "step_enabled": "체크된 step만 공정 상승 구간에 사용합니다.",
-    "target_adc": "이 step에서 도달하려는 ADC 피드백 목표값입니다. 상승 중 dep.rate가 먼저 안정 도달하면 남은 step은 건너뛰고 hold 단계로 넘어갑니다.",
-    "dac_step": "DAC를 한 번 증가시킬 때 더하는 값입니다.",
-    "interval": "DAC를 증가시키는 주기(초)입니다.",
-    "hold": "Target ADC 도달 후 dep.rate 안정 여부를 추가로 관찰하는 시간입니다. 이 시간 안에 dep.rate가 안정 도달하면 hold 단계로 넘어갑니다.",
-
-    "rate_tol_ratio": "목표 dep.rate 허용 오차 비율입니다. 예: 0.05 = ±5%",
-    "rate_stable_sec": "dep.rate가 허용 오차 범위 안에 이 시간 이상 유지되면 '안정 도달'로 판정합니다.",
-    "hold_control_interval_s": "hold 단계에서 DAC를 조정하는 주기(초)입니다.",
-    "fine_step_dac": "hold 단계에서 dep.rate를 맞추기 위해 한 번에 증감하는 DAC 값입니다.",
-
-    "dac_max": "공정 중 허용하는 최대 DAC 값입니다.",
-    "rate_abort_ratio": "hold 단계에서 dep.rate가 목표값의 이 비율 이하로 떨어지면 저하 상태로 판단합니다. 예: 0.30 = 목표의 30% 이하",
-    "rate_abort_sec": "dep.rate 저하 상태가 이 시간 이상 지속되면 abort 처리합니다.",
-    "sensor_none_abort_s": "rate/thickness 센서값이 None인 상태를 허용하는 최대 시간입니다.",
-    "adc_none_abort_s": "ADC 피드백이 None인 상태를 허용하는 최대 시간입니다.",
+    "dac_max": "Maximum DAC value allowed during the process.",
+    "rate_tol_ratio": "Allowed target-rate tolerance ratio used for stable-rate 판단.",
+    "rate_stable_sec": "Time that dep.rate must stay within tolerance before stable is reached.",
+    "hold_control_interval_s": "DAC update interval used during hold control.",
+    "fine_step_dac": "Fallback/manual hold adjustment step and default DAC delta limit basis.",
+    "hold_control_mode": "Hold control mode. PI is the default V3 path, STEP remains as a safe fallback.",
+    "hold_pi_kp": "Proportional gain for hold PI control.",
+    "hold_pi_ki": "Integral gain for hold PI control.",
+    "hold_integral_limit": "Absolute clamp applied to the hold PI integral term.",
+    "rate_filter_alpha": "EMA alpha used for filtered dep.rate in hold control.",
+    "rate_jump_guard_ratio": "Relative jump guard for filtered rate input.",
+    "rate_jump_guard_abs": "Absolute jump guard for filtered rate input.",
+    "hold_max_dac_delta": "Maximum DAC change allowed per hold-control update.",
+    "rate_abort_ratio": "Abort when raw dep.rate stays below this ratio of target rate.",
+    "rate_abort_sec": "Seconds that low-rate abort condition must persist.",
+    "sensor_none_abort_s": "Allowed duration for missing STM rate/thickness before abort.",
+    "adc_none_abort_s": "Allowed duration for missing ADC feedback before abort.",
 }
 
 
@@ -65,44 +53,20 @@ class _NoWheelSpinBox(QSpinBox):
 
 
 class ProcessConfigDialog(QDialog):
-    """
-    Evaporator process config dialog.
-
-    구성:
-    - 단일 페이지 UI
-    - Step Settings:
-    step 추가/삭제, Target ADC, DAC step, Interval, Hold 입력
-    - Hold Rate:
-    dep.rate 유지용 공통 파라미터 입력
-    - Safety:
-    abort / 최대 DAC / 센서 timeout 파라미터 입력
-
-    역할:
-    - 1단계 상승용 step 입력
-    - 2단계 유지용 제어/안전 파라미터 입력
-    - 3단계 하강은 별도 입력 없이 safety 시퀀스 사용
-    """
-
-    def __init__(self, initial_config: dict[str, Any] | None = None, parent: QWidget | None = None):
+    def __init__(self, initial_config: Optional[dict[str, Any]] = None, parent: Optional[QWidget] = None):
         super().__init__(parent)
         self.setWindowTitle("Process Config")
         self.setModal(True)
-        self.resize(1100, 640)
-        self.setMinimumSize(900, 560)
+        self.resize(620, 620)
+        self.setMinimumSize(560, 520)
 
         self._initial_config = self._normalize_config(initial_config or self._default_config())
-        self._active_step: Optional[int] = None
-        self._step_rows: list[dict[str, Any]] = []
 
         self._build_ui()
         self._load_config(self._initial_config)
 
-    # =========================================================
-    # defaults / normalize
-    # =========================================================
     @staticmethod
     def _default_step() -> dict[str, Any]:
-        """EvapStep 하나의 기본값."""
         return {
             "target_adc": 100.0,
             "dac_step": 10,
@@ -119,6 +83,14 @@ class ProcessConfigDialog(QDialog):
             "rate_stable_sec": 3.0,
             "hold_control_interval_s": 1.0,
             "fine_step_dac": 10,
+            "hold_control_mode": "PI",
+            "hold_pi_kp": 50.0,
+            "hold_pi_ki": 8.0,
+            "hold_integral_limit": 2.5,
+            "rate_filter_alpha": 0.35,
+            "rate_jump_guard_ratio": 0.50,
+            "rate_jump_guard_abs": 0.15,
+            "hold_max_dac_delta": 10,
             "rate_abort_ratio": 0.30,
             "rate_abort_sec": 5.0,
             "sensor_none_abort_s": 5.0,
@@ -126,67 +98,68 @@ class ProcessConfigDialog(QDialog):
         }
 
     def _normalize_config(self, cfg: dict[str, Any]) -> dict[str, Any]:
-        def _as_int(name: str, default_val: int, min_v: int | None = None, max_v: int | None = None) -> int:
-            try:
-                v = int(src.get(name, default_val))
-            except Exception:
-                v = int(default_val)
-            if min_v is not None:
-                v = max(min_v, v)
-            if max_v is not None:
-                v = min(max_v, v)
-            return v
-
-        def _as_float(name: str, default_val: float, min_v: float | None = None, max_v: float | None = None) -> float:
-            try:
-                v = float(src.get(name, default_val))
-            except Exception:
-                v = float(default_val)
-            if min_v is not None:
-                v = max(min_v, v)
-            if max_v is not None:
-                v = min(max_v, v)
-            return v
-
         src = dict(cfg or {})
         default = self._default_config()
 
-        raw_steps = src.get("ramp_steps") or src.get("steps") or default["ramp_steps"]
-        steps: list[dict[str, Any]] = []
-
-        for item in list(raw_steps)[: MAX_STEPS]:
-            item = dict(item or {})
+        def _as_int(name: str, default_val: int, min_v: int | None = None, max_v: int | None = None) -> int:
             try:
-                target_adc = max(0.0, float(item.get("target_adc", 0.0)))
+                value = int(src.get(name, default_val))
+            except Exception:
+                value = int(default_val)
+            if min_v is not None:
+                value = max(min_v, value)
+            if max_v is not None:
+                value = min(max_v, value)
+            return value
+
+        def _as_float(name: str, default_val: float, min_v: float | None = None, max_v: float | None = None) -> float:
+            try:
+                value = float(src.get(name, default_val))
+            except Exception:
+                value = float(default_val)
+            if min_v is not None:
+                value = max(min_v, value)
+            if max_v is not None:
+                value = min(max_v, value)
+            return value
+
+        raw_steps = src.get("ramp_steps") or default["ramp_steps"]
+        steps: list[dict[str, Any]] = []
+        for item in list(raw_steps)[:10]:
+            row = dict(item or {})
+            try:
+                target_adc = max(0.0, float(row.get("target_adc", 0.0)))
             except Exception:
                 target_adc = 0.0
             try:
-                dac_step = max(1, int(item.get("dac_step", 10)))
+                dac_step = max(1, int(row.get("dac_step", 10)))
             except Exception:
                 dac_step = 10
             try:
-                dac_interval = max(0.1, float(item.get("dac_interval_sec", 30.0)))
+                dac_interval_sec = max(0.1, float(row.get("dac_interval_sec", 30.0)))
             except Exception:
-                dac_interval = 30.0
-
+                dac_interval_sec = 30.0
             try:
-                legacy_hold = float(item.get("hold_sec", item.get("rate_wait_sec", item.get("delay_s", 0.0))))
+                hold_sec = max(0.0, float(row.get("hold_sec", row.get("delay_s", 0.0))))
             except Exception:
-                legacy_hold = 0.0
-
-            steps.append({
-                "target_adc": target_adc,
-                "dac_step": dac_step,
-                "dac_interval_sec": dac_interval,
-                "hold_sec": max(0.0, legacy_hold),
-            })
-
+                hold_sec = 0.0
+            steps.append(
+                {
+                    "target_adc": target_adc,
+                    "dac_step": dac_step,
+                    "dac_interval_sec": dac_interval_sec,
+                    "hold_sec": hold_sec,
+                }
+            )
         if not steps:
             steps = [self._default_step()]
 
-        step_count = len(steps)
-        step_count = max(MIN_STEPS, min(MAX_STEPS, step_count))
-        steps = steps[:step_count]
+        fine_step_dac = _as_int("fine_step_dac", 10, 1)
+        hold_max_dac_delta = _as_int("hold_max_dac_delta", fine_step_dac, 1)
+        hold_pi_ki = _as_float("hold_pi_ki", max(0.0, hold_max_dac_delta * 0.8), 0.0)
+        hold_control_mode = str(src.get("hold_control_mode", default["hold_control_mode"]) or "").strip().upper() or "PI"
+        if hold_control_mode not in {"PI", "STEP"}:
+            hold_control_mode = "PI"
 
         return {
             "step_count": len(steps),
@@ -195,20 +168,33 @@ class ProcessConfigDialog(QDialog):
             "rate_tol_ratio": _as_float("rate_tol_ratio", 0.05, 0.001, 1.0),
             "rate_stable_sec": _as_float("rate_stable_sec", 3.0, 0.0),
             "hold_control_interval_s": _as_float("hold_control_interval_s", 1.0, 0.1),
-            "fine_step_dac": _as_int("fine_step_dac", 10, 1),
+            "fine_step_dac": fine_step_dac,
+            "hold_control_mode": hold_control_mode,
+            "hold_pi_kp": _as_float("hold_pi_kp", max(1.0, hold_max_dac_delta * 5.0), 0.0),
+            "hold_pi_ki": hold_pi_ki,
+            "hold_integral_limit": _as_float(
+                "hold_integral_limit",
+                max(1.0, (2.0 * hold_max_dac_delta) / max(hold_pi_ki, 1e-6)),
+                0.1,
+            ),
+            "rate_filter_alpha": _as_float("rate_filter_alpha", 0.35, 0.01, 1.0),
+            "rate_jump_guard_ratio": _as_float("rate_jump_guard_ratio", 0.50, 0.0),
+            "rate_jump_guard_abs": _as_float("rate_jump_guard_abs", 0.15, 0.0),
+            "hold_max_dac_delta": hold_max_dac_delta,
             "rate_abort_ratio": _as_float("rate_abort_ratio", 0.30, 0.001, 1.0),
             "rate_abort_sec": _as_float("rate_abort_sec", 5.0, 0.0),
             "sensor_none_abort_s": _as_float("sensor_none_abort_s", 5.0, 0.0),
             "adc_none_abort_s": _as_float("adc_none_abort_s", 5.0, 0.0),
         }
 
-    # =========================================================
-    # UI build
-    # =========================================================
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(8)
+
+        info = QLabel("Config edits hold-control, filter, and safety parameters. Ramp-step recipe editing moved to Recipe.")
+        info.setWordWrap(True)
+        root.addWidget(info)
 
         scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
@@ -216,134 +202,59 @@ class ProcessConfigDialog(QDialog):
 
         body = QWidget(scroll)
         body_root = QVBoxLayout(body)
-        body_root.setContentsMargins(6, 6, 6, 6)
+        body_root.setContentsMargins(4, 4, 4, 4)
         body_root.setSpacing(10)
         scroll.setWidget(body)
 
-        # -----------------------------
-        # Step Settings
-        # -----------------------------
-        step_box = QGroupBox("Step Settings")
-        step_box_layout = QVBoxLayout(step_box)
-        step_box_layout.setSpacing(8)
-
-        top_bar = QHBoxLayout()
-        self.stepCountLabel = QLabel("")
-        self.addStepBtn = QPushButton("+ Step", step_box)
-        self.removeStepBtn = QPushButton("- Step", step_box)
-        self.addStepBtn.clicked.connect(self._add_step_row_ui)
-        self.removeStepBtn.clicked.connect(self._remove_last_step_row_ui)
-
-        top_bar.addWidget(QLabel("공정 상승 step을 추가/삭제할 수 있습니다."))
-        top_bar.addStretch(1)
-        top_bar.addWidget(self.stepCountLabel)
-        top_bar.addWidget(self.removeStepBtn)
-        top_bar.addWidget(self.addStepBtn)
-
-        step_box_layout.addLayout(top_bar)
-
-        # 헤더 행
-        header = QWidget(self)
-        header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(10, 0, 10, 0)
-        header_layout.setSpacing(8)
-
-        lbl_step = QLabel("Step")
-        lbl_step.setFixedWidth(_STEP_LABEL_W)
-
-        lbl_enabled = QLabel("활성화")
-        lbl_enabled.setFixedWidth(_STEP_CHECK_W)
-        lbl_enabled.setToolTip(PROCESS_CONFIG_TOOLTIPS["step_enabled"])
-
-        lbl_target = QLabel("Target ADC")
-        lbl_target.setFixedWidth(_STEP_TARGET_W)
-        lbl_target.setToolTip(PROCESS_CONFIG_TOOLTIPS["target_adc"])
-
-        lbl_dac = QLabel("DAC step")
-        lbl_dac.setFixedWidth(_STEP_DAC_W)
-        lbl_dac.setToolTip(PROCESS_CONFIG_TOOLTIPS["dac_step"])
-
-        lbl_interval = QLabel("Interval(s)")
-        lbl_interval.setFixedWidth(_STEP_INTERVAL_W)
-        lbl_interval.setToolTip(PROCESS_CONFIG_TOOLTIPS["interval"])
-
-        lbl_hold = QLabel("Hold(s)")
-        lbl_hold.setFixedWidth(_STEP_HOLD_W)
-        lbl_hold.setToolTip(PROCESS_CONFIG_TOOLTIPS["hold"])
-
-        for w in (lbl_step, lbl_enabled, lbl_target, lbl_dac, lbl_interval, lbl_hold):
-            header_layout.addWidget(w)
-        header_layout.addStretch(1)
-
-        step_box_layout.addWidget(header)
-
-        # 동적 row 컨테이너
-        self.stepRowsContainer = QWidget(self)
-        self.stepRowsLayout = QVBoxLayout(self.stepRowsContainer)
-        self.stepRowsLayout.setContentsMargins(0, 0, 0, 0)
-        self.stepRowsLayout.setSpacing(6)
-        step_box_layout.addWidget(self.stepRowsContainer)
-
-        body_root.addWidget(step_box)
-
-        # -----------------------------
-        # Hold Rate
-        # -----------------------------
-        hold_box = QGroupBox("Hold Rate")
+        hold_box = QGroupBox("Hold Control")
         hold_form = QFormLayout(hold_box)
-
+        self.holdControlModeCombo = QComboBox(self)
+        self.holdControlModeCombo.addItems(["PI", "STEP"])
         self.rateTolRatioSpin = self._make_double_spin(0.001, 1.0, step=0.01, decimals=3)
         self.rateStableSecSpin = self._make_double_spin(0.0, 60.0, step=0.5, decimals=1)
         self.holdControlIntervalSpin = self._make_double_spin(0.1, 60.0, step=0.5, decimals=1)
         self.fineStepDacSpin = self._make_int_spin(1, 1000, step=1)
+        self.holdMaxDacDeltaSpin = self._make_int_spin(1, 1000, step=1)
+        self.holdPiKpSpin = self._make_double_spin(0.0, 9999.0, step=1.0, decimals=3)
+        self.holdPiKiSpin = self._make_double_spin(0.0, 9999.0, step=0.1, decimals=3)
+        self.holdIntegralLimitSpin = self._make_double_spin(0.1, 9999.0, step=0.1, decimals=3)
 
-        self._add_form_row_with_tooltip(
-            hold_form, "Rate Tolerance Ratio", self.rateTolRatioSpin, PROCESS_CONFIG_TOOLTIPS["rate_tol_ratio"]
-        )
-        self._add_form_row_with_tooltip(
-            hold_form, "Rate Stable Sec", self.rateStableSecSpin, PROCESS_CONFIG_TOOLTIPS["rate_stable_sec"]
-        )
-        self._add_form_row_with_tooltip(
-            hold_form, "Control Interval (s)", self.holdControlIntervalSpin, PROCESS_CONFIG_TOOLTIPS["hold_control_interval_s"]
-        )
-        self._add_form_row_with_tooltip(
-            hold_form, "Fine Step DAC", self.fineStepDacSpin, PROCESS_CONFIG_TOOLTIPS["fine_step_dac"]
-        )
-
+        self._add_form_row(hold_form, "Control Mode", self.holdControlModeCombo, "hold_control_mode")
+        self._add_form_row(hold_form, "Rate Tolerance Ratio", self.rateTolRatioSpin, "rate_tol_ratio")
+        self._add_form_row(hold_form, "Rate Stable Sec", self.rateStableSecSpin, "rate_stable_sec")
+        self._add_form_row(hold_form, "Control Interval (s)", self.holdControlIntervalSpin, "hold_control_interval_s")
+        self._add_form_row(hold_form, "Fine Step DAC", self.fineStepDacSpin, "fine_step_dac")
+        self._add_form_row(hold_form, "Max DAC Delta / Update", self.holdMaxDacDeltaSpin, "hold_max_dac_delta")
+        self._add_form_row(hold_form, "PI Kp", self.holdPiKpSpin, "hold_pi_kp")
+        self._add_form_row(hold_form, "PI Ki", self.holdPiKiSpin, "hold_pi_ki")
+        self._add_form_row(hold_form, "Integral Limit", self.holdIntegralLimitSpin, "hold_integral_limit")
         body_root.addWidget(hold_box)
 
-        # -----------------------------
-        # Safety
-        # -----------------------------
-        safety_box = QGroupBox("Safety")
-        safety_form = QFormLayout(safety_box)
+        filter_box = QGroupBox("Filter / Guard")
+        filter_form = QFormLayout(filter_box)
+        self.rateFilterAlphaSpin = self._make_double_spin(0.01, 1.0, step=0.01, decimals=3)
+        self.rateJumpGuardRatioSpin = self._make_double_spin(0.0, 10.0, step=0.05, decimals=3)
+        self.rateJumpGuardAbsSpin = self._make_double_spin(0.0, 10.0, step=0.01, decimals=3)
+        self._add_form_row(filter_form, "Rate Filter Alpha", self.rateFilterAlphaSpin, "rate_filter_alpha")
+        self._add_form_row(filter_form, "Rate Jump Guard Ratio", self.rateJumpGuardRatioSpin, "rate_jump_guard_ratio")
+        self._add_form_row(filter_form, "Rate Jump Guard Abs", self.rateJumpGuardAbsSpin, "rate_jump_guard_abs")
+        body_root.addWidget(filter_box)
 
+        safety_box = QGroupBox("Safety / Abort")
+        safety_form = QFormLayout(safety_box)
         self.dacMaxSpin = self._make_int_spin(1, 9999, step=10)
         self.rateAbortRatioSpin = self._make_double_spin(0.001, 1.0, step=0.01, decimals=3)
         self.rateAbortSecSpin = self._make_double_spin(0.0, 99999.0, step=1.0, decimals=1)
         self.sensorNoneAbortSpin = self._make_double_spin(0.0, 99999.0, step=1.0, decimals=1)
         self.adcNoneAbortSpin = self._make_double_spin(0.0, 99999.0, step=1.0, decimals=1)
-
-        self._add_form_row_with_tooltip(
-            safety_form, "Max DAC", self.dacMaxSpin, PROCESS_CONFIG_TOOLTIPS["dac_max"]
-        )
-        self._add_form_row_with_tooltip(
-            safety_form, "Rate Abort Ratio", self.rateAbortRatioSpin, PROCESS_CONFIG_TOOLTIPS["rate_abort_ratio"]
-        )
-        self._add_form_row_with_tooltip(
-            safety_form, "Rate Abort Sec", self.rateAbortSecSpin, PROCESS_CONFIG_TOOLTIPS["rate_abort_sec"]
-        )
-        self._add_form_row_with_tooltip(
-            safety_form, "Sensor None Abort (s)", self.sensorNoneAbortSpin, PROCESS_CONFIG_TOOLTIPS["sensor_none_abort_s"]
-        )
-        self._add_form_row_with_tooltip(
-            safety_form, "ADC None Abort (s)", self.adcNoneAbortSpin, PROCESS_CONFIG_TOOLTIPS["adc_none_abort_s"]
-        )
-
+        self._add_form_row(safety_form, "Max DAC", self.dacMaxSpin, "dac_max")
+        self._add_form_row(safety_form, "Rate Abort Ratio", self.rateAbortRatioSpin, "rate_abort_ratio")
+        self._add_form_row(safety_form, "Rate Abort Sec", self.rateAbortSecSpin, "rate_abort_sec")
+        self._add_form_row(safety_form, "Sensor None Abort (s)", self.sensorNoneAbortSpin, "sensor_none_abort_s")
+        self._add_form_row(safety_form, "ADC None Abort (s)", self.adcNoneAbortSpin, "adc_none_abort_s")
         body_root.addWidget(safety_box)
         body_root.addStretch(1)
 
-        # 하단 버튼
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
             parent=self,
@@ -352,335 +263,109 @@ class ProcessConfigDialog(QDialog):
         buttons.rejected.connect(self.reject)
         root.addWidget(buttons)
 
-    def _add_form_row_with_tooltip(self, form: QFormLayout, label_text: str, widget: QWidget, tooltip: str) -> None:
-        lbl = QLabel(label_text, self)
-        lbl.setToolTip(tooltip)
+    def _add_form_row(self, form: QFormLayout, label_text: str, widget: QWidget, tooltip_key: str) -> None:
+        label = QLabel(label_text, self)
+        tooltip = PROCESS_CONFIG_TOOLTIPS[tooltip_key]
+        label.setToolTip(tooltip)
         widget.setToolTip(tooltip)
-        form.addRow(lbl, widget)
-
-    def _set_step_widget_tooltips(
-        self,
-        *,
-        lbl_step: QLabel,
-        chk: QCheckBox,
-        target_adc: QDoubleSpinBox,
-        dac_step: QSpinBox,
-        interval: QDoubleSpinBox,
-        hold: QDoubleSpinBox,
-    ) -> None:
-        lbl_step.setToolTip("공정 상승 step 번호입니다.")
-        chk.setToolTip(PROCESS_CONFIG_TOOLTIPS["step_enabled"])
-        target_adc.setToolTip(PROCESS_CONFIG_TOOLTIPS["target_adc"])
-        dac_step.setToolTip(PROCESS_CONFIG_TOOLTIPS["dac_step"])
-        interval.setToolTip(PROCESS_CONFIG_TOOLTIPS["interval"])
-        hold.setToolTip(PROCESS_CONFIG_TOOLTIPS["hold"])
-
-    def _add_step_row_ui(self, step_data: dict[str, Any] | None = None) -> None:
-        if len(self._step_rows) >= MAX_STEPS:
-            return
-
-        step_data = dict(step_data or self._default_step())
-
-        frame = QFrame(self.stepRowsContainer)
-        frame.setFrameShape(QFrame.Shape.NoFrame)
-        frame.setStyleSheet(
-            "QFrame { background: #ffffff; border: 1px solid #d9d9d9; border-radius: 8px; }"
-        )
-
-        row_layout = QHBoxLayout(frame)
-        row_layout.setContentsMargins(10, 8, 10, 8)
-        row_layout.setSpacing(8)
-
-        lbl_step = QLabel("", frame)
-        lbl_step.setFixedWidth(_STEP_LABEL_W)
-
-        chk_wrap = QWidget(frame)
-        chk_wrap.setFixedWidth(_STEP_CHECK_W)
-        chk_wrap_layout = QHBoxLayout(chk_wrap)
-        chk_wrap_layout.setContentsMargins(0, 0, 0, 0)
-        chk_wrap_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        chk = QCheckBox(frame)
-        chk_wrap_layout.addWidget(chk)
-
-        target_adc = self._make_double_spin(0.0, 9999.0, step=10.0)
-        target_adc.setFixedWidth(_STEP_TARGET_W)
-
-        dac_step = self._make_int_spin(1, 9999, step=5)
-        dac_step.setFixedWidth(_STEP_DAC_W)
-
-        interval = self._make_double_spin(0.1, 9999.0, step=1.0, decimals=1)
-        interval.setFixedWidth(_STEP_INTERVAL_W)
-
-        hold = self._make_double_spin(0.0, 9999.0, step=1.0, decimals=1)
-        hold.setFixedWidth(_STEP_HOLD_W)
-
-        target_adc.setValue(float(step_data.get("target_adc", 100.0)))
-        dac_step.setValue(int(step_data.get("dac_step", 10)))
-        interval.setValue(float(step_data.get("dac_interval_sec", 30.0)))
-        hold.setValue(float(step_data.get("hold_sec", step_data.get("rate_wait_sec", step_data.get("delay_s", 0.0)))))
-
-        self._set_step_widget_tooltips(
-            lbl_step=lbl_step,
-            chk=chk,
-            target_adc=target_adc,
-            dac_step=dac_step,
-            interval=interval,
-            hold=hold,
-        )
-
-        row_info = {
-            "frame": frame,
-            "label": lbl_step,
-            "enabled": chk,
-            "target_adc": target_adc,
-            "dac_step": dac_step,
-            "interval": interval,
-            "hold": hold,
-        }
-
-        chk.stateChanged.connect(lambda _s, info=row_info: self._on_step_enabled_changed(info))
-
-        row_layout.addWidget(lbl_step)
-        row_layout.addWidget(chk_wrap)
-        row_layout.addWidget(target_adc)
-        row_layout.addWidget(dac_step)
-        row_layout.addWidget(interval)
-        row_layout.addWidget(hold)
-        row_layout.addStretch(1)
-
-        self.stepRowsLayout.addWidget(frame)
-        self._step_rows.append(row_info)
-
-        chk.setChecked(True)
-        self._refresh_step_row_labels()
-        self._sync_step_buttons()
-        self._refresh_all_step_row_styles()
-
-
-    def _remove_last_step_row_ui(self) -> None:
-        if len(self._step_rows) <= MIN_STEPS:
-            return
-
-        row_info = self._step_rows.pop()
-        frame = row_info["frame"]
-        self.stepRowsLayout.removeWidget(frame)
-        frame.deleteLater()
-
-        if self._active_step is not None and self._active_step >= len(self._step_rows):
-            self._active_step = None
-
-        self._refresh_step_row_labels()
-        self._sync_step_buttons()
-        self._refresh_all_step_row_styles()
-
-
-    def _clear_step_rows(self) -> None:
-        while self._step_rows:
-            row_info = self._step_rows.pop()
-            frame = row_info["frame"]
-            self.stepRowsLayout.removeWidget(frame)
-            frame.deleteLater()
-
-
-    def _refresh_step_row_labels(self) -> None:
-        for idx, row_info in enumerate(self._step_rows, start=1):
-            row_info["label"].setText(f"Step {idx}")
-        self.stepCountLabel.setText(f"{len(self._step_rows)} / {MAX_STEPS}")
-
-
-    def _sync_step_buttons(self) -> None:
-        self.addStepBtn.setEnabled(len(self._step_rows) < MAX_STEPS)
-        self.removeStepBtn.setEnabled(len(self._step_rows) > MIN_STEPS)
-
-
-    def _on_step_enabled_changed(self, row_info: dict[str, Any]) -> None:
-        enabled = row_info["enabled"].isChecked()
-        for key in ("target_adc", "dac_step", "interval", "hold"):
-            row_info[key].setEnabled(enabled)
-        self._refresh_all_step_row_styles()
-
-
-    def _refresh_all_step_row_styles(self) -> None:
-        for idx, row_info in enumerate(self._step_rows):
-            frame = row_info["frame"]
-            enabled = row_info["enabled"].isChecked()
-            active = (self._active_step == idx)
-
-            if active:
-                style = "QFrame { background: #FFF4B8; border: 1px solid #D8C36A; border-radius: 8px; }"
-            elif not enabled:
-                style = "QFrame { background: #F1F1F1; border: 1px solid #D8D8D8; border-radius: 8px; }"
-            else:
-                style = "QFrame { background: #FFFFFF; border: 1px solid #DCDCDC; border-radius: 8px; }"
-
-            frame.setStyleSheet(style)
-
-    # =========================================================
-    # 위젯 팩토리
-    # =========================================================
-    @staticmethod
-    def _make_double_spin(
-        min_val: float = 0.0,
-        max_val: float = 9999.0,
-        *,
-        step: float = 1.0,
-        decimals: int = 1,
-    ) -> QDoubleSpinBox:
-        w = _NoWheelDoubleSpinBox()
-        w.setDecimals(decimals)
-        w.setRange(min_val, max_val)
-        w.setSingleStep(step)
-        w.setAlignment(Qt.AlignmentFlag.AlignRight)
-        w.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.UpDownArrows)
-        w.setKeyboardTracking(False)
-        return w
+        form.addRow(label, widget)
 
     @staticmethod
-    def _make_int_spin(min_val: int = 0, max_val: int = 9999, *, step: int = 1) -> QSpinBox:
-        w = _NoWheelSpinBox()
-        w.setRange(min_val, max_val)
-        w.setSingleStep(step)
-        w.setAlignment(Qt.AlignmentFlag.AlignRight)
-        w.setKeyboardTracking(False)
-        return w
-    
-    # =========================================================
-    # load / apply
-    # =========================================================
+    def _make_double_spin(min_val: float, max_val: float, *, step: float, decimals: int) -> QDoubleSpinBox:
+        widget = _NoWheelDoubleSpinBox()
+        widget.setDecimals(decimals)
+        widget.setRange(min_val, max_val)
+        widget.setSingleStep(step)
+        widget.setAlignment(Qt.AlignmentFlag.AlignRight)
+        widget.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.UpDownArrows)
+        widget.setKeyboardTracking(False)
+        return widget
+
+    @staticmethod
+    def _make_int_spin(min_val: int, max_val: int, *, step: int) -> QSpinBox:
+        widget = _NoWheelSpinBox()
+        widget.setRange(min_val, max_val)
+        widget.setSingleStep(step)
+        widget.setAlignment(Qt.AlignmentFlag.AlignRight)
+        widget.setKeyboardTracking(False)
+        return widget
+
     def _load_config(self, cfg: dict[str, Any]) -> None:
         cfg = self._normalize_config(cfg)
-
-        self._clear_step_rows()
-
-        steps = cfg.get("ramp_steps") or [self._default_step()]
-        for s in steps[: MAX_STEPS]:
-            self._add_step_row_ui(s)
-
-        if not self._step_rows:
-            self._add_step_row_ui(self._default_step())
-
-        self.dacMaxSpin.setValue(int(cfg.get("dac_max", 4000)))
+        self.holdControlModeCombo.setCurrentText(str(cfg.get("hold_control_mode", "PI") or "PI"))
         self.rateTolRatioSpin.setValue(float(cfg.get("rate_tol_ratio", 0.05)))
         self.rateStableSecSpin.setValue(float(cfg.get("rate_stable_sec", 3.0)))
         self.holdControlIntervalSpin.setValue(float(cfg.get("hold_control_interval_s", 1.0)))
         self.fineStepDacSpin.setValue(int(cfg.get("fine_step_dac", 10)))
+        self.holdMaxDacDeltaSpin.setValue(int(cfg.get("hold_max_dac_delta", 10)))
+        self.holdPiKpSpin.setValue(float(cfg.get("hold_pi_kp", 50.0)))
+        self.holdPiKiSpin.setValue(float(cfg.get("hold_pi_ki", 8.0)))
+        self.holdIntegralLimitSpin.setValue(float(cfg.get("hold_integral_limit", 2.5)))
+        self.rateFilterAlphaSpin.setValue(float(cfg.get("rate_filter_alpha", 0.35)))
+        self.rateJumpGuardRatioSpin.setValue(float(cfg.get("rate_jump_guard_ratio", 0.50)))
+        self.rateJumpGuardAbsSpin.setValue(float(cfg.get("rate_jump_guard_abs", 0.15)))
+        self.dacMaxSpin.setValue(int(cfg.get("dac_max", 4000)))
         self.rateAbortRatioSpin.setValue(float(cfg.get("rate_abort_ratio", 0.30)))
         self.rateAbortSecSpin.setValue(float(cfg.get("rate_abort_sec", 5.0)))
         self.sensorNoneAbortSpin.setValue(float(cfg.get("sensor_none_abort_s", 5.0)))
         self.adcNoneAbortSpin.setValue(float(cfg.get("adc_none_abort_s", 5.0)))
 
-        self._sync_step_buttons()
-        self._refresh_all_step_row_styles()
-
-    # =========================================================
-    # 하이라이트 API
-    # =========================================================
-    def highlight_step(self, step_idx: Optional[int]) -> None:
-        self._active_step = step_idx
-        self._refresh_all_step_row_styles()
-
-    # =========================================================
-    # step 수집
-    # =========================================================
-    def _collect_steps(self) -> Optional[list[dict[str, Any]]]:
-        steps: list[dict[str, Any]] = []
-        last_adc = -1.0
-
-        for idx, row_info in enumerate(self._step_rows, start=1):
-            if not row_info["enabled"].isChecked():
-                continue
-
-            target_adc = float(row_info["target_adc"].value())
-            if target_adc <= 0:
-                QMessageBox.warning(self, "입력 오류", f"Step {idx}: Target ADC는 0보다 커야 합니다.")
-                return None
-
-            if last_adc >= 0 and target_adc < last_adc:
-                QMessageBox.warning(
-                    self,
-                    "입력 오류",
-                    f"Step {idx}: Target ADC({target_adc})가 이전 step({last_adc})보다 작습니다.\n오름차순으로 입력하세요."
-                )
-                return None
-
-            steps.append({
-                "target_adc": target_adc,
-                "dac_step": int(row_info["dac_step"].value()),
-                "dac_interval_sec": float(row_info["interval"].value()),
-                "hold_sec": float(row_info["hold"].value()),
-            })
-            last_adc = target_adc
-
-        if not steps:
-            QMessageBox.warning(self, "입력 오류", "활성화된 step이 최소 1개 이상이어야 합니다.")
-            return None
-
-        return steps
-
-    # =========================================================
-    # output
-    # =========================================================
     def get_config(self) -> dict[str, Any]:
-        steps = self._collect_steps()
-        if steps is None:
-            steps = list(self._initial_config.get("ramp_steps") or [self._default_step()])
-
-        cfg = {
-            "step_count": len(steps),
-            "ramp_steps": steps,
-            "dac_max": int(self.dacMaxSpin.value()),
-            "rate_tol_ratio": float(self.rateTolRatioSpin.value()),
-            "rate_stable_sec": float(self.rateStableSecSpin.value()),
-            "hold_control_interval_s": float(self.holdControlIntervalSpin.value()),
-            "fine_step_dac": int(self.fineStepDacSpin.value()),
-            "rate_abort_ratio": float(self.rateAbortRatioSpin.value()),
-            "rate_abort_sec": float(self.rateAbortSecSpin.value()),
-            "sensor_none_abort_s": float(self.sensorNoneAbortSpin.value()),
-            "adc_none_abort_s": float(self.adcNoneAbortSpin.value()),
-        }
+        cfg = dict(self._initial_config)
+        cfg.update(
+            {
+                "dac_max": int(self.dacMaxSpin.value()),
+                "rate_tol_ratio": float(self.rateTolRatioSpin.value()),
+                "rate_stable_sec": float(self.rateStableSecSpin.value()),
+                "hold_control_interval_s": float(self.holdControlIntervalSpin.value()),
+                "fine_step_dac": int(self.fineStepDacSpin.value()),
+                "hold_control_mode": str(self.holdControlModeCombo.currentText() or "PI").strip().upper(),
+                "hold_pi_kp": float(self.holdPiKpSpin.value()),
+                "hold_pi_ki": float(self.holdPiKiSpin.value()),
+                "hold_integral_limit": float(self.holdIntegralLimitSpin.value()),
+                "rate_filter_alpha": float(self.rateFilterAlphaSpin.value()),
+                "rate_jump_guard_ratio": float(self.rateJumpGuardRatioSpin.value()),
+                "rate_jump_guard_abs": float(self.rateJumpGuardAbsSpin.value()),
+                "hold_max_dac_delta": int(self.holdMaxDacDeltaSpin.value()),
+                "rate_abort_ratio": float(self.rateAbortRatioSpin.value()),
+                "rate_abort_sec": float(self.rateAbortSecSpin.value()),
+                "sensor_none_abort_s": float(self.sensorNoneAbortSpin.value()),
+                "adc_none_abort_s": float(self.adcNoneAbortSpin.value()),
+            }
+        )
         return self._normalize_config(cfg)
 
-    # =========================================================
-    # validation + accept
-    # =========================================================
     def accept(self) -> None:
         cfg = self.get_config()
-        steps = cfg.get("ramp_steps") or []
-
-        if not steps:
-            QMessageBox.warning(self, "Process Config", "활성화된 step이 최소 1개 이상이어야 합니다.")
+        if str(cfg.get("hold_control_mode", "")).upper() not in {"PI", "STEP"}:
+            QMessageBox.warning(self, "Process Config", "Hold Control Mode must be PI or STEP.")
             return
-
-        last_adc = -1.0
-        for idx, s in enumerate(steps, start=1):
-            adc = float(s.get("target_adc", 0.0))
-            if adc <= 0:
-                QMessageBox.warning(self, "Process Config", f"Step {idx} Target ADC는 0보다 커야 합니다.")
-                return
-            if last_adc >= 0 and adc < last_adc:
-                QMessageBox.warning(
-                    self,
-                    "Process Config",
-                    f"Step {idx} Target ADC가 이전 step보다 작습니다. 오름차순으로 입력하세요."
-                )
-                return
-            last_adc = adc
-
         if int(cfg.get("dac_max", 0)) <= 0:
-            QMessageBox.warning(self, "Process Config", "Max DAC는 0보다 커야 합니다.")
+            QMessageBox.warning(self, "Process Config", "Max DAC must be greater than 0.")
             return
-
         if int(cfg.get("fine_step_dac", 0)) <= 0:
-            QMessageBox.warning(self, "Process Config", "Fine Step DAC는 0보다 커야 합니다.")
+            QMessageBox.warning(self, "Process Config", "Fine Step DAC must be greater than 0.")
             return
-
-        if float(cfg.get("rate_tol_ratio", 0.0)) <= 0.0:
-            QMessageBox.warning(self, "Process Config", "Rate Tolerance Ratio는 0보다 커야 합니다.")
+        if int(cfg.get("hold_max_dac_delta", 0)) <= 0:
+            QMessageBox.warning(self, "Process Config", "Max DAC Delta / Update must be greater than 0.")
             return
-
-        if float(cfg.get("rate_abort_ratio", 0.0)) <= 0.0:
-            QMessageBox.warning(self, "Process Config", "Rate Abort Ratio는 0보다 커야 합니다.")
+        if float(cfg.get("hold_pi_kp", -1.0)) < 0.0 or float(cfg.get("hold_pi_ki", -1.0)) < 0.0:
+            QMessageBox.warning(self, "Process Config", "PI gains must be 0 or greater.")
             return
-
+        if float(cfg.get("hold_integral_limit", 0.0)) <= 0.0:
+            QMessageBox.warning(self, "Process Config", "Integral Limit must be greater than 0.")
+            return
+        if not (0.0 < float(cfg.get("rate_filter_alpha", 0.0)) <= 1.0):
+            QMessageBox.warning(self, "Process Config", "Rate Filter Alpha must be between 0 and 1.")
+            return
+        if not (0.0 < float(cfg.get("rate_abort_ratio", 0.0)) <= 1.0):
+            QMessageBox.warning(self, "Process Config", "Rate Abort Ratio must be between 0 and 1.")
+            return
+        if float(cfg.get("rate_abort_sec", -1.0)) < 0.0:
+            QMessageBox.warning(self, "Process Config", "Rate Abort Sec must be 0 or greater.")
+            return
+        if float(cfg.get("sensor_none_abort_s", -1.0)) < 0.0 or float(cfg.get("adc_none_abort_s", -1.0)) < 0.0:
+            QMessageBox.warning(self, "Process Config", "Sensor/ADC None Abort Sec must be 0 or greater.")
+            return
+        self._initial_config = cfg
         super().accept()

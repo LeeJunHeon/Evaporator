@@ -28,3 +28,6 @@ dist/
 evap_backfill_*/
 _tmp_backfill_validation*/
 _tmp_db_probe*/
+
+# Claude Code
+CLAUDE.md

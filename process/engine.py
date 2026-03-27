@@ -146,7 +146,6 @@ class ProcessEngine:
         self._stop_event = threading.Event()
         self._stop_mode_value: Optional[StopMode] = None
         self._stop_mode_lock = threading.Lock()
-        self._pause_event = threading.Event()
 
         # 내부 상태
         self._phase: ProcessPhase = ProcessPhase.IDLE
@@ -179,12 +178,6 @@ class ProcessEngine:
             self._stop_mode_value = mode
         self._stop_event.set()
 
-    def request_pause(self) -> None:
-        self._pause_event.set()
-
-    def request_resume(self) -> None:
-        self._pause_event.clear()
-
     # --------------------------------------------------------
     # Public entry
     # --------------------------------------------------------
@@ -198,7 +191,6 @@ class ProcessEngine:
         with self._stop_mode_lock:
             self._stop_mode_value = None
         self._stop_event.clear()
-        self._pause_event.clear()
 
         self._phase = ProcessPhase.RUNNING
         self._recipe_name = recipe.recipe_name
@@ -238,7 +230,7 @@ class ProcessEngine:
                 self._current_step_idx = idx
                 self._current_step_name = step.name
 
-                self._check_stop_pause(recipe, step)
+                self._check_stop(recipe, step)
 
                 self._emit_step(StepStatus(idx=idx, name=step.name, type=step.type, started_ts=time.time(), ok=None))
                 self._emit_status(step_idx=idx, step_name=step.name, message=f"STEP START: {step.type.value}")
@@ -803,7 +795,7 @@ class ProcessEngine:
         next_ui_m = start_m
 
         while True:
-            self._check_stop_pause(recipe, step)
+            self._check_stop(recipe, step)
             self._tick_emit(recipe, step)
 
             now_m = time.monotonic()
@@ -875,7 +867,7 @@ class ProcessEngine:
         next_ui_m = start_m
 
         while True:
-            self._check_stop_pause(recipe, step)
+            self._check_stop(recipe, step)
             self._tick_emit(recipe, step)
 
             now_m = time.monotonic()
@@ -979,35 +971,14 @@ class ProcessEngine:
         return max(0.01, float(fallback))
 
     # --------------------------------------------------------
-    # Stop/Pause checks
+    # Stop check
     # --------------------------------------------------------
-    def _check_stop_pause(self, recipe: ProcessRecipe, step: ProcessStep) -> None:
-        # stop 우선
+    def _check_stop(self, recipe: ProcessRecipe, step: ProcessStep) -> None:
         with self._stop_mode_lock:
             _mode = self._stop_mode_value
         if _mode is not None:
             raise EngineStopRequested(_mode)
 
-        entered_pause = False
-
-        # pause 처리: paused일 때는 stop 요청만 감시하면서 대기
-        while self._pause_event.is_set():
-            with self._stop_mode_lock:
-                _mode = self._stop_mode_value
-            if _mode is not None:
-                raise EngineStopRequested(_mode)
-
-            if not entered_pause:
-                self._phase = ProcessPhase.PAUSED
-                self._emit_status(message="일시정지", force=True)
-                entered_pause = True
-
-            time.sleep(0.1)
-
-        if entered_pause:
-            self._phase = ProcessPhase.RUNNING
-            self._emit_status(message="재개", force=True)
-            
     def _is_plc_ready(self) -> bool:
         try:
             if hasattr(self.plc, "is_running") and not self.plc.is_running():

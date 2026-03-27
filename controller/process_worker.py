@@ -78,18 +78,6 @@ class ProcessWorker(QThread):
         except Exception:
             pass
 
-    def request_pause(self) -> None:
-        try:
-            self._engine.request_pause()
-        except Exception:
-            pass
-
-    def request_resume(self) -> None:
-        try:
-            self._engine.request_resume()
-        except Exception:
-            pass
-
     def run(self) -> None:
         """
         QThread entry.

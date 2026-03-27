@@ -801,24 +801,6 @@ class ProcessController(QObject):
         else:
             self._ui_info("실행 중 공정 없음")
 
-    def pause(self) -> None:
-        if not self.is_running():
-            return
-        try:
-            self._worker.request_pause()
-            self._ui_info("일시정지 요청")
-        except Exception as e:
-            self._ui_warn(f"pause 실패: {e!r}")
-
-    def resume(self) -> None:
-        if not self.is_running():
-            return
-        try:
-            self._worker.request_resume()
-            self._ui_info("재개 요청")
-        except Exception as e:
-            self._ui_warn(f"resume 실패: {e!r}")
-
     # --------------------------------------------------------
     # Internal helpers
     # --------------------------------------------------------

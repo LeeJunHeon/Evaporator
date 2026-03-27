@@ -1358,7 +1358,6 @@ class ProcessWindow(QWidget):
         return {
             "IDLE": "대기",
             "RUNNING": "실행중",
-            "PAUSED": "일시정지",
             "STOPPING": "정지중",
             "FINISHED": "완료",
             "ERROR": "오류",

@@ -53,7 +53,7 @@ def _stm_wait_connected(engine, recipe: ProcessRecipe, step: ProcessStep, *, tim
     next_ui_m = start_m
 
     while True:
-        engine._check_stop_pause(recipe, step)
+        engine._check_stop(recipe, step)
         engine._tick_emit(recipe, step)
 
         now_m = time.monotonic()
@@ -557,7 +557,7 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         next_ui_m = start_m
 
         while True:
-            engine._check_stop_pause(recipe, step)
+            engine._check_stop(recipe, step)
             engine._tick_emit(recipe, step)
 
             now_m = time.monotonic()
@@ -579,7 +579,7 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
     def _read_rate_or_abort(*, where: str) -> float:
         t0 = time.monotonic()
         while True:
-            engine._check_stop_pause(recipe, step)
+            engine._check_stop(recipe, step)
             engine._tick_emit(recipe, step)
 
             rt = engine._get_rate()
@@ -594,7 +594,7 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
     def _read_thickness_or_abort(*, where: str) -> float:
         t0 = time.monotonic()
         while True:
-            engine._check_stop_pause(recipe, step)
+            engine._check_stop(recipe, step)
             engine._tick_emit(recipe, step)
 
             th = engine._get_thickness()
@@ -609,7 +609,7 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
     def _read_adc_or_abort(*, where: str) -> float:
         t0 = time.monotonic()
         while True:
-            engine._check_stop_pause(recipe, step)
+            engine._check_stop(recipe, step)
             engine._tick_emit(recipe, step)
 
             adc_total, _, _ = _read_selected_adc_total(
@@ -864,7 +864,7 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
             adc_reached_start_ts: Optional[float] = None
 
             while True:
-                engine._check_stop_pause(recipe, step)
+                engine._check_stop(recipe, step)
                 engine._tick_emit(recipe, step)
 
                 rt = _read_rate_or_abort(where=f"ramp_step{step_no}")
@@ -998,7 +998,7 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         )
 
         while True:
-            engine._check_stop_pause(recipe, step)
+            engine._check_stop(recipe, step)
             engine._tick_emit(recipe, step)
 
             rt = _read_rate_or_abort(where="hold")

@@ -29,7 +29,6 @@ import time
 class ProcessPhase(str, Enum):
     IDLE = "IDLE"
     RUNNING = "RUNNING"
-    PAUSED = "PAUSED"
     STOPPING = "STOPPING"
     FINISHED = "FINISHED"
     ERROR = "ERROR"

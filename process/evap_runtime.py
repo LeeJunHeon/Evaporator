@@ -644,6 +644,38 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
 
         engine._emit_status(message=f"[남은 00:00] {label} 완료", force=True)
 
+    def _shutdown_wait(wait_s: float, *, label: str) -> None:
+        """stop 요청을 무시하고 지정 시간을 끝까지 대기하는 함수.
+        _ramp_down_then_shutdown() 내부에서만 사용.
+        stop 플래그가 이미 set된 상태에서도 60초 대기를 스킵하지 않기 위해
+        engine._check_stop() 호출을 제거한 버전."""
+        wait_s = float(wait_s)
+        if wait_s <= 0:
+            return
+
+        start_m = time.monotonic()
+        deadline_m = start_m + wait_s
+        next_ui_m = start_m
+
+        while True:
+            engine._tick_emit(recipe, step)
+
+            now_m = time.monotonic()
+            remain_s = deadline_m - now_m
+            if remain_s <= 0:
+                break
+
+            if now_m >= next_ui_m:
+                engine._emit_status(
+                    message=f"[남은 {engine._fmt_hms(remain_s, ceil=True)}] {label}",
+                    force=True,
+                )
+                next_ui_m = now_m + 1.0
+
+            time.sleep(0.1)
+
+        engine._emit_status(message=f"[남은 00:00] {label} 완료", force=True)
+
     def _read_rate_or_abort(*, where: str) -> float:
         t0 = time.monotonic()
         while True:
@@ -748,7 +780,7 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
             time.sleep(1.0)
 
         engine._emit_status(message="EVAP 종료: DAC 0 도달 → 1분 후 전원 차단", force=True)
-        _wait_with_checks(60.0, label="전원 차단 전 대기 (60초)")
+        _shutdown_wait(60.0, label="전원 차단 전 대기 (60초)")
 
         engine._safe_shutdown_sequence(tag=tag)
 

@@ -699,7 +699,7 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         stable_start_ts: Optional[float],
     ) -> tuple[bool, Optional[float]]:
         tol = abs(target_rate) * rate_tol_ratio
-        if abs(rt - target_rate) <= tol:
+        if rt >= target_rate - tol:
             now_m = time.monotonic()
             if stable_start_ts is None:
                 stable_start_ts = now_m
@@ -991,6 +991,11 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
                     last_dac_apply_m = now_m
                     remain_to_next_dac_s = step_dac_interval_sec
 
+                stable_progress = (
+                    f" | rate 안정 확인중 {(now_m - stable_start_ts):.1f}s / {rate_stable_sec:.1f}s"
+                    if stable_start_ts is not None else ""
+                )
+
                 if adc_total >= step_target_adc:
                     engine._emit_status(
                         message=(
@@ -999,6 +1004,7 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
                             f"DAC={dac} | rate={rt:.3f} | "
                             f"확인 {adc_confirm_elapsed_s:.1f}/{step_hold_sec:.1f}s | "
                             f"다음 DAC까지 {remain_to_next_dac_s:.1f}s"
+                            f"{stable_progress}"
                         ),
                         force=True,
                     )
@@ -1009,6 +1015,7 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
                             f"ADC={adc_total:.1f}/{step_target_adc:.1f} | "
                             f"DAC={dac} | rate={rt:.3f} | "
                             f"다음 DAC까지 {remain_to_next_dac_s:.1f}s"
+                            f"{stable_progress}"
                         ),
                         force=True,
                     )

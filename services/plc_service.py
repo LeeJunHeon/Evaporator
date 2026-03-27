@@ -85,7 +85,7 @@ _COIL_LABEL: Dict[str, str] = {
     "MAIN_SHUTTER_SW": "메인 셔터",
     "POWER_1_SW":      "전원 1",
     "POWER_2_SW":      "전원 2",
-    "FTM_SW":          "FTM(두께계) 전원",
+    "FTM_SW":          "FTM 전원",
     "DOOR_SW":         "도어 잠금",
     "AIR_SW":          "에어 공급",
     "WATER_SW":        "냉각수 공급",

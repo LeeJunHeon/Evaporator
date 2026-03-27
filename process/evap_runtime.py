@@ -512,6 +512,8 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
 
     target_rate = float(meta.get("target_rate", 0.0) or 0.0)
     target_th = float(meta.get("target_thickness", 0.0) or 0.0)
+    delay_min = float(meta.get("delay_min", 0.0) or 0.0)
+    delay_s = max(0.0, delay_min * 60.0)
 
     if target_rate <= 0:
         _raise_engine_failed(step.name, "EVAP: target_rate must be > 0")
@@ -967,6 +969,14 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         filtered_rate = _run_preopen_guard(filtered_rate)
 
         engine._emit_status(message="EVAP HOLD 진입: MAIN SHUTTER OPEN", force=True)
+
+        if delay_s > 0:
+            engine._emit_status(
+                message=f"셔터 오픈 대기 중... ({delay_min:.1f}분 / {delay_s:.0f}초)",
+                force=True,
+            )
+            _wait_with_checks(delay_s, label=f"셔터 오픈 대기 ({delay_min:.1f}분)")
+
         engine._plc_write_coil("MAIN_SHUTTER_SW", True, tag="EVAP_MAIN_SHUTTER_OPEN")
         shutter_open = True
 

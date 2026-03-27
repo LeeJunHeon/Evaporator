@@ -160,7 +160,7 @@ class ProcessRecipeDialog(QDialog):
         hold_max_dac_delta = _as_int("hold_max_dac_delta", fine_step_dac, 1)
         hold_pi_ki = _as_float("hold_pi_ki", max(0.0, hold_max_dac_delta * 0.8), 0.0)
         hold_control_mode = str(src.get("hold_control_mode", default["hold_control_mode"]) or "").strip().upper() or "PI"
-        if hold_control_mode not in {"PI", "STEP"}:
+        if hold_control_mode not in {"PI", "PID", "STEP"}:
             hold_control_mode = "PI"
 
         return {
@@ -248,8 +248,6 @@ class ProcessRecipeDialog(QDialog):
 
         command_row = QHBoxLayout()
         self.historyButton = QPushButton("로그 스캔", self)
-        self.historyButton.setFlat(True)
-        self.historyButton.setStyleSheet("color: #666666;")
         self.historyButton.setToolTip(
             "NAS에 저장된 공정 로그를 읽어 추천 데이터베이스를 갱신합니다.\n"
             "처음 사용하거나 새 로그가 쌓였을 때 실행하세요."

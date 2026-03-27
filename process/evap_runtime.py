@@ -251,6 +251,70 @@ def _compute_hold_pi_delta(
     return int(next_dac - int(current_dac)), next_integral, error, True
 
 
+def _compute_hold_pid_delta(
+    *,
+    current_dac: int,
+    target_rate: float,
+    filtered_rate: Optional[float],
+    interval_s: float,
+    tol_ratio: float,
+    kp: float,
+    ki: float,
+    kd: float,
+    integral_state: float,
+    prev_error_ratio: float,
+    integral_limit: float,
+    max_delta: int,
+    dac_max: int,
+) -> tuple[int, float, float, Optional[float], bool]:
+    """
+    반환: (delta, next_integral, next_prev_error_ratio, error, in_tolerance)
+    """
+    if filtered_rate is None or target_rate <= 0.0:
+        return 0, integral_state, prev_error_ratio, None, False
+
+    error = float(target_rate) - float(filtered_rate)
+    tolerance = abs(float(target_rate)) * float(tol_ratio)
+
+    if abs(error) <= tolerance:
+        return 0, integral_state * 0.85, prev_error_ratio, error, True
+
+    dt = max(0.1, float(interval_s))
+    error_ratio = error / max(abs(float(target_rate)), 1e-6)
+
+    # P항
+    p_term = float(kp) * error_ratio
+
+    # I항 (anti-windup)
+    next_integral = integral_state + (error_ratio * dt)
+    next_integral = max(-abs(float(integral_limit)), min(abs(float(integral_limit)), next_integral))
+    i_term = float(ki) * next_integral
+
+    # D항 (filtered_rate 기반 — 노이즈 억제)
+    d_term = float(kd) * (error_ratio - prev_error_ratio) / dt
+
+    delta_f = p_term + i_term + d_term
+
+    max_step = max(1, int(max_delta))
+    delta_f = max(-float(max_step), min(float(max_step), delta_f))
+
+    # anti-windup: DAC 상/하한에서 integral 롤백
+    at_low = int(current_dac) <= 0
+    at_high = int(current_dac) >= int(dac_max)
+    if (at_low and delta_f < 0.0) or (at_high and delta_f > 0.0):
+        next_integral = integral_state
+        i_term = float(ki) * next_integral
+        delta_f = p_term + i_term + d_term
+        delta_f = max(-float(max_step), min(float(max_step), delta_f))
+
+    delta = 0
+    if abs(delta_f) >= 0.5:
+        delta = int(round(delta_f))
+        delta = max(-max_step, min(max_step, delta))
+
+    return delta, next_integral, error_ratio, error, False
+
+
 def _sum_selected_values(
     use_p1: bool,
     use_p2: bool,
@@ -413,11 +477,13 @@ def _load_runtime_process_config(meta: dict, *, step_name: str) -> dict:
         hold_max_dac_delta = max(1, fine_step_dac)
 
     hold_control_mode = str(process_config.get("hold_control_mode", "PI") or "").strip().upper() or "PI"
-    if hold_control_mode not in {"PI", "STEP"}:
+    if hold_control_mode not in {"PI", "PID", "STEP"}:
         hold_control_mode = "PI"
 
     hold_pi_kp = float(process_config.get("hold_pi_kp", max(1.0, hold_max_dac_delta * 5.0)) or max(1.0, hold_max_dac_delta * 5.0))
     hold_pi_ki = float(process_config.get("hold_pi_ki", max(0.0, hold_max_dac_delta * 0.8)) or max(0.0, hold_max_dac_delta * 0.8))
+    hold_pi_kd = float(process_config.get("hold_pi_kd", 0.0) or 0.0)
+    hold_pi_kd = max(0.0, hold_pi_kd)
     hold_integral_limit = float(
         process_config.get(
             "hold_integral_limit",
@@ -471,6 +537,7 @@ def _load_runtime_process_config(meta: dict, *, step_name: str) -> dict:
         "hold_control_mode": hold_control_mode,
         "hold_pi_kp": hold_pi_kp,
         "hold_pi_ki": hold_pi_ki,
+        "hold_pi_kd": hold_pi_kd,
         "hold_integral_limit": hold_integral_limit,
         "rate_filter_alpha": rate_filter_alpha,
         "rate_jump_guard_ratio": rate_jump_guard_ratio,
@@ -531,6 +598,7 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
     hold_control_mode = str(proc_cfg.get("hold_control_mode", "PI") or "PI").strip().upper() or "PI"
     hold_pi_kp = float(proc_cfg.get("hold_pi_kp", 0.0) or 0.0)
     hold_pi_ki = float(proc_cfg.get("hold_pi_ki", 0.0) or 0.0)
+    hold_pi_kd = float(proc_cfg.get("hold_pi_kd", 0.0) or 0.0)
     hold_integral_limit = float(proc_cfg.get("hold_integral_limit", 1.0) or 1.0)
     rate_filter_alpha = float(proc_cfg.get("rate_filter_alpha", 0.35) or 0.35)
     rate_jump_guard_ratio = float(proc_cfg.get("rate_jump_guard_ratio", 0.50) or 0.50)
@@ -985,6 +1053,7 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         spike_detected_ts: Optional[float] = None
         abort_threshold = target_rate * rate_abort_ratio
         hold_integral = 0.0
+        hold_prev_error_ratio: float = 0.0
 
         engine._tele_event(
             event="HOLD_CONTROL_MODE",
@@ -1060,7 +1129,25 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
                 control_mode_used = hold_control_mode
 
                 try:
-                    if hold_control_mode == "PI":
+                    if hold_control_mode == "PID":
+                        control_delta, hold_integral, hold_prev_error_ratio, control_error, pi_used = _compute_hold_pid_delta(
+                            current_dac=dac,
+                            target_rate=target_rate,
+                            filtered_rate=(filtered_rate if control_rate_valid else None),
+                            interval_s=hold_control_interval_s,
+                            tol_ratio=rate_tol_ratio,
+                            kp=hold_pi_kp,
+                            ki=hold_pi_ki,
+                            kd=hold_pi_kd,
+                            integral_state=hold_integral,
+                            prev_error_ratio=hold_prev_error_ratio,
+                            integral_limit=hold_integral_limit,
+                            max_delta=hold_max_dac_delta,
+                            dac_max=dac_max,
+                        )
+                        if not pi_used:
+                            control_mode_used = "PID_WAIT"
+                    elif hold_control_mode == "PI":
                         control_delta, hold_integral, control_error, pi_used = _compute_hold_pi_delta(
                             current_dac=dac,
                             target_rate=target_rate,

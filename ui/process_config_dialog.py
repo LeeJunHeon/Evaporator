@@ -27,9 +27,10 @@ PROCESS_CONFIG_TOOLTIPS = {
     "rate_stable_sec": "dep.rate가 허용 오차 내에서 연속으로 유지돼야 하는 시간(초).\n이 시간 동안 안정 상태가 유지되면 Hold 구간으로 진입합니다.",
     "hold_control_interval_s": "Hold 구간에서 DAC를 업데이트하는 주기(초).\n짧을수록 더 자주 조정하지만 노이즈에 민감해집니다.",
     "fine_step_dac": "Hold 구간에서 DAC를 조정할 때의 기본 단위.\nSTEP 모드에서는 이 값으로 증감합니다.",
-    "hold_control_mode": "Hold 구간 제어 방식.\nPI: 비례+적분 제어 (권장)\nSTEP: 단순 단계 제어 (안전 fallback)",
-    "hold_pi_kp": "PI 제어의 비례 게인 (Kp).\n값이 클수록 오차에 빠르게 반응하지만 불안정해질 수 있습니다.",
-    "hold_pi_ki": "PI 제어의 적분 게인 (Ki).\n지속적인 오차를 보정합니다. 너무 크면 진동이 생길 수 있습니다.",
+    "hold_control_mode": "Hold 구간 제어 방식.\nPI: 비례+적분 제어 (권장)\nPID: 비례+적분+미분 제어\nSTEP: 단순 단계 제어 (안전 fallback)",
+    "hold_pi_kp": "PI/PID 제어의 비례 게인 (Kp).\n값이 클수록 오차에 빠르게 반응하지만 불안정해질 수 있습니다.",
+    "hold_pi_ki": "PI/PID 제어의 적분 게인 (Ki).\n지속적인 오차를 보정합니다. 너무 크면 진동이 생길 수 있습니다.",
+    "hold_pi_kd": "PID 제어의 미분 게인 (Kd).\nrate 변화 속도에 반응해 오버슈트를 줄입니다.\n기본값 0.0 (PI와 동일). 노이즈 민감하므로 작은 값부터 시작하세요.",
     "hold_integral_limit": "적분항의 최대 절댓값 (Anti-windup).\n적분이 과도하게 쌓이는 것을 방지합니다.",
     "rate_filter_alpha": "dep.rate EMA 필터 강도 (0~1).\n값이 작을수록 더 강하게 스무딩됩니다. 기본값 0.35",
     "rate_jump_guard_ratio": "rate 순간 급변 억제 비율.\n이전 값 대비 이 비율 이상 변하면 변화량을 제한합니다.",
@@ -88,6 +89,7 @@ class ProcessConfigDialog(QDialog):
             "hold_control_mode": "PI",
             "hold_pi_kp": 50.0,
             "hold_pi_ki": 8.0,
+            "hold_pi_kd": 0.0,
             "hold_integral_limit": 2.5,
             "rate_filter_alpha": 0.35,
             "rate_jump_guard_ratio": 0.50,
@@ -162,7 +164,7 @@ class ProcessConfigDialog(QDialog):
         hold_max_dac_delta = _as_int("hold_max_dac_delta", fine_step_dac, 1)
         hold_pi_ki = _as_float("hold_pi_ki", max(0.0, hold_max_dac_delta * 0.8), 0.0)
         hold_control_mode = str(src.get("hold_control_mode", default["hold_control_mode"]) or "").strip().upper() or "PI"
-        if hold_control_mode not in {"PI", "STEP"}:
+        if hold_control_mode not in {"PI", "PID", "STEP"}:
             hold_control_mode = "PI"
 
         return {
@@ -176,6 +178,7 @@ class ProcessConfigDialog(QDialog):
             "hold_control_mode": hold_control_mode,
             "hold_pi_kp": _as_float("hold_pi_kp", max(1.0, hold_max_dac_delta * 5.0), 0.0),
             "hold_pi_ki": hold_pi_ki,
+            "hold_pi_kd": _as_float("hold_pi_kd", 0.0, 0.0),
             "hold_integral_limit": _as_float(
                 "hold_integral_limit",
                 max(1.0, (2.0 * hold_max_dac_delta) / max(hold_pi_ki, 1e-6)),
@@ -215,7 +218,7 @@ class ProcessConfigDialog(QDialog):
         hold_box = QGroupBox("Hold Control")
         hold_form = QFormLayout(hold_box)
         self.holdControlModeCombo = QComboBox(self)
-        self.holdControlModeCombo.addItems(["PI", "STEP"])
+        self.holdControlModeCombo.addItems(["PI", "PID", "STEP"])
         self.rateTolRatioSpin = self._make_double_spin(0.001, 1.0, step=0.01, decimals=3)
         self.rateStableSecSpin = self._make_double_spin(0.0, 60.0, step=0.5, decimals=1)
         self.holdControlIntervalSpin = self._make_double_spin(0.1, 60.0, step=0.5, decimals=1)
@@ -223,6 +226,7 @@ class ProcessConfigDialog(QDialog):
         self.holdMaxDacDeltaSpin = self._make_int_spin(1, 1000, step=1)
         self.holdPiKpSpin = self._make_double_spin(0.0, 9999.0, step=1.0, decimals=3)
         self.holdPiKiSpin = self._make_double_spin(0.0, 9999.0, step=0.1, decimals=3)
+        self.holdPiKdSpin = self._make_double_spin(0.0, 9999.0, step=0.1, decimals=3)
         self.holdIntegralLimitSpin = self._make_double_spin(0.1, 9999.0, step=0.1, decimals=3)
 
         self._add_form_row(hold_form, "제어 모드", self.holdControlModeCombo, "hold_control_mode")
@@ -233,6 +237,7 @@ class ProcessConfigDialog(QDialog):
         self._add_form_row(hold_form, "1회 최대 DAC 변화량", self.holdMaxDacDeltaSpin, "hold_max_dac_delta")
         self._add_form_row(hold_form, "비례 게인 (Kp)", self.holdPiKpSpin, "hold_pi_kp")
         self._add_form_row(hold_form, "적분 게인 (Ki)", self.holdPiKiSpin, "hold_pi_ki")
+        self._add_form_row(hold_form, "미분 게인 (Kd)", self.holdPiKdSpin, "hold_pi_kd")
         self._add_form_row(hold_form, "적분 상한값", self.holdIntegralLimitSpin, "hold_integral_limit")
         body_root.addWidget(hold_box)
 
@@ -310,6 +315,7 @@ class ProcessConfigDialog(QDialog):
         self.holdMaxDacDeltaSpin.setValue(int(cfg.get("hold_max_dac_delta", 10)))
         self.holdPiKpSpin.setValue(float(cfg.get("hold_pi_kp", 50.0)))
         self.holdPiKiSpin.setValue(float(cfg.get("hold_pi_ki", 8.0)))
+        self.holdPiKdSpin.setValue(float(cfg.get("hold_pi_kd", 0.0)))
         self.holdIntegralLimitSpin.setValue(float(cfg.get("hold_integral_limit", 2.5)))
         self.rateFilterAlphaSpin.setValue(float(cfg.get("rate_filter_alpha", 0.35)))
         self.rateJumpGuardRatioSpin.setValue(float(cfg.get("rate_jump_guard_ratio", 0.50)))
@@ -334,6 +340,7 @@ class ProcessConfigDialog(QDialog):
                 "hold_control_mode": str(self.holdControlModeCombo.currentText() or "PI").strip().upper(),
                 "hold_pi_kp": float(self.holdPiKpSpin.value()),
                 "hold_pi_ki": float(self.holdPiKiSpin.value()),
+                "hold_pi_kd": float(self.holdPiKdSpin.value()),
                 "hold_integral_limit": float(self.holdIntegralLimitSpin.value()),
                 "rate_filter_alpha": float(self.rateFilterAlphaSpin.value()),
                 "rate_jump_guard_ratio": float(self.rateJumpGuardRatioSpin.value()),
@@ -351,8 +358,8 @@ class ProcessConfigDialog(QDialog):
 
     def accept(self) -> None:
         cfg = self.get_config()
-        if str(cfg.get("hold_control_mode", "")).upper() not in {"PI", "STEP"}:
-            QMessageBox.warning(self, "Process Config", "Hold Control Mode must be PI or STEP.")
+        if str(cfg.get("hold_control_mode", "")).upper() not in {"PI", "PID", "STEP"}:
+            QMessageBox.warning(self, "Process Config", "Hold Control Mode must be PI, PID or STEP.")
             return
         if int(cfg.get("dac_max", 0)) <= 0:
             QMessageBox.warning(self, "Process Config", "Max DAC must be greater than 0.")

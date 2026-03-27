@@ -519,13 +519,14 @@ class ProcessController(QObject):
         hold_max_dac_delta = _optional_int("hold_max_dac_delta", cfg["fine_step_dac"], 1)
         hold_pi_ki = _optional_float("hold_pi_ki", max(0.0, hold_max_dac_delta * 0.8), 0.0)
         hold_control_mode = str(proc_src.get("hold_control_mode", "PI") or "").strip().upper() or "PI"
-        if hold_control_mode not in {"PI", "STEP"}:
+        if hold_control_mode not in {"PI", "PID", "STEP"}:
             hold_control_mode = "PI"
 
         cfg.update({
             "hold_control_mode": hold_control_mode,
             "hold_pi_kp": _optional_float("hold_pi_kp", max(1.0, hold_max_dac_delta * 5.0), 0.0),
             "hold_pi_ki": hold_pi_ki,
+            "hold_pi_kd": max(0.0, float(proc_src.get("hold_pi_kd", 0.0) or 0.0)),
             "hold_integral_limit": _optional_float(
                 "hold_integral_limit",
                 max(1.0, (2.0 * hold_max_dac_delta) / max(hold_pi_ki, 1e-6)),
@@ -575,6 +576,7 @@ class ProcessController(QObject):
             "hold_control_mode": process_config["hold_control_mode"],
             "hold_pi_kp": process_config["hold_pi_kp"],
             "hold_pi_ki": process_config["hold_pi_ki"],
+            "hold_pi_kd": process_config.get("hold_pi_kd", 0.0),
             "hold_integral_limit": process_config["hold_integral_limit"],
             "rate_filter_alpha": process_config["rate_filter_alpha"],
             "rate_jump_guard_ratio": process_config["rate_jump_guard_ratio"],

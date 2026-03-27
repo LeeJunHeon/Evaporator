@@ -1063,7 +1063,7 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
             target="MODE",
             value=hold_control_mode,
             detail=(
-                f"pi_enabled={1 if hold_control_mode == 'PI' else 0}, "
+                f"control_mode={hold_control_mode}, "
                 f"kp={hold_pi_kp:.3f}, ki={hold_pi_ki:.3f}, "
                 f"alpha={rate_filter_alpha:.3f}, max_delta={hold_max_dac_delta}, tag=EVAP_HOLD_CONTROL"
             ),
@@ -1208,7 +1208,7 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
                     value=dac,
                     detail=(
                         f"mode={control_mode_used}, "
-                        f"pi_enabled={1 if hold_control_mode == 'PI' else 0}, "
+                        f"control_mode={hold_control_mode}, "
                         f"raw_rate={rt:.6f}, "
                         f"filtered_rate={'' if filtered_rate is None else f'{filtered_rate:.6f}'}, "
                         f"error={'' if control_error is None else f'{control_error:.6f}'}, "

@@ -690,7 +690,7 @@ class ProcessController(QObject):
         # 현재 장비 임시 매핑:
         # - UI/start path에서는 Power2 사용 금지
         # - 그러나 실제 하드웨어 구동상 Power1 only 공정 시작 시 POWER_2_SW도 함께 ON 되어야 함
-        # - 셔터는 SHUTTER_1만 OPEN
+        # - 셔터는 열지 않음 (SHUTTER_1_OPEN 제거됨)
         # - DAC command는 DAC_POWER_1 사용
         # - 실제 feedback은 ADC2 사용
         #

@@ -466,6 +466,12 @@ class STMServiceWorker(QThread):
             # ✅ STM100 통신(TX/RX) trace를 서비스로 전달
             io_trace_cb=self._on_stm_io_trace,
             io_trace_skip_tokens={"S", "T"},   # (stm100.py 기본도 S/T skip이지만, 여기서도 명시)
+
+            # U(센서 주파수)/V(크리스탈 수명) 자동 읽기 비활성화
+            # - get_rate_angstrom_per_s() 호출 시 _maybe_trace_uv()가 2초 간격으로 U/V를
+            #   추가 읽어 로그에 출력하는 동작을 완전히 중단
+            # - preflight의 _CmdReadCrystalHealth에서 이미 1회 읽으므로 공정 중 불필요
+            uv_trace_enable=False,
         )
 
     def _safe_close(self) -> None:

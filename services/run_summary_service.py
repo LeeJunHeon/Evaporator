@@ -757,8 +757,8 @@ class RunSummaryService:
         discovered: dict[str, dict[str, Any]] = {}
         for root in roots:
             for subdir, key, pattern in (
-                ("ProcessLog", "csv", "*.csv"),
-                ("ProcessWindowLog", "log", "*.log"),
+                ("ProcessLog", "csv", "SUCCESS_*.csv"),
+                ("ProcessWindowLog", "log", "SUCCESS_*.log"),
             ):
                 folder = Path(root) / subdir
                 if not folder.exists():

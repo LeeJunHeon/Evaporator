@@ -1599,6 +1599,11 @@ class ProcessWindow(QWidget):
                 if ok:
                     self._append_process_log(f"[FINISHED][OK] run_id={rid}")
                     self._set_process_status("怨듭젙 ?꾨즺", f"run_id={rid}" if rid else "")
+                    ls = self._log_service
+                    if ls is not None and hasattr(ls, "mark_run_success"):
+                        with contextlib.suppress(Exception):
+                            ls.mark_run_success()
+                            self._append_process_log("[FINISHED] 성공 로그 파일 SUCCESS prefix 적용")
                 else:
                     self._append_process_log(f"[FINISHED][ABNORMAL] run_id={rid}")
 

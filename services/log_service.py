@@ -89,6 +89,10 @@ class CmdSetBaseDir(_CmdBase):
     base_dir: Path
 
 @dataclass(frozen=True)
+class CmdMarkSuccess(_CmdBase):
+    pass
+
+@dataclass(frozen=True)
 class CmdStop(_CmdBase):
     pass
 
@@ -325,6 +329,10 @@ class LogWriterWorker(QThread):
 
         if isinstance(cmd, CmdLog):
             self._write_log(cmd.level, cmd.msg, cmd.tag, cmd.also_ui, cmd.ts)
+            return
+
+        if isinstance(cmd, CmdMarkSuccess):
+            self._handle_mark_success()
             return
 
         if isinstance(cmd, CmdBarrier):
@@ -664,6 +672,52 @@ class LogWriterWorker(QThread):
         self._run_recipe = ""
         self._run_open_ts = 0.0
         self._run_meta = {}
+
+    def _handle_mark_success(self) -> None:
+        # .log 파일 rename
+        if self._run_log_path and self._run_log_path.exists():
+            try:
+                if self._run_log_fp:
+                    self._run_log_fp.flush()
+                parent = self._run_log_path.parent
+                old_name = self._run_log_path.name
+                if not old_name.startswith("SUCCESS_"):
+                    new_path = parent / f"SUCCESS_{old_name}"
+                    self._run_log_path.rename(new_path)
+                    self._run_log_path = new_path
+                    if self._run_log_fp:
+                        self._run_log_fp.close()
+                        self._run_log_fp = open(new_path, "a", encoding="utf-8", newline="")
+            except Exception as e:
+                try:
+                    self.sig_error.emit(f"[LogService] mark_run_success log rename failed: {e!r}")
+                except Exception:
+                    pass
+
+        # .csv 파일 rename
+        if self._tele_path and self._tele_path.exists():
+            try:
+                if self._tele_fp:
+                    self._tele_fp.flush()
+                parent = self._tele_path.parent
+                old_name = self._tele_path.name
+                if not old_name.startswith("SUCCESS_"):
+                    new_path = parent / f"SUCCESS_{old_name}"
+                    self._tele_path.rename(new_path)
+                    self._tele_path = new_path
+                    if self._tele_fp:
+                        self._tele_fp.close()
+                        self._tele_fp = open(new_path, "a", encoding="utf-8-sig", newline="")
+                    self._tele_writer = None
+            except Exception as e:
+                try:
+                    self.sig_error.emit(f"[LogService] mark_run_success csv rename failed: {e!r}")
+                except Exception:
+                    pass
+
+        # run_folder_name도 업데이트
+        if self._run_folder_name and not self._run_folder_name.startswith("SUCCESS_"):
+            self._run_folder_name = f"SUCCESS_{self._run_folder_name}"
 
     def _close_all(self) -> None:
         self._close_run()
@@ -1184,6 +1238,14 @@ class LogService(QObject):
 
     def close_run(self) -> None:
         self._worker.post(CmdCloseRun())
+
+    def mark_run_success(self) -> dict:
+        """
+        공정 성공 시 호출.
+        현재 run의 .log / .csv 파일명 앞에 SUCCESS_ prefix를 붙여 rename.
+        """
+        self._worker.post(CmdMarkSuccess())
+        return {}
 
     # ---------- telemetry ----------
     def telemetry(self, row: Dict[str, Any]) -> None:

@@ -618,16 +618,6 @@ class ProcessController(QObject):
             ProcessStep(name="POWER2_SET", type=StepType.PLC_WRITE_COIL, coil="POWER_2_SW", on=temp_force_power2_sw),
         ]
 
-        if use_p1:
-            steps.append(
-                ProcessStep(
-                    name="SHUTTER_1_OPEN",
-                    type=StepType.PLC_WRITE_COIL,
-                    coil="SHUTTER_1_SW",
-                    on=True,
-                )
-            )
-
         # 현재 UI active path에서는 preflight/start 단계에서 이미 FTM이 ON 되었을 수 있다.
         # 다만 controller 직접 시작 경로를 고려해 여기서는 idempotent ON step으로 유지한다.
         steps.append(ProcessStep(name="FTM_ON", type=StepType.PLC_WRITE_COIL, coil="FTM_SW", on=True))

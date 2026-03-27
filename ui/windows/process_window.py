@@ -2184,7 +2184,7 @@ class ProcessWindow(QWidget):
         # Power1 ?⑤룆 ?ъ슜 ???ㅼ젣 feedback? ADC2瑜??ъ슜?쒕떎.
         if use1 and not use2 and self._power1_feedback_uses_adc2:
             fb = self._to_float_or_none(adc2)
-            return fb, fb, None
+            return fb, None, fb
 
         graph_power = self._sum_selected_pair(
             self._to_float_or_none(adc1),
@@ -2385,7 +2385,7 @@ class ProcessWindow(QWidget):
 
         if use1:
             t1 = f"{p1:.1f}" if p1 is not None else "---"
-        if use2:
+        if use2 or p2 is not None:
             t2 = f"{p2:.1f}" if p2 is not None else "---"
 
         try:

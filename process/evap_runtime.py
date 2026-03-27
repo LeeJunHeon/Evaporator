@@ -747,6 +747,9 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
             _evap_apply_dac(engine, use_p1, use_p2, dac, tag=f"{tag}_RAMPDOWN")
             time.sleep(1.0)
 
+        engine._emit_status(message="EVAP 종료: DAC 0 도달 → 1분 후 전원 차단", force=True)
+        _wait_with_checks(60.0, label="전원 차단 전 대기 (60초)")
+
         engine._safe_shutdown_sequence(tag=tag)
 
         shutdown_done = True

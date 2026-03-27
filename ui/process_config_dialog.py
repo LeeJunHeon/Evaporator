@@ -22,25 +22,25 @@ from PySide6.QtWidgets import (
 
 
 PROCESS_CONFIG_TOOLTIPS = {
-    "dac_max": "Maximum DAC value allowed during the process.",
-    "rate_tol_ratio": "Allowed target-rate tolerance ratio used for stable-rate 판단.",
-    "rate_stable_sec": "Time that dep.rate must stay within tolerance before stable is reached.",
-    "hold_control_interval_s": "DAC update interval used during hold control.",
-    "fine_step_dac": "Fallback/manual hold adjustment step and default DAC delta limit basis.",
-    "hold_control_mode": "Hold control mode. PI is the default V3 path, STEP remains as a safe fallback.",
-    "hold_pi_kp": "Proportional gain for hold PI control.",
-    "hold_pi_ki": "Integral gain for hold PI control.",
-    "hold_integral_limit": "Absolute clamp applied to the hold PI integral term.",
-    "rate_filter_alpha": "EMA alpha used for filtered dep.rate in hold control.",
-    "rate_jump_guard_ratio": "Relative jump guard for filtered rate input.",
-    "rate_jump_guard_abs": "Absolute jump guard for filtered rate input.",
-    "hold_max_dac_delta": "Maximum DAC change allowed per hold-control update.",
-    "rate_abort_ratio": "Abort when raw dep.rate stays below this ratio of target rate.",
-    "rate_abort_sec": "Seconds that low-rate abort condition must persist.",
-    "sensor_none_abort_s": "Allowed duration for missing STM rate/thickness before abort.",
-    "adc_none_abort_s": "Allowed duration for missing ADC feedback before abort.",
-    "spike_abort_ratio": "STM 센서 오류 스파이크 감지 기준.\n목표 dep.rate의 N배 이상이면 스파이크로 간주합니다.\n(기본값 3.0 = 목표의 3배 이상이면 스파이크)",
-    "spike_grace_s": "스파이크 감지 후 rate_abort 판정을 유예하는 시간(초).\n이 시간 동안은 rate가 낮아도 물질 부족으로 판단하지 않습니다.\n(기본값 5.0초)",
+    "dac_max": "공정 중 허용되는 최대 DAC 값.\n이 값을 초과하면 공정이 중단됩니다.",
+    "rate_tol_ratio": "dep.rate 안정 판정 허용 오차 비율.\n예: 0.05 → 목표 rate의 ±5% 이내면 안정으로 판정.",
+    "rate_stable_sec": "dep.rate가 허용 오차 내에서 연속으로 유지돼야 하는 시간(초).\n이 시간 동안 안정 상태가 유지되면 Hold 구간으로 진입합니다.",
+    "hold_control_interval_s": "Hold 구간에서 DAC를 업데이트하는 주기(초).\n짧을수록 더 자주 조정하지만 노이즈에 민감해집니다.",
+    "fine_step_dac": "Hold 구간에서 DAC를 조정할 때의 기본 단위.\nSTEP 모드에서는 이 값으로 증감합니다.",
+    "hold_control_mode": "Hold 구간 제어 방식.\nPI: 비례+적분 제어 (권장)\nSTEP: 단순 단계 제어 (안전 fallback)",
+    "hold_pi_kp": "PI 제어의 비례 게인 (Kp).\n값이 클수록 오차에 빠르게 반응하지만 불안정해질 수 있습니다.",
+    "hold_pi_ki": "PI 제어의 적분 게인 (Ki).\n지속적인 오차를 보정합니다. 너무 크면 진동이 생길 수 있습니다.",
+    "hold_integral_limit": "적분항의 최대 절댓값 (Anti-windup).\n적분이 과도하게 쌓이는 것을 방지합니다.",
+    "rate_filter_alpha": "dep.rate EMA 필터 강도 (0~1).\n값이 작을수록 더 강하게 스무딩됩니다. 기본값 0.35",
+    "rate_jump_guard_ratio": "rate 순간 급변 억제 비율.\n이전 값 대비 이 비율 이상 변하면 변화량을 제한합니다.",
+    "rate_jump_guard_abs": "rate 순간 급변 억제 절댓값 (Å/s).\n한 번에 이 값 이상 변하면 변화량을 제한합니다.",
+    "hold_max_dac_delta": "Hold 구간에서 1회 DAC 변화 최대값.\n급격한 DAC 변동을 방지합니다.",
+    "rate_abort_ratio": "물질 부족 판정 기준 비율.\n예: 0.3 → dep.rate가 목표의 30% 이하로 떨어지면 카운트 시작.",
+    "rate_abort_sec": "물질 부족 판정 지속 시간(초).\n위 비율 이하 상태가 이 시간 이상 지속되면 공정을 종료합니다.",
+    "sensor_none_abort_s": "STM 센서 신호 없음 허용 시간(초).\n이 시간 동안 dep.rate 값이 없으면 공정을 종료합니다.",
+    "adc_none_abort_s": "ADC 신호 없음 허용 시간(초).\n이 시간 동안 ADC 값이 없으면 공정을 종료합니다.",
+    "spike_abort_ratio": "STM 스파이크 감지 기준 배율.\n예: 3.0 → dep.rate가 목표의 3배 이상이면 센서 오류로 간주.",
+    "spike_grace_s": "스파이크 감지 후 물질 부족 판정 유예 시간(초).\n이 시간 동안은 rate가 낮아도 공정을 종료하지 않습니다.",
 }
 
 
@@ -225,15 +225,15 @@ class ProcessConfigDialog(QDialog):
         self.holdPiKiSpin = self._make_double_spin(0.0, 9999.0, step=0.1, decimals=3)
         self.holdIntegralLimitSpin = self._make_double_spin(0.1, 9999.0, step=0.1, decimals=3)
 
-        self._add_form_row(hold_form, "Control Mode", self.holdControlModeCombo, "hold_control_mode")
-        self._add_form_row(hold_form, "Rate Tolerance Ratio", self.rateTolRatioSpin, "rate_tol_ratio")
-        self._add_form_row(hold_form, "Rate Stable Sec", self.rateStableSecSpin, "rate_stable_sec")
-        self._add_form_row(hold_form, "Control Interval (s)", self.holdControlIntervalSpin, "hold_control_interval_s")
-        self._add_form_row(hold_form, "Fine Step DAC", self.fineStepDacSpin, "fine_step_dac")
-        self._add_form_row(hold_form, "Max DAC Delta / Update", self.holdMaxDacDeltaSpin, "hold_max_dac_delta")
-        self._add_form_row(hold_form, "PI Kp", self.holdPiKpSpin, "hold_pi_kp")
-        self._add_form_row(hold_form, "PI Ki", self.holdPiKiSpin, "hold_pi_ki")
-        self._add_form_row(hold_form, "Integral Limit", self.holdIntegralLimitSpin, "hold_integral_limit")
+        self._add_form_row(hold_form, "제어 모드", self.holdControlModeCombo, "hold_control_mode")
+        self._add_form_row(hold_form, "안정 판정 허용 오차", self.rateTolRatioSpin, "rate_tol_ratio")
+        self._add_form_row(hold_form, "안정 유지 시간 (s)", self.rateStableSecSpin, "rate_stable_sec")
+        self._add_form_row(hold_form, "DAC 업데이트 주기 (s)", self.holdControlIntervalSpin, "hold_control_interval_s")
+        self._add_form_row(hold_form, "기본 DAC 조정 단위", self.fineStepDacSpin, "fine_step_dac")
+        self._add_form_row(hold_form, "1회 최대 DAC 변화량", self.holdMaxDacDeltaSpin, "hold_max_dac_delta")
+        self._add_form_row(hold_form, "비례 게인 (Kp)", self.holdPiKpSpin, "hold_pi_kp")
+        self._add_form_row(hold_form, "적분 게인 (Ki)", self.holdPiKiSpin, "hold_pi_ki")
+        self._add_form_row(hold_form, "적분 상한값", self.holdIntegralLimitSpin, "hold_integral_limit")
         body_root.addWidget(hold_box)
 
         filter_box = QGroupBox("Filter / Guard")
@@ -241,9 +241,9 @@ class ProcessConfigDialog(QDialog):
         self.rateFilterAlphaSpin = self._make_double_spin(0.01, 1.0, step=0.01, decimals=3)
         self.rateJumpGuardRatioSpin = self._make_double_spin(0.0, 10.0, step=0.05, decimals=3)
         self.rateJumpGuardAbsSpin = self._make_double_spin(0.0, 10.0, step=0.01, decimals=3)
-        self._add_form_row(filter_form, "Rate Filter Alpha", self.rateFilterAlphaSpin, "rate_filter_alpha")
-        self._add_form_row(filter_form, "Rate Jump Guard Ratio", self.rateJumpGuardRatioSpin, "rate_jump_guard_ratio")
-        self._add_form_row(filter_form, "Rate Jump Guard Abs", self.rateJumpGuardAbsSpin, "rate_jump_guard_abs")
+        self._add_form_row(filter_form, "Rate 필터 강도 (Alpha)", self.rateFilterAlphaSpin, "rate_filter_alpha")
+        self._add_form_row(filter_form, "급변 억제 비율", self.rateJumpGuardRatioSpin, "rate_jump_guard_ratio")
+        self._add_form_row(filter_form, "급변 억제 절댓값", self.rateJumpGuardAbsSpin, "rate_jump_guard_abs")
         body_root.addWidget(filter_box)
 
         safety_box = QGroupBox("Safety / Abort")
@@ -255,11 +255,11 @@ class ProcessConfigDialog(QDialog):
         self.adcNoneAbortSpin = self._make_double_spin(0.0, 99999.0, step=1.0, decimals=1)
         self.spikeAbortRatioSpin = self._make_double_spin(1.0, 20.0, step=0.5, decimals=1)
         self.spikeGraceSSpin = self._make_double_spin(0.0, 30.0, step=0.5, decimals=1)
-        self._add_form_row(safety_form, "Max DAC", self.dacMaxSpin, "dac_max")
-        self._add_form_row(safety_form, "Rate Abort Ratio", self.rateAbortRatioSpin, "rate_abort_ratio")
-        self._add_form_row(safety_form, "Rate Abort Sec", self.rateAbortSecSpin, "rate_abort_sec")
-        self._add_form_row(safety_form, "Sensor None Abort (s)", self.sensorNoneAbortSpin, "sensor_none_abort_s")
-        self._add_form_row(safety_form, "ADC None Abort (s)", self.adcNoneAbortSpin, "adc_none_abort_s")
+        self._add_form_row(safety_form, "최대 DAC", self.dacMaxSpin, "dac_max")
+        self._add_form_row(safety_form, "물질 부족 판정 비율", self.rateAbortRatioSpin, "rate_abort_ratio")
+        self._add_form_row(safety_form, "물질 부족 판정 시간 (s)", self.rateAbortSecSpin, "rate_abort_sec")
+        self._add_form_row(safety_form, "센서 신호 없음 허용 시간 (s)", self.sensorNoneAbortSpin, "sensor_none_abort_s")
+        self._add_form_row(safety_form, "ADC 신호 없음 허용 시간 (s)", self.adcNoneAbortSpin, "adc_none_abort_s")
         self._add_form_row(safety_form, "스파이크 감지 배율", self.spikeAbortRatioSpin, "spike_abort_ratio")
         self._add_form_row(safety_form, "스파이크 유예 시간 (s)", self.spikeGraceSSpin, "spike_grace_s")
         body_root.addWidget(safety_box)

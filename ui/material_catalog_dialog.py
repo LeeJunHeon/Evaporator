@@ -101,11 +101,15 @@ class MaterialCatalogDialog(QDialog):
 
         # MODIFIED: 구분선 컬럼 헤더도 회색으로 표시 (toolTip 포함)
         hdr = self.table.horizontalHeader()
+        last_col = len(MATERIAL_PARAMS) - 1
         for c in range(len(MATERIAL_PARAMS)):
             item = self.table.horizontalHeaderItem(c)
             if item and len(MATERIAL_PARAMS[c]) >= 4:
                 item.setToolTip(MATERIAL_PARAMS[c][3])
-            hdr.setSectionResizeMode(c, QHeaderView.ResizeToContents)
+            if c == last_col:
+                hdr.setSectionResizeMode(c, QHeaderView.Stretch)
+            else:
+                hdr.setSectionResizeMode(c, QHeaderView.ResizeToContents)
 
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)

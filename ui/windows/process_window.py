@@ -35,7 +35,7 @@ from controller.process_start_worker import (
 if TYPE_CHECKING:
     from ui.windows.hmi_window import HmiWindow
 
-# ???뚯씪 ?꾩튂媛 root??ui ?대뜑??????踰꾪떚?꾨줉
+
 _BASE_DIR = Path(__file__).resolve().parent
 while not (_BASE_DIR / "config").exists() and _BASE_DIR != _BASE_DIR.parent:
     _BASE_DIR = _BASE_DIR.parent
@@ -68,14 +68,14 @@ class ProcessWindow(QWidget):
         self.ui = Ui_Form()
         self.ui.setupUi(self)
 
-        # ??怨듭젙蹂?ProcessWindowLog ?뚯씪 ?앸퀎??
+
         self._active_run_id: Optional[str] = None
 
         self.setWindowTitle("Process")
         self.ui.stackedWidget.setCurrentIndex(1)  # Process page
 
         self.hmi_window: Optional[HmiWindow] = None
-        self._close_stop_guard = False   # ??closeEvent?먯꽌 stop 以묐났 ?ㅽ뻾 諛⑹?
+        self._close_stop_guard = False
 
         self._process_controller: Any = None
         self._log_service: Any = None
@@ -92,7 +92,7 @@ class ProcessWindow(QWidget):
         self._active_run_profile: Optional[dict[str, Any]] = None
         self._last_recommendation: Optional[dict[str, Any]] = None
 
-        # ??UI??"?ㅼ젣濡?connect??STM ?몄뒪?댁뒪" 異붿쟻??寃쎄퀬/以묐났 connect 諛⑹?)
+
         self._stm_ui_bound: bool = False
         self._stm_ui_stm: Any = None
 
@@ -104,8 +104,8 @@ class ProcessWindow(QWidget):
         self._run_use_power2: Optional[bool] = None
 
         # ?꾩옱 ?섎뱶?⑥뼱 ?꾩떆 ?고쉶 ?뺤콉
-        # - Power2???꾩옱 ?λ퉬 臾몄젣濡?start path?먯꽌 鍮꾪솢??
-        # - Power1 actual feedback? ?꾩떆濡?ADC2瑜??ъ슜
+
+
         self._power2_temporarily_disabled: bool = True
         self._power1_feedback_uses_adc2: bool = True
 
@@ -115,7 +115,7 @@ class ProcessWindow(QWidget):
         self.ui.startProcess.clicked.connect(self._on_start_clicked)
         self.ui.stopProcess.clicked.connect(self._on_stop_clicked)
 
-        # ??Process Config 踰꾪듉 ?곌껐
+
         cfg_btn = getattr(self.ui, "processConfigBtn", None)
         if cfg_btn is not None and hasattr(cfg_btn, "clicked"):
             cfg_btn.clicked.connect(self._open_process_config_dialog)
@@ -124,24 +124,24 @@ class ProcessWindow(QWidget):
             recipe_btn.clicked.connect(self._open_process_recipe_dialog)
         self._setup_process_action_panel()
 
-        # ?????꾨줈?몄뒪 ?ㅼ젙(ADC step 湲곕컲) 蹂닿?
+
         self._process_cfg: dict[str, Any] = self._default_process_config()
 
         # =========================
-        # ??RT ?쒖떆(1珥? + 洹몃옒??
+
         # =========================
         self._last_rate: Optional[float] = None
         self._last_thickness: Optional[float] = None
 
-        # ???댁젣 _last_power ??"洹몃옒???ㅻⅨ履?異뺤뿉 ?ｌ쓣 媛?
-        #    ?꾩옱 ?④퀎?먯꽌??ADC total ?곗꽑媛믪쑝濡??ъ슜
+
+
         self._last_power: Optional[float] = None
 
         self._plot: Optional[DepositionPlotWidget] = None
         self._init_rt_plot()  # graphWidget ?먮━??plot ?쎌엯
 
         self._rt_timer = QTimer(self)
-        self._rt_timer.setInterval(1000)  # ??1珥?
+        self._rt_timer.setInterval(1000)
         self._rt_timer.timeout.connect(self._tick_rt_ui)
 
         self._setup_process_monitor_ui()
@@ -162,8 +162,8 @@ class ProcessWindow(QWidget):
         self._run_summary_service = run_summary_service
         self._recommendation_service = recommendation_service
 
-        # PROCESS 濡쒓렇???꾩젽 ?꾪궧???섏〈?섏? ?딄퀬
-        # _append_process_log()?먯꽌 紐낆떆?곸쑝濡?run_line()源뚯? 蹂대궦??
+
+
 
         pc = self._process_controller
         if pc is not None:
@@ -781,7 +781,7 @@ class ProcessWindow(QWidget):
             self._unbind_stm_ui()
             return
 
-        # ?대? 媛숈? stm??諛붿씤?⑸릺???덉쑝硫?以묐났 connect 諛⑹?
+
         if self._stm_ui_bound and (self._stm_ui_stm is stm):
             return
 
@@ -792,7 +792,7 @@ class ProcessWindow(QWidget):
         stm.sig_rate.connect(self._on_stm_rate)
         stm.sig_thickness.connect(self._on_stm_thickness)
 
-        # 諛붿씤???곹깭 湲곕줉
+
         self._stm_ui_stm = stm
         self._stm_ui_bound = True
 
@@ -809,7 +809,7 @@ class ProcessWindow(QWidget):
             self._stm_ui_bound = False
             return
 
-        # ?덉쟾?μ튂: PySide媛 disconnect ?ㅽ뙣瑜?RuntimeWarning?쇰줈 李띾뒗 寃쎌슦源뚯? ?듭젣
+
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)
 
@@ -827,7 +827,7 @@ class ProcessWindow(QWidget):
         self._stm_ui_bound = False
 
     def _on_stm_rate(self, rate):
-        # ??媛믩쭔 ???(UI/洹몃옒?꾨뒗 1珥???대㉧?먯꽌)
+
         try:
             self._last_rate = float(rate)
         except Exception:
@@ -867,12 +867,12 @@ class ProcessWindow(QWidget):
         try:
             connected = False
 
-            # 1?쒖쐞: plc_service.is_connected()媛 ?덉쑝硫??ъ슜
+
             is_connected_fn = getattr(plc, "is_connected", None)
             if callable(is_connected_fn):
                 connected = bool(is_connected_fn())
             else:
-                # 2?쒖쐞: latest snapshot??connected 媛??ъ슜
+
                 snap = plc.get_last_snapshot() if hasattr(plc, "get_last_snapshot") else None
                 connected = bool(getattr(snap, "connected", False))
 
@@ -905,7 +905,7 @@ class ProcessWindow(QWidget):
             self._append_process_log("[DEV][ERR] ini_path is None -> cannot prepare STM")
             return False
 
-        # ?댁쟾 STM ?뺣━ (start 吏곸쟾?대?濡?FTM OFF源뚯? ?ы븿??best-effort cleanup)
+
         self._shutdown_stm_with_ftm_off_best_effort()
 
         binder = getattr(self.hmi_window, "_plc_binder", None)
@@ -1020,8 +1020,8 @@ class ProcessWindow(QWidget):
         with contextlib.suppress(Exception):
             self._shutdown_stm_with_ftm_off_best_effort()
 
-        # ???ш린?쒕뒗 ?ъ슜???낅젰媛믪쓣 吏?곗? ?딅뒗??
-        #    preflight ?ㅽ뙣?덈떎怨?process name / thickness / rate源뚯? 珥덇린?뷀븯硫?UX媛 ?섎튌吏꾨떎.
+
+
         self._pending_run_cfg = None
 
         self._cleanup_start_worker()
@@ -1176,7 +1176,7 @@ class ProcessWindow(QWidget):
         except Exception:
             pass
 
-        # 1) UI ?낅젰 寃利?
+
         run_cfg = self._collect_ui_run_cfg(require_process_name=True)
         if run_cfg is None:
             return
@@ -1197,7 +1197,7 @@ class ProcessWindow(QWidget):
         self._active_run_cfg = dict(run_cfg)
         self._active_run_profile = dict(run_profile)
 
-        # 2) run_id ?앹꽦 + run 濡쒓렇 open
+
         run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
         self._open_process_run_log(run_id, run_cfg, run_profile)
 
@@ -1241,7 +1241,7 @@ class ProcessWindow(QWidget):
             self._active_run_profile = None
             return
 
-        # 4) STM service 以鍮??ш린?쒕뒗 blocking wait ????
+
         if not self._prepare_stm_service_for_start():
             QMessageBox.warning(self, "Device Connect Failed", "STM 점검 실패")
             with contextlib.suppress(Exception):
@@ -1253,7 +1253,7 @@ class ProcessWindow(QWidget):
             self._active_run_profile = None
             return
 
-        # 5) ?ㅼ젣 ?곌껐 ?湲?/ crystal health??worker濡??섍릿??
+
         self._start_async_preflight(run_cfg)
             
     def _on_stop_clicked(self) -> None:
@@ -1525,7 +1525,7 @@ class ProcessWindow(QWidget):
                     if _set_pair(st.get("adc1"), st.get("adc2")):
                         return
 
-                # fallback: ?꾩쭅 adc 誘멸뎄?꾩씠硫?dac ?ъ슜
+
                 for k in ("power", "power_dac", "dac", "dac_power", "power_cmd", "dac_cmd"):
                     if k in st and st[k] is not None:
                         self._last_power = float(st[k])
@@ -1536,7 +1536,7 @@ class ProcessWindow(QWidget):
                         return
                 return
 
-            # 媛앹껜 ?뺥깭
+
             for name in ("adc_total", "power_actual", "actual_power", "power_read", "adc"):
                 if hasattr(st, name):
                     v = getattr(st, name)
@@ -1692,12 +1692,12 @@ class ProcessWindow(QWidget):
             pass
 
         max_dac = max(dac1, dac2, 0.0)
-        ramp_s = max_dac / 100.0   # 1珥덉뿉 100 媛먯냼 湲곗?
-        timeout_s = ramp_s + 5.0   # 踰꾪띁 5珥?
+        ramp_s = max_dac / 100.0
+        timeout_s = ramp_s + 5.0
         return max(3.0, min(timeout_s, 30.0))
 
     def closeEvent(self, event):
-        # 1) 癒쇱? stop / cancel ?붿껌
+
         if not getattr(self, "_close_stop_guard", False):
             self._close_stop_guard = True
             try:
@@ -1705,7 +1705,7 @@ class ProcessWindow(QWidget):
             except Exception:
                 pass
 
-        # 2) Start preflight媛 ?댁븘 ?덉쑝硫?癒쇱? 湲곕떎由곕떎
+
         if self._has_active_start_preflight():
             stopped = True
             try:
@@ -1725,7 +1725,7 @@ class ProcessWindow(QWidget):
                 event.ignore()
                 return
 
-        # 3) ?ㅼ젣 怨듭젙???뚭퀬 ?덉뿀?ㅻ㈃ 湲곗〈 shutdown wait
+
         timeout_s = 3.0
         try:
             timeout_s = self._estimate_stop_wait_timeout_s()
@@ -1760,7 +1760,7 @@ class ProcessWindow(QWidget):
         if not sel:
             return
 
-        # ??source 踰꾪듉? 臾쇱쭏 ?뺣낫留?愿由?
+
         data = {
             "material": getattr(sel, "material", ""),
             "density_g_cm3": getattr(sel, "density_g_cm3", 0.0),
@@ -2104,7 +2104,7 @@ class ProcessWindow(QWidget):
             lay.setSpacing(0)
             host.setLayout(lay)
 
-        # 湲곗〈 ?꾩젽 ?쒓굅(以묐났 諛⑹?)
+
         while lay.count():
             item = lay.takeAt(0)
             w = item.widget()
@@ -2165,7 +2165,7 @@ class ProcessWindow(QWidget):
         self._update_dac_power_ui(dac1, dac2)
         self._update_actual_power_ui(display_adc1, display_adc2)
 
-        # 3) 洹몃옒??媛깆떊
+
         if self._plot is not None:
             try:
                 self._plot.append(
@@ -2187,7 +2187,7 @@ class ProcessWindow(QWidget):
         use1, use2 = self._selected_power_flags()
 
         # ?꾩옱 ?섎뱶?⑥뼱 ?꾩떆 ?고쉶:
-        # Power1 ?⑤룆 ?ъ슜 ???ㅼ젣 feedback? ADC2瑜??ъ슜?쒕떎.
+
         if use1 and not use2 and self._power1_feedback_uses_adc2:
             fb = self._to_float_or_none(adc2)
             return fb, None, fb
@@ -2197,7 +2197,7 @@ class ProcessWindow(QWidget):
             self._to_float_or_none(adc2),
         )
         return graph_power, self._to_float_or_none(adc1), self._to_float_or_none(adc2)
-    # ================== 洹몃옒???ㅼ젙 ==================
+
 
     @staticmethod
     def _clamp_nonneg(v: Optional[float]) -> Optional[float]:
@@ -2427,7 +2427,7 @@ class ProcessWindow(QWidget):
         with contextlib.suppress(Exception):
             self.ui.materialEdit2.setText("Select")
 
-        # ?꾩옱媛??쒖떆 珥덇린??
+
         for wname in (
             "currentRateEdit",
             "currentThicknessEdit",
@@ -2452,7 +2452,7 @@ class ProcessWindow(QWidget):
         self._last_thickness = None
         self._last_power = None
 
-    # ================== UI 媛??뚯떛 ==================
+
     def _read_float(self, wname: str) -> Optional[float]:
         w = getattr(self.ui, wname, None)
         if w is None or not hasattr(w, "text"):
@@ -2471,16 +2471,16 @@ class ProcessWindow(QWidget):
         require_process_name: bool = True,
         process_cfg_override: Optional[dict[str, Any]] = None,
     ) -> Optional[dict[str, Any]]:
-        # ??Power ?좏깮: 1媛??먮뒗 2媛??덉슜
+
         p1 = bool(getattr(getattr(self.ui, "sourcePower1", None), "isChecked", lambda: False)())
         p2 = bool(getattr(getattr(self.ui, "sourcePower2", None), "isChecked", lambda: False)())
         if not (p1 or p2):
             QMessageBox.warning(self, "Input", "Power1/Power2 중 최소 1개는 선택해야 합니다.")
             return None
 
-        # ?꾨옒 Power2 / dual-power 遺꾧린???꾩옱 ?섎뱶?⑥뼱 臾몄젣濡??명빐
-        # ?꾩쓽 ?꾩떆 李⑤떒??嫄몃젮 ?ㅼ젣濡쒕뒗 吏꾩엯?섏? ?딅뒗??
-        # ?ㅻ쭔 ?λ퉬 ?섎━ ???ㅼ떆 ?쒖꽦?뷀븷 蹂듦뎄 寃쎈줈?대?濡???젣?섏? ?딄퀬 ?좎??쒕떎.
+
+
+
         if self._power2_temporarily_disabled and p2:
             QMessageBox.warning(
                 self,
@@ -2491,12 +2491,12 @@ class ProcessWindow(QWidget):
             )
             return None
 
-        # ??Target Dep.rate: ?좏깮??power???대떦?섎뒗 ?낅젰移몃쭔 ?ъ슜 (fallback ?놁쓬)
+
         rate1 = self._read_float("deprateEdit")
         rate2 = self._read_float("deprateEdit2")
 
         if p1 and not p2:
-            # Power1留??좏깮 ??Dep.rate 1留?蹂몃떎
+
             if rate1 is None:
                 QMessageBox.warning(self, "Input", "Power1 선택 시 Target Dep.rate 1을 입력해 주세요.")
                 return None
@@ -2506,7 +2506,7 @@ class ProcessWindow(QWidget):
             target_rate = rate1
 
         elif p2 and not p1:
-            # Power2留??좏깮 ??Dep.rate 2留?蹂몃떎
+
             if rate2 is None:
                 QMessageBox.warning(self, "Input", "Power2 선택 시 Target Dep.rate 2를 입력해 주세요.")
                 return None
@@ -2517,8 +2517,8 @@ class ProcessWindow(QWidget):
 
         else:
             # Power1 + Power2 ?숈떆 ?좏깮
-            # ?꾩옱 ProcessController??target_rate媛 1媛쒕쭔 ?ㅼ뼱媛?꾨줉 ?ㅺ퀎?섏뼱 ?덉뼱??= ?붿쭊??1媛?紐⑺몴濡??숈옉),
-            # ??媛믪쓣 ?ㅻⅤ寃?諛쏆쑝硫??댄썑 ?④퀎?먯꽌 紐⑥닚/?ㅻ룞??媛?????????낅젰 + ?숈씪媛?媛뺤젣
+
+
             if rate1 is None:
                 QMessageBox.warning(self, "Input", "Power1+Power2 동시 사용 시 Target Dep.rate 1을 입력해 주세요.")
                 return None
@@ -2534,7 +2534,7 @@ class ProcessWindow(QWidget):
 
             target_rate = rate1
 
-        # 怨듯넻 ?낅젰媛?
+
         target_thk = self._read_float("thicknessEdit")
         delay_min = self._read_float("delayEdit")
         if target_thk is None:
@@ -2555,7 +2555,7 @@ class ProcessWindow(QWidget):
                 return None
             base_mat = self._material_1 or self._material_2
 
-            # ?????좏깮?섏뼱 ?덉쓣 ??????material??議댁옱?섎㈃ ?숈씪??泥댄겕
+
             if self._material_1 and self._material_2:
                 m1 = str(self._material_1.get("material", "")).strip()
                 m2 = str(self._material_2.get("material", "")).strip()
@@ -2654,9 +2654,9 @@ class ProcessWindow(QWidget):
         }
         return cfg
     
-    # ================== UI 媛??뚯떛 ==================
 
-    # ================== 怨듭젙 醫낅즺 ?⑥닔 ==================
+
+
     def _emergency_safe_shutdown_plc_best_effort(self) -> None:
         """
         鍮꾩긽 fallback ?꾩슜 PLC 醫낅즺.
@@ -2677,7 +2677,7 @@ class ProcessWindow(QWidget):
         except Exception as e:
             self._append_process_log(f"[SAFE][WARN] MAIN_SHUTTER close failed: {e!r}")
 
-        # 2) DAC=0? 臾댁“嫄??쒕룄(誘멸뎄?꾩씠硫?洹멸쾶 踰꾧렇濡??쒕윭?섏빞 ??
+
         try:
             binder.enqueue_write_reg("DAC_POWER_1", 0)
             binder.enqueue_write_reg("DAC_POWER_2", 0)
@@ -2694,6 +2694,6 @@ class ProcessWindow(QWidget):
             self._append_process_log(f"[SAFE][WARN] POWER off failed: {e!r}")
 
         self._last_power = 0.0
-    # ================== 怨듭젙 醫낅즺 ?⑥닔 ==================
+
 
 

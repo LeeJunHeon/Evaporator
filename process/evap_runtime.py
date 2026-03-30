@@ -1066,15 +1066,6 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         # -------------------------
         # 2) 파워 유지
         # -------------------------
-        engine._emit_status(message="EVAP HOLD 진입: STM ZERO", force=True)
-
-        zero_mode = str(meta.get("zero_mode", "B") or "B")
-        _stm_zero_thickness(engine, recipe, step, mode=zero_mode)
-
-        # ZERO 직후 stale thickness를 baseline으로 잡지 않도록
-        # 한 번 반영 시간을 준다.
-        _wait_with_checks(hold_control_interval_s, label="STM ZERO 반영 대기")
-
         filtered_rate: Optional[float] = None
         filtered_rate = _run_preopen_guard(filtered_rate)
 
@@ -1086,6 +1077,15 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
                 force=True,
             )
             _wait_with_checks(delay_s, label=f"셔터 오픈 대기 ({delay_min:.1f}분)")
+
+        # shutter delay 완료 후 STM Zero — delay 중 증착된 두께를 리셋
+        engine._emit_status(message="EVAP HOLD 진입: STM ZERO", force=True)
+        zero_mode = str(meta.get("zero_mode", "B") or "B")
+        _stm_zero_thickness(engine, recipe, step, mode=zero_mode)
+
+        # ZERO 직후 stale thickness를 baseline으로 잡지 않도록
+        # 한 번 반영 시간을 준다.
+        _wait_with_checks(hold_control_interval_s, label="STM ZERO 반영 대기")
 
         engine._plc_write_coil("MAIN_SHUTTER_SW", True, tag="EVAP_MAIN_SHUTTER_OPEN")
         shutter_open = True

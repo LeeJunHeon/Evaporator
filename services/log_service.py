@@ -8,7 +8,7 @@ services/log_service.py
 3) \\...\Evaporator\\ProcessLog\\<run_id>_<recipe>.csv       (공정 1개당 세부값 CSV)
 
 - UI/공정/장비 서비스가 동시에 로그를 남겨도 안전하게(단일 writer thread) 처리
-- NAS 장애 시 자동 fallback(_Logs_local_*)에 저장 후, NAS 복구 시 파일을 NAS로 “합쳐서” 복구(간단/확실 방식)
+- NAS 장애 시 자동 fallback(_Logs_local_*)에 저장 후, NAS 복구 시 파일을 NAS로 "합쳐서" 복구(간단/확실 방식)
 """
 
 from __future__ import annotations
@@ -50,7 +50,7 @@ class CmdLog(_CmdBase):
 @dataclass(frozen=True)
 class CmdUiLine(_CmdBase):
     """
-    UI 위젯(appendPlainText/append)에서 올라온 “원문 그대로” 저장용.
+    UI 위젯(appendPlainText/append)에서 올라온 "원문 그대로" 저장용.
     - channel="HMI"     -> 일별 로그에 저장
     - channel="PROCESS" -> run이 열려있으면 run 로그에 저장
     """
@@ -157,7 +157,7 @@ class LogWriterWorker(QThread):
         self._cmd_q: "queue.Queue[_CmdBase]" = queue.Queue()
         self._stop_evt = threading.Event()
 
-        # ✅ base_dir는 “루트” (\\...\Evaporator)
+        # ✅ base_dir는 "루트" (\\...\Evaporator)
         default_root = default_temp_log_root(self._app_name)
         self._base_dir = Path(base_dir) if base_dir else default_root
         self._fallback_dir = default_temp_log_fallback_root(self._app_name)
@@ -748,7 +748,7 @@ class LogWriterWorker(QThread):
 
     def _write_log(self, level: str, msg: str, tag: str, also_ui: bool, ts: Optional[float]) -> None:
         """
-        ✅ 포맷 로그는 “일별(HMI) 로그”에만 저장
+        ✅ 포맷 로그는 "일별(HMI) 로그"에만 저장
         - run 로그는 ProcessWindow UI 로그(원문)만 저장하도록 분리
         """
         line = self._format_line(level, msg, tag, ts)
@@ -1013,7 +1013,7 @@ class LogWriterWorker(QThread):
     def _maybe_migrate_back_to_nas(self) -> None:
         """
         ✅ NAS 복구 감지 시:
-        - fallback에 쌓인 로그/CSV를 NAS 파일 끝에 “합쳐서” 복구
+        - fallback에 쌓인 로그/CSV를 NAS 파일 끝에 "합쳐서" 복구
         - 이후 NAS 쪽으로 재오픈하여 계속 기록
         """
         now = time.time()
@@ -1186,7 +1186,7 @@ class LogService(QObject):
         """
         QPlainTextEdit/QTextEdit의 append 계열 호출을 후킹해서:
         - UI 표시는 그대로 유지
-        - 동시에 LogService로 “원문”을 보내 파일 저장
+        - 동시에 LogService로 "원문"을 보내 파일 저장
 
         channel="HMI" / "PROCESS"
         """

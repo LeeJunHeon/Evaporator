@@ -315,7 +315,7 @@ class STM100(BaseSerialDevice):
 
                 # 체크섬 불일치는 케이블/노이즈 문제로 자주 발생하므로 재시도 가능 오류로 처리
                 if not chk_ok:
-                    raise STM100ProtocolError(f”STM-100 checksum mismatch. rx={payload!r}”)
+                    raise STM100ProtocolError(f"STM-100 checksum mismatch. rx={payload!r}")
 
                 code = payload[0] if payload else ""
                 body = payload[1:] if len(payload) > 1 else ""
@@ -398,7 +398,7 @@ class STM100(BaseSerialDevice):
         """
         S : thickness value (Å)
         - 정상 예: "-0001595" 같은 정수 문자열
-        - 간헐적으로 '' 또는 '--------' 같은 “측정 불가/응답 불완전”이 올 수 있어 방어 처리
+        - 간헐적으로 '' 또는 '--------' 같은 "측정 불가/응답 불완전"이 올 수 있어 방어 처리
         """
         s = self.command("S")
         ss = (s or "").strip()
@@ -713,7 +713,7 @@ class STM100(BaseSerialDevice):
         settle_delay_s: float = 0.05 # SET 직후 내부 반영 딜레이(짧게)
     ) -> None:
         """
-        공정에서 쓰기 좋은 “한 방” API
+        공정에서 쓰기 좋은 "한 방" API
         - film_no가 없으면 현재 film(E/F)에 적용 (✅ 네 운영 방식)
         - verify=True면 E?/F? (또는 jN?/kN?)로 read-back 검증
         """

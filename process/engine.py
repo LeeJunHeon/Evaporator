@@ -814,7 +814,7 @@ class ProcessEngine:
                     )
                 return
 
-            # ✅ 표시 제목: step.message가 있으면 그것을 우선 사용(“텍스트 직접 지정” 지원)
+            # ✅ 표시 제목: step.message가 있으면 그것을 우선 사용("텍스트 직접 지정" 지원)
             prefix = (str(getattr(step, "message", "") or "").strip()) or (step.name or "WAIT")
 
             # 1초마다 표시
@@ -914,7 +914,7 @@ class ProcessEngine:
             # UI 표시(조건/경과/남은)
             if now_m >= next_ui_m:
                 elapsed_s = now_m - start_m
-                # ✅ 표시 제목: step.message가 있으면 그것을 우선 사용(“텍스트 직접 지정” 지원)
+                # ✅ 표시 제목: step.message가 있으면 그것을 우선 사용("텍스트 직접 지정" 지원)
                 prefix = (str(getattr(step, "message", "") or "").strip())
                 if not prefix:
                     # 기본값(기존 cond_desc는 유지하되, 사용자 지정 메시지가 있으면 그게 우선)

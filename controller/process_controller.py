@@ -522,9 +522,9 @@ class ProcessController(QObject):
 
         hold_max_dac_delta = _optional_int("hold_max_dac_delta", cfg["fine_step_dac"], 1)
         hold_pi_ki = _optional_float("hold_pi_ki", max(0.0, hold_max_dac_delta * 0.8), 0.0)
-        hold_control_mode = str(proc_src.get("hold_control_mode", "PI") or "").strip().upper() or "PI"
+        hold_control_mode = str(proc_src.get("hold_control_mode", "PID") or "").strip().upper() or "PID"
         if hold_control_mode not in {"PI", "PID", "STEP"}:
-            hold_control_mode = "PI"
+            hold_control_mode = "PID"
 
         cfg.update({
             "hold_control_mode": hold_control_mode,

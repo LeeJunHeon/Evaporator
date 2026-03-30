@@ -1229,7 +1229,7 @@ class ProcessWindow(QWidget):
             f"dac_max={proc_cfg.get('dac_max')} | "
             f"rate_tol_ratio={proc_cfg.get('rate_tol_ratio')} | "
             f"fine_step_dac={proc_cfg.get('fine_step_dac')} | "
-            f"hold_mode={proc_cfg.get('hold_control_mode', 'PI')} | "
+            f"hold_mode={proc_cfg.get('hold_control_mode', 'PID')} | "
             f"hold_max_delta={proc_cfg.get('hold_max_dac_delta', proc_cfg.get('fine_step_dac'))}"
         )
         if run_profile.get("initial_dac") is not None:
@@ -1803,7 +1803,7 @@ class ProcessWindow(QWidget):
             "rate_stable_sec": 3.0,
             "hold_control_interval_s": 1.0,
             "fine_step_dac": 10,
-            "hold_control_mode": "PI",
+            "hold_control_mode": "PID",
             "hold_pi_kp": 50.0,
             "hold_pi_ki": 8.0,
             "hold_integral_limit": 2.5,
@@ -1900,9 +1900,9 @@ class ProcessWindow(QWidget):
             max(1.0, (2.0 * hold_max_dac_delta) / max(hold_pi_ki, 1e-6)),
             0.1,
         )
-        hold_control_mode = str(src.get("hold_control_mode", default["hold_control_mode"]) or "").strip().upper() or "PI"
-        if hold_control_mode not in {"PI", "STEP"}:
-            hold_control_mode = "PI"
+        hold_control_mode = str(src.get("hold_control_mode", default["hold_control_mode"]) or "").strip().upper() or "PID"
+        if hold_control_mode not in {"PI", "PID", "STEP"}:
+            hold_control_mode = "PID"
 
         return {
             "step_count": len(steps),

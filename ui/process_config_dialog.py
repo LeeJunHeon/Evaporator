@@ -88,7 +88,7 @@ class ProcessConfigDialog(QDialog):
             "rate_stable_sec": 3.0,
             "hold_control_interval_s": 1.0,
             "fine_step_dac": 10,
-            "hold_control_mode": "PI",
+            "hold_control_mode": "PID",
             "hold_pi_kp": 50.0,
             "hold_pi_ki": 8.0,
             "hold_pi_kd": 0.0,
@@ -166,9 +166,9 @@ class ProcessConfigDialog(QDialog):
         hold_max_dac_delta = _as_int("hold_max_dac_delta", fine_step_dac, 1)
         # Ki 기본값: hold_max_dac_delta * 0.8 → 스텝 크기 대비 적분 속도 자동 스케일링
         hold_pi_ki = _as_float("hold_pi_ki", max(0.0, hold_max_dac_delta * 0.8), 0.0)
-        hold_control_mode = str(src.get("hold_control_mode", default["hold_control_mode"]) or "").strip().upper() or "PI"
+        hold_control_mode = str(src.get("hold_control_mode", default["hold_control_mode"]) or "").strip().upper() or "PID"
         if hold_control_mode not in {"PI", "PID", "STEP"}:
-            hold_control_mode = "PI"
+            hold_control_mode = "PID"
 
         return {
             "step_count": len(steps),
@@ -314,7 +314,7 @@ class ProcessConfigDialog(QDialog):
 
     def _load_config(self, cfg: dict[str, Any]) -> None:
         cfg = self._normalize_config(cfg)
-        self.holdControlModeCombo.setCurrentText(str(cfg.get("hold_control_mode", "PI") or "PI"))
+        self.holdControlModeCombo.setCurrentText(str(cfg.get("hold_control_mode", "PID") or "PID"))
         self.rateTolRatioSpin.setValue(float(cfg.get("rate_tol_ratio", 0.05)))
         self.rateStableSecSpin.setValue(float(cfg.get("rate_stable_sec", 3.0)))
         self.holdControlIntervalSpin.setValue(float(cfg.get("hold_control_interval_s", 1.0)))
@@ -346,7 +346,7 @@ class ProcessConfigDialog(QDialog):
                 "rate_stable_sec": float(self.rateStableSecSpin.value()),
                 "hold_control_interval_s": float(self.holdControlIntervalSpin.value()),
                 "fine_step_dac": int(self.fineStepDacSpin.value()),
-                "hold_control_mode": str(self.holdControlModeCombo.currentText() or "PI").strip().upper(),
+                "hold_control_mode": str(self.holdControlModeCombo.currentText() or "PID").strip().upper(),
                 "hold_pi_kp": float(self.holdPiKpSpin.value()),
                 "hold_pi_ki": float(self.holdPiKiSpin.value()),
                 "hold_pi_kd": float(self.holdPiKdSpin.value()),

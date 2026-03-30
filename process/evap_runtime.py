@@ -273,26 +273,28 @@ def _compute_hold_pid_delta(
     integral_limit: float,
     max_delta: int,
     dac_max: int,
-) -> tuple[int, float, float, Optional[float], bool]:
+) -> tuple[int, float, float, Optional[float], bool, bool]:
     """
-    반환: (delta, next_integral, next_prev_error_ratio, error, in_tolerance)
+    반환: (delta, next_integral, next_prev_error_ratio, error, in_tolerance, windup_clamp)
+    windup_clamp: rate 기반 Anti-Windup (Method A 또는 B)가 적용됐으면 True
     """
     if filtered_rate is None or target_rate <= 0.0:
-        return 0, integral_state, prev_error_ratio, None, False
+        return 0, integral_state, prev_error_ratio, None, False, False
 
     error = float(target_rate) - float(filtered_rate)
     tolerance = abs(float(target_rate)) * float(tol_ratio)
 
     if abs(error) <= tolerance:
-        return 0, integral_state * 0.85, prev_error_ratio, error, True
+        return 0, integral_state * 0.85, prev_error_ratio, error, True, False
 
     dt = max(0.1, float(interval_s))
     error_ratio = error / max(abs(float(target_rate)), 1e-6)
+    windup_clamp = False
 
     # P항
     p_term = float(kp) * error_ratio
 
-    # I항 (anti-windup)
+    # I항
     next_integral = integral_state + (error_ratio * dt)
     next_integral = max(-abs(float(integral_limit)), min(abs(float(integral_limit)), next_integral))
     i_term = float(ki) * next_integral
@@ -300,10 +302,25 @@ def _compute_hold_pid_delta(
     # D항 (filtered_rate 기반 — 노이즈 억제)
     d_term = float(kd) * (error_ratio - prev_error_ratio) / dt
 
-    delta_f = p_term + i_term + d_term
-
+    delta_f_raw = p_term + i_term + d_term
     max_step = max(1, int(max_delta))
-    delta_f = max(-float(max_step), min(float(max_step), delta_f))
+    delta_f = max(-float(max_step), min(float(max_step), delta_f_raw))
+
+    # Method A: 출력 포화 시 back-calculation — 실제 출력 제한분만큼 integral 보정
+    if delta_f_raw != delta_f and float(ki) > 0.0:
+        excess = delta_f_raw - delta_f
+        next_integral = next_integral - excess / float(ki)
+        next_integral = max(-abs(float(integral_limit)), min(abs(float(integral_limit)), next_integral))
+        i_term = float(ki) * next_integral
+        delta_f = max(-float(max_step), min(float(max_step), p_term + i_term + d_term))
+        windup_clamp = True
+
+    # Method B: rate overshoot 감지 — error 부호가 이전과 반전됐을 때 integral 감쇠
+    if prev_error_ratio != 0.0 and (error_ratio * prev_error_ratio < 0.0):
+        next_integral *= 0.5
+        i_term = float(ki) * next_integral
+        delta_f = max(-float(max_step), min(float(max_step), p_term + i_term + d_term))
+        windup_clamp = True
 
     # anti-windup: DAC 상/하한에서 integral 롤백
     at_low = int(current_dac) <= 0
@@ -311,15 +328,14 @@ def _compute_hold_pid_delta(
     if (at_low and delta_f < 0.0) or (at_high and delta_f > 0.0):
         next_integral = integral_state
         i_term = float(ki) * next_integral
-        delta_f = p_term + i_term + d_term
-        delta_f = max(-float(max_step), min(float(max_step), delta_f))
+        delta_f = max(-float(max_step), min(float(max_step), p_term + i_term + d_term))
 
     delta = 0
     if abs(delta_f) >= 0.5:
         delta = int(round(delta_f))
         delta = max(-max_step, min(max_step, delta))
 
-    return delta, next_integral, error_ratio, error, False
+    return delta, next_integral, error_ratio, error, False, windup_clamp
 
 
 def _sum_selected_values(
@@ -485,9 +501,9 @@ def _load_runtime_process_config(meta: dict, *, step_name: str) -> dict:
     if hold_max_dac_delta <= 0:
         hold_max_dac_delta = max(1, fine_step_dac)
 
-    hold_control_mode = str(process_config.get("hold_control_mode", "PI") or "").strip().upper() or "PI"
+    hold_control_mode = str(process_config.get("hold_control_mode", "PID") or "").strip().upper() or "PID"
     if hold_control_mode not in {"PI", "PID", "STEP"}:
-        hold_control_mode = "PI"
+        hold_control_mode = "PID"
 
     hold_pi_kp = float(process_config.get("hold_pi_kp", max(1.0, hold_max_dac_delta * 5.0)) or max(1.0, hold_max_dac_delta * 5.0))
     hold_pi_ki = float(process_config.get("hold_pi_ki", max(0.0, hold_max_dac_delta * 0.8)) or max(0.0, hold_max_dac_delta * 0.8))
@@ -612,7 +628,7 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
     rate_stable_sec = float(proc_cfg["rate_stable_sec"])
     hold_control_interval_s = float(proc_cfg["hold_control_interval_s"])
     fine_step_dac = int(proc_cfg["fine_step_dac"])
-    hold_control_mode = str(proc_cfg.get("hold_control_mode", "PI") or "PI").strip().upper() or "PI"
+    hold_control_mode = str(proc_cfg.get("hold_control_mode", "PID") or "PID").strip().upper() or "PID"
     hold_pi_kp = float(proc_cfg.get("hold_pi_kp", 0.0) or 0.0)
     hold_pi_ki = float(proc_cfg.get("hold_pi_ki", 0.0) or 0.0)
     hold_pi_kd = float(proc_cfg.get("hold_pi_kd", 0.0) or 0.0)
@@ -1125,6 +1141,7 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         abort_threshold = target_rate * rate_abort_ratio
         hold_integral = 0.0
         hold_prev_error_ratio: float = 0.0
+        hold_windup_clamp: bool = False
 
         engine._tele_event(
             event="HOLD_CONTROL_MODE",
@@ -1201,7 +1218,7 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
 
                 try:
                     if hold_control_mode == "PID":
-                        control_delta, hold_integral, hold_prev_error_ratio, control_error, pi_used = _compute_hold_pid_delta(
+                        control_delta, hold_integral, hold_prev_error_ratio, control_error, pi_used, hold_windup_clamp = _compute_hold_pid_delta(
                             current_dac=dac,
                             target_rate=target_rate,
                             filtered_rate=(filtered_rate if control_rate_valid else None),
@@ -1286,6 +1303,7 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
                         f"error={'' if control_error is None else f'{control_error:.6f}'}, "
                         f"delta={control_delta}, "
                         f"integral={hold_integral:.6f}, "
+                        f"windup_clamp={1 if hold_windup_clamp else 0}, "
                         f"jump_clamped={1 if jump_clamped else 0}, "
                         f"tag=EVAP_HOLD_CONTROL"
                     ),

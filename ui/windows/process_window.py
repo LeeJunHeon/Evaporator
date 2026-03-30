@@ -84,7 +84,7 @@ class ProcessWindow(QWidget):
         self._run_summary_service: Any = None
         self._recommendation_service: Any = None
 
-        # ??Start preflight ?곹깭
+
         self._start_worker: Optional[ProcessStartWorker] = None
         self._start_in_progress: bool = False
         self._pending_run_cfg: Optional[dict[str, Any]] = None
@@ -134,7 +134,6 @@ class ProcessWindow(QWidget):
         self._last_thickness: Optional[float] = None
 
 
-
         self._last_power: Optional[float] = None
 
         self._plot: Optional[DepositionPlotWidget] = None
@@ -161,8 +160,6 @@ class ProcessWindow(QWidget):
         self._acs_service = acs_service
         self._run_summary_service = run_summary_service
         self._recommendation_service = recommendation_service
-
-
 
 
         pc = self._process_controller
@@ -785,10 +782,10 @@ class ProcessWindow(QWidget):
         if self._stm_ui_bound and (self._stm_ui_stm is stm):
             return
 
-        # ?댁쟾??UI???곌껐???덈뜕 stm留??뺥솗???댁젣
+
         self._unbind_stm_ui()
 
-        # ??stm???곌껐
+
         stm.sig_rate.connect(self._on_stm_rate)
         stm.sig_thickness.connect(self._on_stm_thickness)
 
@@ -1019,7 +1016,6 @@ class ProcessWindow(QWidget):
 
         with contextlib.suppress(Exception):
             self._shutdown_stm_with_ftm_off_best_effort()
-
 
 
         self._pending_run_cfg = None
@@ -1613,7 +1609,7 @@ class ProcessWindow(QWidget):
                 else:
                     self._append_process_log(f"[FINISHED][ABNORMAL] run_id={rid}")
 
-                    # ?대? ?ㅻ쪟 ?곹깭硫??좎?
+
                     if not current_status.startswith("에러 발생"):
                         if rid:
                             self._set_process_status("怨듭젙 醫낅즺", f"run_id={rid}")
@@ -2096,7 +2092,7 @@ class ProcessWindow(QWidget):
         if host is None:
             return
 
-        # ?대? layout???놁쑝硫??앹꽦
+
         lay = host.layout()
         if lay is None:
             lay = QVBoxLayout(host)
@@ -2136,7 +2132,7 @@ class ProcessWindow(QWidget):
         """1珥덈쭏??lineedit + 洹몃옒??媛깆떊"""
         rate = self._to_float_or_none(self._last_rate)
 
-        # DAC / ADC ?????쎄린
+
         dac1, dac2 = self._read_plc_power_dac_pair()
         adc1, adc2 = self._read_plc_power_actual_pair()
 
@@ -2479,8 +2475,6 @@ class ProcessWindow(QWidget):
             return None
 
 
-
-
         if self._power2_temporarily_disabled and p2:
             QMessageBox.warning(
                 self,
@@ -2586,7 +2580,7 @@ class ProcessWindow(QWidget):
             QMessageBox.warning(self, "Input", "Material density/z-factor 값이 올바르지 않습니다.")
             return None
 
-        # ??Process Name (?꾩닔)
+
         pname = ""
         w = getattr(self.ui, "processNameEdit", None)
         if w is not None and hasattr(w, "text"):
@@ -2655,8 +2649,6 @@ class ProcessWindow(QWidget):
         return cfg
     
 
-
-
     def _emergency_safe_shutdown_plc_best_effort(self) -> None:
         """
         鍮꾩긽 fallback ?꾩슜 PLC 醫낅즺.
@@ -2694,6 +2686,5 @@ class ProcessWindow(QWidget):
             self._append_process_log(f"[SAFE][WARN] POWER off failed: {e!r}")
 
         self._last_power = 0.0
-
 
 

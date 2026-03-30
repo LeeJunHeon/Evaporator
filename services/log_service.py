@@ -813,10 +813,10 @@ class LogWriterWorker(QThread):
             return
 
         # 형식 통일:
-        # - 이미 [HH:MM:SS] 또는 [YYYY-MM-DD HH:MM:SS] 로 시작하면 그대로 사용
-        # - 아니면 [HH:MM:SS] prefix 추가
-        if not re.match(r"^\[\d{2}:\d{2}:\d{2}\]\s+", s) and not re.match(r"^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\]\s+", s):
-            s = f"[{_time_str(ts)}] {s}"
+        # - 이미 [YYYY-MM-DD HH:MM:SS] 로 시작하면 그대로 사용
+        # - 아니면 [YYYY-MM-DD HH:MM:SS] prefix 추가
+        if not re.match(r"^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\]\s+", s):
+            s = f"[{_dt_str(ts)}] {s}"
 
         if self._run_open and self._run_folder_name:
             try:

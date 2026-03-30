@@ -1364,7 +1364,7 @@ class HmiPlcBinder(QObject):
         if w is None:
             return
 
-        line = f"[{time.strftime('%H:%M:%S')}] {text}"
+        line = f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {text}"
 
         try:
             stick_to_bottom = True

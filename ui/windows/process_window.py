@@ -1492,7 +1492,7 @@ class ProcessWindow(QWidget):
             except Exception:
                 pass
 
-        y_max = max(candidates, default=300.0)
+        y_max = max(candidates, default=100.0)
         y_max = max(100.0, y_max * 1.10)
         return (0.0, y_max)
 

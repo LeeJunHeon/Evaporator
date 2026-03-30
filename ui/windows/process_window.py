@@ -1974,7 +1974,7 @@ class ProcessWindow(QWidget):
             QMessageBox.information(owner, "Recommendation", "Recommendation service is not available.")
             return None
 
-        run_cfg = self._collect_ui_run_cfg(require_process_name=False, process_cfg_override=process_config)
+        run_cfg = self._collect_ui_run_cfg(require_process_name=False, require_thickness=False, process_cfg_override=process_config)
         if run_cfg is None:
             return None
 
@@ -2466,6 +2466,7 @@ class ProcessWindow(QWidget):
         self,
         *,
         require_process_name: bool = True,
+        require_thickness: bool = True,
         process_cfg_override: Optional[dict[str, Any]] = None,
     ) -> Optional[dict[str, Any]]:
 
@@ -2532,12 +2533,15 @@ class ProcessWindow(QWidget):
 
         target_thk = self._read_float("thicknessEdit")
         delay_min = self._read_float("delayEdit")
-        if target_thk is None:
-            QMessageBox.warning(self, "Input", "Target Thickness를 입력해 주세요.")
-            return None
-        if target_thk <= 0:
-            QMessageBox.warning(self, "Input", "Target Thickness는 0보다 커야 합니다.")
-            return None
+        if require_thickness:
+            if target_thk is None:
+                QMessageBox.warning(self, "Input", "Target Thickness를 입력해 주세요.")
+                return None
+            if target_thk <= 0:
+                QMessageBox.warning(self, "Input", "Target Thickness는 0보다 커야 합니다.")
+                return None
+        if target_thk is None or target_thk <= 0:
+            target_thk = 0.0
         if delay_min is None:
             delay_min = 0.0
         if delay_min < 0:

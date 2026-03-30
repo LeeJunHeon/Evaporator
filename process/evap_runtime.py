@@ -584,8 +584,8 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
 
     if target_rate <= 0:
         _raise_engine_failed(step.name, "EVAP: target_rate must be > 0")
-    if target_th <= 0:
-        _raise_engine_failed(step.name, "EVAP: target_thickness must be > 0")
+    # target_thickness가 0이면 thickness 도달 조건 없이 Stop 버튼으로만 종료
+    # (0보다 크면 thickness 도달 시 자동 종료)
 
     engine._run_line(
         f"[CFG] target_rate={target_rate} Å/s | target_thickness={target_th} Å | delay={delay_min:.1f}min"
@@ -1278,7 +1278,7 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
                 force=True,
             )
 
-            if dep_th >= target_th:
+            if target_th > 0 and dep_th >= target_th:
                 break
 
             time.sleep(0.1)

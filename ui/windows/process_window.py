@@ -2535,12 +2535,8 @@ class ProcessWindow(QWidget):
         # 怨듯넻 ?낅젰媛?
         target_thk = self._read_float("thicknessEdit")
         delay_min = self._read_float("delayEdit")
-        if target_thk is None:
-            QMessageBox.warning(self, "Input", "Target Thickness를 입력해 주세요.")
-            return None
-        if target_thk <= 0:
-            QMessageBox.warning(self, "Input", "Target Thickness는 0보다 커야 합니다.")
-            return None
+        if target_thk is None or target_thk <= 0:
+            target_thk = 0.0  # thickness 미입력 시 0으로 처리 (필수 아님)
         if delay_min is None:
             delay_min = 0.0
         if delay_min < 0:

@@ -207,11 +207,21 @@ class RunSummaryService:
             stable_sec=_to_float_or_none(process_config.get("rate_stable_sec")),
         )
         time_to_main_shutter_open_s, shutter_row = self._find_main_shutter_open(enriched_rows)
+        time_to_main_shutter_close_s = self._find_main_shutter_close(enriched_rows)
+
+        # shutter_close가 shutter_open 이전이면 (초기화 close일 가능성) 무시
+        if (
+            time_to_main_shutter_close_s is not None
+            and time_to_main_shutter_open_s is not None
+            and time_to_main_shutter_close_s <= time_to_main_shutter_open_s
+        ):
+            time_to_main_shutter_close_s = None
 
         stable_window_rows = self._stable_window_rows(
             enriched_rows,
             stable_time=time_to_stable_rate_s,
             shutter_time=time_to_main_shutter_open_s,
+            shutter_close_time=time_to_main_shutter_close_s,
             stable_row=stable_row,
         )
 
@@ -525,22 +535,50 @@ class RunSummaryService:
                 return _to_float_or_none(row.get("elapsed_sec")), row
         return None, None
 
+    def _find_main_shutter_close(self, rows: list[dict[str, Any]]) -> Optional[float]:
+        """
+        EVAP_DONE_SHUTTER_CLOSE 태그 기준으로 메인 셔터가 닫힌 elapsed_sec을 반환.
+        없으면 None.
+        """
+        for row in rows:
+            tag = str(row.get("tag", "") or "").strip().upper()
+            if tag == "EVAP_DONE_SHUTTER_CLOSE":
+                return _to_float_or_none(row.get("elapsed_sec"))
+
+            detail = str(row.get("detail", "") or "")
+            if "tag=EVAP_DONE_SHUTTER_CLOSE" in detail:
+                return _to_float_or_none(row.get("elapsed_sec"))
+
+            event = str(row.get("event", "") or "").upper()
+            target = str(row.get("target", "") or "").strip().upper()
+            event_value = str(row.get("event_value", "") or "").strip().lower()
+            if event == "WRITE_COIL" and target == "MAIN_SHUTTER_SW" and event_value in ("0", "false"):
+                elapsed = _to_float_or_none(row.get("elapsed_sec"))
+                return elapsed
+
+        return None
+
     def _stable_window_rows(
         self,
         rows: list[dict[str, Any]],
         *,
         stable_time: Optional[float],
         shutter_time: Optional[float],
+        shutter_close_time: Optional[float],
         stable_row: Optional[dict[str, Any]],
     ) -> list[dict[str, Any]]:
-        # 셔터 오픈 후(Hold 구간) ~ 공정 종료까지의 rows를 stable window로 사용.
-        # 셔터 오픈 전 ramp 구간 DAC는 목표치에 도달하기 전이므로 제외한다.
+        # 메인 셔터 오픈 ~ 클로즈 사이 구간만 사용
+        # (ramp 구간과 rampdown 구간을 모두 제외)
         if shutter_time is not None:
             selected = [
                 row
                 for row in rows
                 if _to_float_or_none(row.get("elapsed_sec")) is not None
                 and float(row["elapsed_sec"]) >= float(shutter_time)
+                and (
+                    shutter_close_time is None
+                    or float(row["elapsed_sec"]) < float(shutter_close_time)
+                )
             ]
             if selected:
                 return selected

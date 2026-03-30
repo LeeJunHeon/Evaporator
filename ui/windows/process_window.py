@@ -99,7 +99,7 @@ class ProcessWindow(QWidget):
         self._material_1 = None
         self._material_2 = None
 
-        # 怨듭젙 ?쒖옉 ?쒖젏 power ?좏깮 ?곹깭 latch
+        # 공정 시작 ?쒖젏 power ?좏깮 ?곹깭 latch
         self._run_use_power1: Optional[bool] = None
         self._run_use_power2: Optional[bool] = None
 
@@ -842,7 +842,7 @@ class ProcessWindow(QWidget):
     def _check_plc_ready_before_start(self) -> bool:
         """
         Start 踰꾪듉 ?뚮?????PLC ?곌껐 ?곹깭瑜?癒쇱? ?뺤씤?쒕떎.
-        PLC媛 ?딄릿 ?곹깭硫?STM ?곌껐/怨듭젙 ?쒖옉?쇰줈 ?섏뼱媛吏 ?딄쾶 留됰뒗??
+        PLC媛 ?딄릿 ?곹깭硫?STM ?곌껐/공정 시작?쇰줈 ?섏뼱媛吏 ?딄쾶 留됰뒗??
         """
         def _abort(msg: str) -> bool:
             self._append_process_log(f"[PRECHECK][BLOCK] PLC: {msg}")
@@ -960,7 +960,7 @@ class ProcessWindow(QWidget):
                 stop_btn.setEnabled(True)
 
         if busy:
-            self._set_process_status("STM 以鍮꾩쨷", "?λ퉬 ?곌껐 諛?crystal ?곹깭 ?뺤씤")
+            self._set_process_status("STM 점검중", "센서 연결 및 crystal 상태 확인")
 
     def _cleanup_start_worker(self) -> None:
         worker = self._start_worker
@@ -1011,7 +1011,7 @@ class ProcessWindow(QWidget):
 
     def _on_start_preflight_progress(self, text: str) -> None:
         self._append_process_log(f"[PRECHECK] {text}")
-        self._set_process_status("STM 以鍮꾩쨷", text)
+        self._set_process_status("STM 점검중", text)
 
     def _abort_start_preflight(self, *, show_warning: bool, title: str, message: str) -> None:
         with contextlib.suppress(Exception):
@@ -1029,9 +1029,9 @@ class ProcessWindow(QWidget):
 
         if message:
             self._append_process_log(f"[PRECHECK][ABORT] {message}")
-            self._set_process_status("STM 以鍮??ㅽ뙣", message)
+            self._set_process_status("STM 점검 실패", message)
         else:
-            self._set_process_status("STM 以鍮??ㅽ뙣")
+            self._set_process_status("STM 점검 실패")
 
         self._close_process_run_log()
         self._active_run_id = None
@@ -1082,8 +1082,8 @@ class ProcessWindow(QWidget):
 
         try:
             pc.start_from_ui(run_cfg, run_id=self._active_run_id)
-            self._append_process_log("[PRECHECK] STM preflight ?깃났 -> 怨듭젙 ?쒖옉")
-            self._set_process_status("怨듭젙 ?쒖옉", "STM preflight ?꾨즺")
+            self._append_process_log("[PRECHECK] STM preflight 완료 -> 공정 시작")
+            self._set_process_status("공정 시작", "STM preflight 완료")
             self._pending_run_cfg = None
             self._set_start_busy(False)
         except Exception as e:
@@ -1191,7 +1191,7 @@ class ProcessWindow(QWidget):
             QMessageBox.warning(self, "Process", "Run profile is not available.")
             return
         
-        self._set_process_status("怨듭젙 ?쒖옉 ?붿껌", "PLC / STM pre-check 吏꾪뻾")
+        self._set_process_status("공정 시작 ?붿껌", "PLC / STM pre-check 吏꾪뻾")
 
         self._latch_run_power_flags(run_cfg)
         self._active_run_cfg = dict(run_cfg)
@@ -1243,7 +1243,7 @@ class ProcessWindow(QWidget):
 
         # 4) STM service 以鍮??ш린?쒕뒗 blocking wait ????
         if not self._prepare_stm_service_for_start():
-            QMessageBox.warning(self, "Device Connect Failed", "STM 以鍮??ㅽ뙣")
+            QMessageBox.warning(self, "Device Connect Failed", "STM 점검 실패")
             with contextlib.suppress(Exception):
                 self._shutdown_stm_with_ftm_off_best_effort()
             self._close_process_run_log()
@@ -1567,12 +1567,12 @@ class ProcessWindow(QWidget):
 
             self._append_process_log(f"[ERROR] {where} | {msg}")
 
-            detail = f"{where} | {msg}" if where and msg else (where or msg or "?곸꽭 硫붿떆吏 ?놁쓬")
-            self._set_process_status("?ㅻ쪟 諛쒖깮", detail)
+            detail = f"{where} | {msg}" if where and msg else (where or msg or "상세 메시지 없음")
+            self._set_process_status("에러 발생", detail)
 
         except Exception:
             self._append_process_log(f"[ERROR] {err!r}")
-            self._set_process_status("?ㅻ쪟 諛쒖깮", f"{err!r}")
+            self._set_process_status("에러 발생", f"{err!r}")
 
     def _on_finished(self, result: Any) -> None:
         run_profile = dict(self._active_run_profile or {})
@@ -1598,7 +1598,7 @@ class ProcessWindow(QWidget):
 
                 if ok:
                     self._append_process_log(f"[FINISHED][OK] run_id={rid}")
-                    self._set_process_status("怨듭젙 ?꾨즺", f"run_id={rid}" if rid else "")
+                    self._set_process_status("공정 완료", f"run_id={rid}" if rid else "")
                     ls = self._log_service
                     if ls is not None and hasattr(ls, "mark_run_success"):
                         with contextlib.suppress(Exception):
@@ -1608,7 +1608,7 @@ class ProcessWindow(QWidget):
                     self._append_process_log(f"[FINISHED][ABNORMAL] run_id={rid}")
 
                     # ?대? ?ㅻ쪟 ?곹깭硫??좎?
-                    if not current_status.startswith("?ㅻ쪟 諛쒖깮"):
+                    if not current_status.startswith("에러 발생"):
                         if rid:
                             self._set_process_status("怨듭젙 醫낅즺", f"run_id={rid}")
                         else:

@@ -84,8 +84,8 @@ class HistoryRecommendationDialog(QDialog):
         left_layout.addWidget(runs_title)
 
         self.runsTable = QTableWidget(left_widget)
-        self.runsTable.setColumnCount(5)
-        self.runsTable.setHorizontalHeaderLabels(["시각", "Dep.Rate(Å/s)", "Thickness(Å)", "Stable DAC", ""])
+        self.runsTable.setColumnCount(4)
+        self.runsTable.setHorizontalHeaderLabels(["Time", "Dep.Rate(Å/s)", "Thickness(Å)", "Stable DAC"])
         self.runsTable.verticalHeader().setVisible(False)
         self.runsTable.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.runsTable.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -202,16 +202,10 @@ class HistoryRecommendationDialog(QDialog):
                 stable_dac_text = f"{float(run.get('stable_dac_mean', 0.0) or 0.0):.1f}"
             except Exception:
                 stable_dac_text = "---"
-            try:
-                score = float(run.get("score", 0.0) or 0.0)
-                score_text = f"{score*100:.0f}%"
-            except Exception:
-                score_text = "---"
             self._set_table_item(self.runsTable, row_idx, 0, time_text)
             self._set_table_item(self.runsTable, row_idx, 1, rate_text)
             self._set_table_item(self.runsTable, row_idx, 2, thickness_text)
             self._set_table_item(self.runsTable, row_idx, 3, stable_dac_text)
-            self._set_table_item(self.runsTable, row_idx, 4, score_text)
 
     def _populate_steps_table(self) -> None:
         ramp_steps = list(self._recommendation.get("recommended_ramp_steps") or [])

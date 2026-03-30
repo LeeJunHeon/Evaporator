@@ -27,6 +27,18 @@ class RecommendationService:
         if not candidates:
             return None
 
+        # target_rate 필터 (±20% 이내만)
+        req_rate = float(run_profile.get("target_rate", 0.0) or 0.0)
+        if req_rate > 0:
+            tolerance = req_rate * 0.20
+            candidates = [
+                c for c in candidates
+                if abs(float(c.get("target_rate", 0.0) or 0.0) - req_rate) <= tolerance
+            ]
+
+        if not candidates:
+            return None
+
         # finished_ts 기준 최신순 정렬
         candidates.sort(key=lambda c: float(c.get("finished_ts") or c.get("started_ts") or 0), reverse=True)
 

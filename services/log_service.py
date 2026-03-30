@@ -725,9 +725,9 @@ class LogWriterWorker(QThread):
                 except Exception:
                     pass
 
-        # run_folder_name도 업데이트
+        # run_folder_name도 업데이트 (파일명과 동일한 prefix 적용)
         if self._run_folder_name and not self._run_folder_name.startswith("SUCCESS_"):
-            self._run_folder_name = f"SUCCESS_{self._run_folder_name}"
+            self._run_folder_name = f"{prefix}{self._run_folder_name}"
 
     def _close_all(self) -> None:
         self._close_run()

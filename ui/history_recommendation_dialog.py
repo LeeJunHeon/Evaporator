@@ -31,8 +31,8 @@ class HistoryRecommendationDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("이전 공정 설정 불러오기")
         self.setModal(True)
-        self.resize(780, 540)
-        self.setMinimumSize(700, 480)
+        self.resize(820, 540)
+        self.setMinimumSize(750, 480)
 
         self._recommendation = dict(recommendation or {})
         self._accepted_apply = False
@@ -56,13 +56,9 @@ class HistoryRecommendationDialog(QDialog):
         banner_layout.setContentsMargins(8, 8, 8, 8)
 
         if basis_run_count >= 1:
-            banner_text = f"유사한 공정 {basis_run_count}건을 참고한 추천입니다  (신뢰도 {confidence*100:.0f}%)"
-            if confidence >= 0.7:
-                banner_color = "#1a7a1a"
-            elif confidence >= 0.4:
-                banner_color = "#b36200"
-            else:
-                banner_color = "#888888"
+            _mat = str((self._recommendation.get("representative_runs") or [{}])[0].get("material_name", "") or "").strip()
+            banner_text = f"{_mat} 재료의 성공 공정 {basis_run_count}건 중 가장 최근 설정을 불러왔습니다"
+            banner_color = "#1a7a1a"
         else:
             banner_text = "추천 데이터가 없습니다"
             banner_color = "#888888"
@@ -89,14 +85,15 @@ class HistoryRecommendationDialog(QDialog):
 
         self.runsTable = QTableWidget(left_widget)
         self.runsTable.setColumnCount(5)
-        self.runsTable.setHorizontalHeaderLabels(["시각", "속도(Å/s)", "두께(Å)", "안정 DAC", "유사도"])
+        self.runsTable.setHorizontalHeaderLabels(["시각", "Dep.Rate(Å/s)", "Thickness(Å)", "Stable DAC", ""])
         self.runsTable.verticalHeader().setVisible(False)
         self.runsTable.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.runsTable.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.runsTable.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.runsTable.setWordWrap(False)
         self.runsTable.setAlternatingRowColors(True)
-        self.runsTable.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.runsTable.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        self.runsTable.horizontalHeader().setStretchLastSection(True)
         self.runsTable.itemSelectionChanged.connect(self._on_run_selected)
         self.runsTable.setStyleSheet("""
             QTableWidget::item:selected {

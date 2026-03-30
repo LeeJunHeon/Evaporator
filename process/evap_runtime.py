@@ -1087,6 +1087,10 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         # 한 번 반영 시간을 준다.
         _wait_with_checks(hold_control_interval_s, label="STM ZERO 반영 대기")
 
+        # STM Zero 후 IIR 필터 오염값(스파이크 등) 제거
+        # Hold PI가 올바른 baseline에서 시작하도록 None으로 리셋
+        filtered_rate = None
+
         engine._plc_write_coil("MAIN_SHUTTER_SW", True, tag="EVAP_MAIN_SHUTTER_OPEN")
         shutter_open = True
 

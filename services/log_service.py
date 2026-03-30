@@ -679,15 +679,15 @@ class LogWriterWorker(QThread):
             try:
                 if self._run_log_fp:
                     self._run_log_fp.flush()
+                    self._run_log_fp.close()  # Windows: rename 전에 반드시 close
+                    self._run_log_fp = None
                 parent = self._run_log_path.parent
                 old_name = self._run_log_path.name
                 if not old_name.startswith("SUCCESS_"):
                     new_path = parent / f"SUCCESS_{old_name}"
                     self._run_log_path.rename(new_path)
                     self._run_log_path = new_path
-                    if self._run_log_fp:
-                        self._run_log_fp.close()
-                        self._run_log_fp = open(new_path, "a", encoding="utf-8", newline="")
+                    self._run_log_fp = open(new_path, "a", encoding="utf-8", newline="")
             except Exception as e:
                 try:
                     self.sig_error.emit(f"[LogService] mark_run_success log rename failed: {e!r}")
@@ -699,16 +699,16 @@ class LogWriterWorker(QThread):
             try:
                 if self._tele_fp:
                     self._tele_fp.flush()
+                    self._tele_fp.close()  # Windows: rename 전에 반드시 close
+                    self._tele_fp = None
                 parent = self._tele_path.parent
                 old_name = self._tele_path.name
                 if not old_name.startswith("SUCCESS_"):
                     new_path = parent / f"SUCCESS_{old_name}"
                     self._tele_path.rename(new_path)
                     self._tele_path = new_path
-                    if self._tele_fp:
-                        self._tele_fp.close()
-                        self._tele_fp = open(new_path, "a", encoding="utf-8-sig", newline="")
-                    self._tele_writer = None
+                    self._tele_fp = open(new_path, "a", encoding="utf-8-sig", newline="")
+                self._tele_writer = None
             except Exception as e:
                 try:
                     self.sig_error.emit(f"[LogService] mark_run_success csv rename failed: {e!r}")

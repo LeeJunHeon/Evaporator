@@ -349,7 +349,7 @@ class DepositionPlotWidget(QWidget):
             ys = [v for _, v in self._rate_buf]  # fallback
 
         y_max = max(ys)
-        y_upper = max(5.0, y_max * 1.10)
+        y_upper = max(2.5, y_max * 1.10)
         # 0.1 단위로 올림 정렬
         import math
         y_upper = math.ceil(y_upper / 0.1) * 0.1
@@ -394,7 +394,7 @@ class DepositionPlotWidget(QWidget):
 
         self._set_x_range(0.0, x2)
 
-        self._ax_rate.setRange(0.0, 5.0)
+        self._ax_rate.setRange(0.0, 2.5)
         self._ax_rate.setLabelFormat("%.1f")
 
         # MODIFIED: 고정 범위가 있으면 그것을 사용, 없으면 기본 범위

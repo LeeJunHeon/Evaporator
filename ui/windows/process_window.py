@@ -1493,7 +1493,9 @@ class ProcessWindow(QWidget):
                 pass
 
         y_max = max(candidates, default=100.0)
-        y_max = max(100.0, y_max * 1.10)
+        # adc_max가 설정되어 있으면 그 값도 참고
+        adc_max_cfg = float(self._process_cfg.get("adc_max", 200) or 200)
+        y_max = max(100.0, y_max * 1.10, adc_max_cfg)
         return (0.0, y_max)
 
     def _try_update_last_power(self, st: Any) -> None:

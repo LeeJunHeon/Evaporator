@@ -595,6 +595,9 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
 
     ramp_steps = list(proc_cfg["ramp_steps"])
     dac_max = int(proc_cfg["dac_max"])
+    adc_max = int(proc_cfg.get("adc_max", 200) or 200)
+    if adc_max <= 0:
+        adc_max = 200
     rate_tol_ratio = float(proc_cfg["rate_tol_ratio"])
     rate_stable_sec = float(proc_cfg["rate_stable_sec"])
     hold_control_interval_s = float(proc_cfg["hold_control_interval_s"])
@@ -1022,10 +1025,17 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
                     )
 
                 if adc_total < step_target_adc and (now_m - last_dac_apply_m) >= step_dac_interval_sec:
-                    dac = min(dac_max, dac + step_dac_step)
-                    _evap_apply_dac(engine, use_p1, use_p2, dac, tag=f"EVAP_RAMP_STEP{step_no}")
-                    last_dac_apply_m = now_m
-                    remain_to_next_dac_s = step_dac_interval_sec
+                    if _read_adc_or_abort(where="ramp_adc_check") >= adc_max:
+                        engine._emit_status(
+                            message=f"RAMP | ADC 최대값 도달 ({adc_max}) → DAC 증가 중단",
+                            force=True,
+                        )
+                        time.sleep(step_dac_interval_sec)
+                    else:
+                        dac = min(dac_max, dac + step_dac_step)
+                        _evap_apply_dac(engine, use_p1, use_p2, dac, tag=f"EVAP_RAMP_STEP{step_no}")
+                        last_dac_apply_m = now_m
+                        remain_to_next_dac_s = step_dac_interval_sec
 
                 stable_progress = (
                     f" | rate 안정 확인중 {(now_m - stable_start_ts):.1f}s / {rate_stable_sec:.1f}s"

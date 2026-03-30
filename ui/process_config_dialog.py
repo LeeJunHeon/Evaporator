@@ -82,6 +82,7 @@ class ProcessConfigDialog(QDialog):
             "step_count": 1,
             "ramp_steps": [self._default_step()],
             "dac_max": 4000,
+            "adc_max": 200,
             "rate_tol_ratio": 0.05,
             "rate_stable_sec": 3.0,
             "hold_control_interval_s": 1.0,
@@ -171,6 +172,7 @@ class ProcessConfigDialog(QDialog):
             "step_count": len(steps),
             "ramp_steps": steps,
             "dac_max": _as_int("dac_max", 4000, 1),
+            "adc_max": _as_int("adc_max", 200, 1),
             "rate_tol_ratio": _as_float("rate_tol_ratio", 0.05, 0.001, 1.0),
             "rate_stable_sec": _as_float("rate_stable_sec", 3.0, 0.0),
             "hold_control_interval_s": _as_float("hold_control_interval_s", 1.0, 0.1),
@@ -253,6 +255,7 @@ class ProcessConfigDialog(QDialog):
 
         safety_box = QGroupBox("Safety / Abort")
         safety_form = QFormLayout(safety_box)
+        self.adcMaxSpin = self._make_int_spin(1, 9999, step=10)
         self.dacMaxSpin = self._make_int_spin(1, 9999, step=10)
         self.rateAbortRatioSpin = self._make_double_spin(0.001, 1.0, step=0.01, decimals=3)
         self.rateAbortSecSpin = self._make_double_spin(0.0, 99999.0, step=1.0, decimals=1)
@@ -260,6 +263,7 @@ class ProcessConfigDialog(QDialog):
         self.adcNoneAbortSpin = self._make_double_spin(0.0, 99999.0, step=1.0, decimals=1)
         self.spikeAbortRatioSpin = self._make_double_spin(1.0, 20.0, step=0.5, decimals=1)
         self.spikeGraceSSpin = self._make_double_spin(0.0, 30.0, step=0.5, decimals=1)
+        self._add_form_row(safety_form, "최대 ADC", self.adcMaxSpin, "adc_max")
         self._add_form_row(safety_form, "최대 DAC", self.dacMaxSpin, "dac_max")
         self._add_form_row(safety_form, "물질 부족 판정 비율", self.rateAbortRatioSpin, "rate_abort_ratio")
         self._add_form_row(safety_form, "물질 부족 판정 시간 (s)", self.rateAbortSecSpin, "rate_abort_sec")
@@ -320,6 +324,7 @@ class ProcessConfigDialog(QDialog):
         self.rateFilterAlphaSpin.setValue(float(cfg.get("rate_filter_alpha", 0.35)))
         self.rateJumpGuardRatioSpin.setValue(float(cfg.get("rate_jump_guard_ratio", 0.50)))
         self.rateJumpGuardAbsSpin.setValue(float(cfg.get("rate_jump_guard_abs", 0.15)))
+        self.adcMaxSpin.setValue(int(cfg.get("adc_max", 200)))
         self.dacMaxSpin.setValue(int(cfg.get("dac_max", 4000)))
         self.rateAbortRatioSpin.setValue(float(cfg.get("rate_abort_ratio", 0.30)))
         self.rateAbortSecSpin.setValue(float(cfg.get("rate_abort_sec", 5.0)))
@@ -332,6 +337,7 @@ class ProcessConfigDialog(QDialog):
         cfg = dict(self._initial_config)
         cfg.update(
             {
+                "adc_max": int(self.adcMaxSpin.value()),
                 "dac_max": int(self.dacMaxSpin.value()),
                 "rate_tol_ratio": float(self.rateTolRatioSpin.value()),
                 "rate_stable_sec": float(self.rateStableSecSpin.value()),

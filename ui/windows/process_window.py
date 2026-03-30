@@ -1077,6 +1077,16 @@ class ProcessWindow(QWidget):
             )
             return
 
+        if self._plot is not None:
+            try:
+                adc_range = self._get_plot_adc_default_range()
+                if hasattr(self._plot, 'set_power_default_range'):
+                    self._plot.set_power_default_range(*adc_range)
+                if hasattr(self._plot, 'reset_plot'):
+                    self._plot.reset_plot()
+            except Exception:
+                pass
+
         try:
             pc.start_from_ui(run_cfg, run_id=self._active_run_id)
             self._append_process_log("[PRECHECK] STM preflight 완료 -> 공정 시작")

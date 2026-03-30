@@ -199,7 +199,8 @@ class HistoryRecommendationDialog(QDialog):
             except Exception:
                 thickness_text = "---"
             try:
-                stable_dac_text = f"{float(run.get('stable_dac_mean', 0.0) or 0.0):.1f}"
+                sdac = run.get('stable_dac_mean')
+                stable_dac_text = f"{float(sdac):.1f}" if sdac is not None and float(sdac) > 0 else "---"
             except Exception:
                 stable_dac_text = "---"
             self._set_table_item(self.runsTable, row_idx, 0, time_text)

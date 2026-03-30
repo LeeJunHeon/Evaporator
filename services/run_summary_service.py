@@ -533,15 +533,26 @@ class RunSummaryService:
         shutter_time: Optional[float],
         stable_row: Optional[dict[str, Any]],
     ) -> list[dict[str, Any]]:
+        # 셔터 오픈 후(Hold 구간) ~ 공정 종료까지의 rows를 stable window로 사용.
+        # 셔터 오픈 전 ramp 구간 DAC는 목표치에 도달하기 전이므로 제외한다.
+        if shutter_time is not None:
+            selected = [
+                row
+                for row in rows
+                if _to_float_or_none(row.get("elapsed_sec")) is not None
+                and float(row["elapsed_sec"]) >= float(shutter_time)
+            ]
+            if selected:
+                return selected
+
+        # shutter_time이 없으면 기존 방식: stable_time 이후 전체
         if stable_time is None:
             return []
-
         selected = [
             row
             for row in rows
             if _to_float_or_none(row.get("elapsed_sec")) is not None
             and float(row["elapsed_sec"]) >= float(stable_time)
-            and (shutter_time is None or float(row["elapsed_sec"]) <= float(shutter_time))
         ]
         if selected:
             return selected

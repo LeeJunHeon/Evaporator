@@ -824,6 +824,8 @@ class LogWriterWorker(QThread):
             return
 
         # 형식 통일:
+        # - UI에서 넘어온 [HH:MM:SS] 구형 타임스탬프가 있으면 먼저 제거 (중복 방지)
+        s = re.sub(r"^\[\d{2}:\d{2}:\d{2}\]\s*", "", s)
         # - 이미 [YYYY-MM-DD HH:MM:SS] 로 시작하면 그대로 사용
         # - 아니면 [YYYY-MM-DD HH:MM:SS] prefix 추가
         if not re.match(r"^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\]\s+", s):

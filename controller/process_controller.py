@@ -423,8 +423,10 @@ class ProcessController(QObject):
         target_thickness = self._to_float(run_cfg.get("target_thickness", 0.0), "target_thickness")
         delay_min = self._to_float(run_cfg.get("delay_min", 0.0), "delay_min")
 
-        if target_thickness <= 0:
-            raise ValueError("target_thickness는 0보다 커야 합니다.")
+        # target_thickness=0이면 두께 도달 조건 없이 Stop 버튼으로만 종료
+        # (recipe 불러오기 경로에서 thickness 미입력 시 0으로 전달됨)
+        if target_thickness < 0:
+            raise ValueError("target_thickness는 0 이상이어야 합니다.")
         if delay_min < 0:
             raise ValueError("delay_min은 0 이상이어야 합니다.")
 

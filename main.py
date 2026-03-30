@@ -64,6 +64,11 @@ NAS_LOG_ROOT = Path(r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs\Evaporator")
 # ============================================================
 def main():
     app = QApplication(sys.argv)
+    if sys.platform == "win32":
+        from PySide6.QtGui import QFont
+        font = app.font()
+        font.setFamily("Malgun Gothic")
+        app.setFont(font)
 
     hmi = HmiWindow()
 

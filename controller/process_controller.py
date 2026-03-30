@@ -879,16 +879,6 @@ class ProcessController(QObject):
             except Exception as e:
                 self._ui_warn(f"ACS 서비스 start 실패: {e!r}")
 
-        if self.turbovac is not None:
-            try:
-                if hasattr(self.turbovac, "start") and hasattr(self.turbovac, "is_running"):
-                    if not self.turbovac.is_running():
-                        self.turbovac.start()
-                elif hasattr(self.turbovac, "start"):
-                    self.turbovac.start()
-            except Exception as e:
-                self._ui_warn(f"Turbovac 서비스 start 실패: {e!r}")
-
     def _on_worker_result(self, result: EngineResult) -> None:
         """
         엔진 실행 결과 수신.

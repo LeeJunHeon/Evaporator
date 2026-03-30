@@ -31,44 +31,6 @@ from config.plc_config import PLCSettings
 
 
 # ============================================================
-# ADC EMA (Exponential Moving Average) Filter
-# ============================================================
-
-class AdcEmaFilter:
-    """
-    채널별 ADC EMA 스무딩 필터.
-
-    filtered = alpha * raw + (1 - alpha) * prev
-    - alpha=0.2 (기본): 노이즈 감쇠 강함, 응답 약간 느림
-    - alpha=1.0: 필터 없음 (raw 그대로)
-    - 첫 샘플: 초기화 없이 raw 값을 prev로 사용(warm-up 튐 방지)
-    """
-
-    def __init__(self, alpha: float = 0.2) -> None:
-        self._alpha: float = max(0.01, min(1.0, float(alpha)))
-        self._prev: Optional[float] = None
-
-    def reset(self) -> None:
-        self._prev = None
-
-    def update(self, raw: float) -> float:
-        raw = float(raw)
-        if self._prev is None:
-            self._prev = raw
-            return raw
-        filtered = self._alpha * raw + (1.0 - self._alpha) * self._prev
-        self._prev = filtered
-        return filtered
-
-    @property
-    def alpha(self) -> float:
-        return self._alpha
-
-    @property
-    def prev(self) -> Optional[float]:
-        return self._prev
-
-
 # ============================================================
 # PLC 코일/레지스터 한글 설명 매핑
 # ============================================================
@@ -135,7 +97,7 @@ def _format_plc_cmd_trace(d: dict) -> str:
             try:
                 v = int(value)
                 pct = v / _DAC_FULL_SCALE * 100.0
-                return f"[PLC] DAC CH{ch}: {v} / {_DAC_FULL_SCALE} ({pct:.1f}%){status}{tag_str}"
+                return f"[PLC] DAC {ch} = {v}{status}{tag_str}"
             except Exception:
                 pass
         return f"[PLC] REG {target} = {value}{status}{tag_str}"
@@ -237,10 +199,6 @@ class PlcServiceWorker(QThread):
         # 마지막 스냅샷(서비스가 조회할 수 있게)
         self._last_snapshot: Optional[PLCSnapshot] = None
         self._connected: bool = False
-
-        # ADC 채널별 EMA 필터 (alpha=0.5: 응답 빠름 + 적당한 노이즈 감쇠)
-        self._adc_ema_1: AdcEmaFilter = AdcEmaFilter(alpha=0.5)
-        self._adc_ema_2: AdcEmaFilter = AdcEmaFilter(alpha=0.5)
 
         # 공정 실행 중일 때만 ADC readback trace를 emit
         self._process_logging: bool = False
@@ -537,13 +495,6 @@ class PlcServiceWorker(QThread):
                 if rn in ("DAC_POWER_1", "DAC_POWER_2"):
                     ch = 1 if rn.endswith("_1") else 2
                     await plc.set_dac_power(ch, int(cmd.value))
-                    # DAC=0 쓰기 직후 EMA 리셋: 전원 OFF 후 필터 누적값이 남아
-                    # 다음 ON 시 초기 readback 스파이크가 오탐되는 것을 방지
-                    if int(cmd.value) == 0:
-                        if rn == "DAC_POWER_1":
-                            self._adc_ema_1.reset()
-                        else:
-                            self._adc_ema_2.reset()
                 else:
                     await plc.write_reg_name(rn, int(cmd.value))
                 result = True
@@ -768,9 +719,13 @@ class PlcServiceWorker(QThread):
             11    -> 1.1
             1000  -> 100.0
         """
-        signed = cls._u16_to_i16(raw)
+        # 유효 범위 밖 raw값(쓰레기값) → 0 처리
+        # 정상 PLC ADC 값 범위: 0 ~ 4095 (12bit) 또는 0 ~ 65535 (u16)
+        # signed 변환 후 음수이거나, 스케일 적용 시 물리적으로 불가능한 큰 값이면 0
+        if raw < 0 or raw > 60000:  # 60000 이상은 쓰레기값으로 처리
+            return 0.0
 
-        # 음수값은 표시상 의미 없으므로 0 처리
+        signed = cls._u16_to_i16(raw)
         if signed < 0:
             return 0.0
 
@@ -800,16 +755,12 @@ class PlcServiceWorker(QThread):
         # ADC 1 노이즈 하한 필터 (PLC 노이즈로 인한 0.x ~ 1.x 값 차단)
         if adc1_scaled < self.ADC1_NOISE_THRESHOLD:
             adc1_scaled = 0.0
-        # EMA 스무딩: HMI/엔진은 filtered 값만 사용
-        adc1_filtered = round(self._adc_ema_1.update(adc1_scaled), 2)
-        # filtered: 엔진/HMI 표시용(EMA 스무딩), RAW: CSV 로그용 원본 보존
-        out["POWER_READ_1"] = adc1_filtered          # 엔진/HMI용 (스무딩됨)
-        out["POWER_READ_1_RAW"] = adc1_scaled        # CSV 로그용 원본
+        out["POWER_READ_1"] = adc1_scaled
+        out["POWER_READ_1_RAW"] = adc1_scaled
 
         adc2_scaled = self._sanitize_and_scale_power_read(raw2, scale=0.1)
-        adc2_filtered = round(self._adc_ema_2.update(adc2_scaled), 2)
-        out["POWER_READ_2"] = adc2_filtered          # 엔진/HMI용 (스무딩됨)
-        out["POWER_READ_2_RAW"] = adc2_scaled        # CSV 로그용 원본
+        out["POWER_READ_2"] = adc2_scaled
+        out["POWER_READ_2_RAW"] = adc2_scaled
 
         # ADC readback trace — 공정 실행 중(_process_logging=True)에만 emit (CH1+CH2 1줄로 합산)
         if self._process_logging:
@@ -818,11 +769,11 @@ class PlcServiceWorker(QThread):
                     "ok": True,
                     "event": "ADC_READBACK",
                     "target": "ADC",
-                    "value": adc1_filtered,
+                    "value": adc1_scaled,
                     "tag": "POLL",
                     "detail": f"CH1={adc1_scaled:.1f}, CH2={adc2_scaled:.1f}",
-                    "msg": f"[PLC] ADC CH1={adc1_scaled:.1f}, CH2={adc2_scaled:.1f}",
-                    "result": adc1_filtered,
+                    "msg": f"[PLC] ADC 1 = {adc1_scaled:.1f}, ADC 2 = {adc2_scaled:.1f}",
+                    "result": adc1_scaled,
                 })
             except Exception:
                 pass

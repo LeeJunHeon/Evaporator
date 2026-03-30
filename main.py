@@ -90,7 +90,7 @@ def main():
             pass
         # 2) fallback: 시간 프리픽스만 붙여서 직접 append
         try:
-            _append_text(getattr(hmi.ui, 'hmiLogWindow', None), f"[{time.strftime('%H:%M:%S')}] {s}")
+            _append_text(getattr(hmi.ui, 'hmiLogWindow', None), f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {s}")
         except Exception:
             pass
 

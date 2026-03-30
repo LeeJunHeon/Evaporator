@@ -584,12 +584,8 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
 
     if target_rate <= 0:
         _raise_engine_failed(step.name, "EVAP: target_rate must be > 0")
-    # target_thickness가 0이면 thickness 도달 조건 없이 Stop 버튼으로만 종료
-    # (0보다 크면 thickness 도달 시 자동 종료)
-
-    engine._run_line(
-        f"[CFG] target_rate={target_rate} Å/s | target_thickness={target_th} Å | delay={delay_min:.1f}min"
-    )
+    if target_th <= 0:
+        _raise_engine_failed(step.name, "EVAP: target_thickness must be > 0")
 
     proc_cfg = _load_runtime_process_config(meta, step_name=step.name)
 
@@ -598,6 +594,11 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
     adc_max = int(proc_cfg.get("adc_max", 200) or 200)
     if adc_max <= 0:
         adc_max = 200
+
+    engine._run_line(
+        f"[CFG] target_rate={target_rate} Å/s | target_thickness={target_th} Å"
+        f" | delay={delay_min:.1f}min | adc_max={adc_max}"
+    )
     rate_tol_ratio = float(proc_cfg["rate_tol_ratio"])
     rate_stable_sec = float(proc_cfg["rate_stable_sec"])
     hold_control_interval_s = float(proc_cfg["hold_control_interval_s"])
@@ -1255,6 +1256,10 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
                     )
                     control_delta = int(new_dac - dac)
 
+                if control_delta != 0:
+                    # ADC 최대값 초과 시 DAC 증가 억제
+                    if control_delta > 0 and adc_total >= adc_max:
+                        control_delta = 0
                 if control_delta != 0:
                     dac = max(0, min(dac_max, int(dac + control_delta)))
                     _evap_apply_dac(engine, use_p1, use_p2, dac, tag="EVAP_HOLD_CONTROL")

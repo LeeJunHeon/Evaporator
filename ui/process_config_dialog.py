@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 
 
 PROCESS_CONFIG_TOOLTIPS = {
+    "adc_max": "공정 중 허용되는 최대 ADC 값.\nramp 및 Hold 중 ADC가 이 값 이상이면 DAC 증가를 중단합니다.\n기본값: 200",
     "dac_max": "공정 중 허용되는 최대 DAC 값.\n이 값을 초과하면 공정이 중단됩니다.",
     "rate_tol_ratio": "dep.rate 안정 판정 허용 오차 비율.\n예: 0.05 → 목표 rate의 ±5% 이내면 안정으로 판정.",
     "rate_stable_sec": "dep.rate가 허용 오차 내에서 연속으로 유지돼야 하는 시간(초).\n이 시간 동안 안정 상태가 유지되면 Hold 구간으로 진입합니다.",
@@ -286,7 +287,7 @@ class ProcessConfigDialog(QDialog):
 
     def _add_form_row(self, form: QFormLayout, label_text: str, widget: QWidget, tooltip_key: str) -> None:
         label = QLabel(label_text, self)
-        tooltip = PROCESS_CONFIG_TOOLTIPS[tooltip_key]
+        tooltip = PROCESS_CONFIG_TOOLTIPS.get(tooltip_key, "")
         label.setToolTip(tooltip)
         widget.setToolTip(tooltip)
         form.addRow(label, widget)

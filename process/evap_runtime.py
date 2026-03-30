@@ -587,6 +587,10 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
     if target_th <= 0:
         _raise_engine_failed(step.name, "EVAP: target_thickness must be > 0")
 
+    engine._run_line(
+        f"[CFG] target_rate={target_rate} Å/s | target_thickness={target_th} Å | delay={delay_min:.1f}min"
+    )
+
     proc_cfg = _load_runtime_process_config(meta, step_name=step.name)
 
     ramp_steps = list(proc_cfg["ramp_steps"])

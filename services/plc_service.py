@@ -811,28 +811,18 @@ class PlcServiceWorker(QThread):
         out["POWER_READ_2"] = adc2_filtered          # 엔진/HMI용 (스무딩됨)
         out["POWER_READ_2_RAW"] = adc2_scaled        # CSV 로그용 원본
 
-        # ADC readback trace — 공정 실행 중(_process_logging=True)에만 emit
+        # ADC readback trace — 공정 실행 중(_process_logging=True)에만 emit (CH1+CH2 1줄로 합산)
         if self._process_logging:
             try:
                 self.sig_cmd_trace.emit({
                     "ok": True,
                     "event": "ADC_READBACK",
-                    "target": "ADC_CH1",
+                    "target": "ADC",
                     "value": adc1_filtered,
                     "tag": "POLL",
-                    "detail": f"raw={adc1_scaled} / filtered={adc1_filtered}",
-                    "msg": f"[PLC] ADC CH1: raw={adc1_scaled} / filtered={adc1_filtered}",
+                    "detail": f"CH1={adc1_scaled:.1f}, CH2={adc2_scaled:.1f}",
+                    "msg": f"[PLC] ADC CH1={adc1_scaled:.1f}, CH2={adc2_scaled:.1f}",
                     "result": adc1_filtered,
-                })
-                self.sig_cmd_trace.emit({
-                    "ok": True,
-                    "event": "ADC_READBACK",
-                    "target": "ADC_CH2",
-                    "value": adc2_filtered,
-                    "tag": "POLL",
-                    "detail": f"raw={adc2_scaled} / filtered={adc2_filtered}",
-                    "msg": f"[PLC] ADC CH2: raw={adc2_scaled} / filtered={adc2_filtered}",
-                    "result": adc2_filtered,
                 })
             except Exception:
                 pass

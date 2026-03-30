@@ -294,6 +294,7 @@ class DepositionPlotWidget(QWidget):
                 x2 = float(t_now)
                 x1 = max(0.0, x2 - self._window_s)
 
+            # X축 끝값을 major 눈금 단위로 올림 정렬하여 눈금이 깔끔하게 맞도록 스냅
             x2 = float(math.ceil(x2 / major) * major)
             x1 = max(0.0, x2 - self._window_s)
             x1 = float(math.floor(x1 / major) * major)

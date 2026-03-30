@@ -1531,6 +1531,7 @@ class Ui_Form(object):
         bottom_margin = 4
 
         stacked_w = max(320, form_w - (left_margin + side_margin))
+        # HMI 페이지: footer를 화면 내에 배치 / Process 페이지: footer는 화면 밖(스크롤 영역 밖)으로 밀어냄
         is_hmi = bool(getattr(self.stackedWidget, "currentIndex", lambda: 0)() == 0)
         if is_hmi:
             stacked_h = max(300, form_h - footer_h - footer_gap - top_margin - bottom_margin)

@@ -103,6 +103,7 @@ KNOWN_REGS = {
 # ============================================================
 
 def _is_num(x: Any) -> bool:
+    # bool은 int의 하위 클래스이므로 별도로 제외해야 숫자 검증이 정확함
     return isinstance(x, (int, float)) and not isinstance(x, bool)
 
 def _req(cond: bool, msg: str) -> None:
@@ -211,6 +212,7 @@ class ProcessStep:
             self.timeout_s = float(self.timeout_s)
 
         if self.stable_s is not None:
+            # stable_s=0 허용: 즉시 통과 가능(안정 구간 없이 조건 1회 만족으로 통과)
             _req(_is_num(self.stable_s) and float(self.stable_s) >= 0, prefix + "stable_s must be >= 0")
             self.stable_s = float(self.stable_s)
 
@@ -313,12 +315,14 @@ class ProcessStep:
         try:
             t = StepType(str(t_raw))
         except Exception:
+            # JSON에서 읽은 type 문자열이 enum 멤버와 불일치하면 즉시 실패
             raise ValueError(f"invalid step.type: {t_raw!r}")
 
         ot_raw = d.get("on_timeout", OnTimeout.ABORT.value)
         try:
             ot = OnTimeout(str(ot_raw))
         except Exception:
+            # 알 수 없는 on_timeout 값이면 가장 안전한 ABORT로 폴백
             ot = OnTimeout.ABORT
 
         step = ProcessStep(
@@ -464,4 +468,5 @@ class ProcessError:
     where: str
     message: str
     exception_repr: str = ""
+    # frozen=True라 __post_init__ 없이 lambda로 기본값을 생성 시점에 주입
     ts: float = field(default_factory=lambda: time.time())

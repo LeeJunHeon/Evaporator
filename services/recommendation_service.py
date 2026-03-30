@@ -27,7 +27,7 @@ class RecommendationService:
         if not candidates:
             return None
 
-        # target_rate 필터 (±20% 이내만)
+        # target_rate 필터: ±20% 범위를 벗어나는 이전 공정은 다른 증착 조건으로 간주하여 제외
         req_rate = float(run_profile.get("target_rate", 0.0) or 0.0)
         if req_rate > 0:
             tolerance = req_rate * 0.20

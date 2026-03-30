@@ -128,6 +128,7 @@ def _build_engine_shutdown_steps(*, prefix: str) -> List[ProcessStep]:
             on=False,
             meta={"reason": "engine_safety_v2"},
         ),
+        # DAC 즉시 0 설정이 아닌 ramp-down 마커: 실제 감쇠 실행은 engine.py가 meta를 보고 처리
         ProcessStep(
             name=f"{prefix}_RAMP_DOWN_DAC_PAIR",
             type=StepType.LOG,
@@ -174,6 +175,7 @@ def default_safety_plan() -> SafetyPlan:
     stop_steps = _build_engine_shutdown_steps(prefix="STOP")
     abort_steps = _build_engine_shutdown_steps(prefix="ABORT")
 
+    # ESTOP는 하드웨어 인터록이 최우선이므로 엔진은 로그만 남기고 PLC 직접 제어를 하지 않음
     estop_steps = [
         ProcessStep(
             name="ESTOP_LOG_ONLY",

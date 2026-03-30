@@ -345,6 +345,7 @@ class ProcessEngine:
             return
 
         if step.type == StepType.MARK:
+            # MARK 스텝 중 이름이 "EVAP_DEPOSITION_CONTROL"이면 증착 제어 루프로 진입
             if step.name == "EVAP_DEPOSITION_CONTROL":
                 run_evap_deposition_control(self, recipe, step)
                 return
@@ -653,7 +654,7 @@ class ProcessEngine:
             also_ui=True,
         )
 
-        # 이미 둘 다 0이면 바로 종료
+        # DAC가 이미 0이면 ramp-down 생략: 불필요한 PLC 명령 전송 방지
         if dac1 <= 0 and dac2 <= 0:
             self._last_dac_power_1 = 0
             self._last_dac_power_2 = 0
@@ -700,6 +701,7 @@ class ProcessEngine:
         # ✅ 자동 공정에서 Power ON 전 TMP 상태 확인
         self._check_tmp_interlock_for_power_coil(str(coil), bool(on), tag=tag)
 
+        # PLC 명령을 Future로 비동기 제출 후, 완료 대기(블로킹)
         fut = self.plc.submit_write_coil(
             coil_name=str(coil),
             on=bool(on),
@@ -897,6 +899,7 @@ class ProcessEngine:
             ok = bool(cond_fn())
             if ok:
                 if stable_start_m is None:
+                    # 조건을 처음 만족한 시점 기록 → stable_s 동안 유지해야 통과
                     stable_start_m = now_m
                 if step.stable_s is None or (now_m - stable_start_m) >= float(step.stable_s):
                     # 마지막 1회 표시(성공)
@@ -905,6 +908,7 @@ class ProcessEngine:
                     self._emit_status(message=f"{prefix} | 조건 만족 (경과 {self._fmt_hms(elapsed_s)})", force=True)
                     return
             else:
+                # 조건이 깨지면 stable 타이머 리셋 → 처음부터 다시 안정 구간 측정
                 stable_start_m = None
 
             # UI 표시(조건/경과/남은)
@@ -1224,6 +1228,7 @@ class ProcessEngine:
         if message:
             self._ui_last_message = message
         else:
+            # 메시지가 없는 tick emit이 들어와도 마지막 메시지를 유지해 UI가 빈 문자열로 덮이는 것 방지
             message = self._ui_last_message
 
         adc1, adc2 = self._get_power_read_pair_cached()
@@ -1398,6 +1403,7 @@ class ProcessEngine:
         else:
             total = int(max(0, x))
 
+        # divmod로 H/M/S 분리 후 1시간 미만이면 MM:SS 형식 사용
         h, rem = divmod(total, 3600)
         m, s = divmod(rem, 60)
         return f"{h:d}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"

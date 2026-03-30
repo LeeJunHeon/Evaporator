@@ -163,6 +163,7 @@ class ProcessConfigDialog(QDialog):
 
         fine_step_dac = _as_int("fine_step_dac", 10, 1)
         hold_max_dac_delta = _as_int("hold_max_dac_delta", fine_step_dac, 1)
+        # Ki 기본값: hold_max_dac_delta * 0.8 → 스텝 크기 대비 적분 속도 자동 스케일링
         hold_pi_ki = _as_float("hold_pi_ki", max(0.0, hold_max_dac_delta * 0.8), 0.0)
         hold_control_mode = str(src.get("hold_control_mode", default["hold_control_mode"]) or "").strip().upper() or "PI"
         if hold_control_mode not in {"PI", "PID", "STEP"}:
@@ -181,6 +182,7 @@ class ProcessConfigDialog(QDialog):
             "hold_pi_kp": _as_float("hold_pi_kp", max(1.0, hold_max_dac_delta * 5.0), 0.0),
             "hold_pi_ki": hold_pi_ki,
             "hold_pi_kd": _as_float("hold_pi_kd", 0.0, 0.0),
+            # integral_limit 기본값: 적분이 2스텝치 이상 쌓이지 않도록 Ki 크기 역산
             "hold_integral_limit": _as_float(
                 "hold_integral_limit",
                 max(1.0, (2.0 * hold_max_dac_delta) / max(hold_pi_ki, 1e-6)),

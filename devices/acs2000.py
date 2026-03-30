@@ -92,7 +92,7 @@ class ACS2000(BaseSerialDevice):
         self._last_logged_pressure: Optional[float] = None
         self._last_logged_con_status: Optional[int] = None
 
-        # CR 뒤에 따라붙은 LF(또는 CR-only 응답에서 다음 프레임 첫 바이트)를 안전하게 처리하기 위한 프리패치
+        # ACS-2000은 CR 뒤에 장비 설정에 따라 LF가 붙기도 함: 다음 프레임의 첫 바이트와 구분하기 위해 1바이트를 프리패치로 버퍼링
         self._rx_prefetch = bytearray()
         self._streaming = False  # ✅ CON 스트리밍 상태
 
@@ -301,7 +301,7 @@ class ACS2000(BaseSerialDevice):
                     raise
 
                 reconnect_left -= 1
-                err_count = 0  # reconnect 후 카운트 리셋
+                err_count = 0  # reconnect 성공 후 연속 에러 카운터 리셋: 다시 io_err_allow 회의 유예를 부여
 
                 backoff_s = self._reconnect_with_backoff(backoff_s)
 
@@ -546,6 +546,7 @@ class ACS2000(BaseSerialDevice):
         latest_line = line
         drained = 0
 
+        # 짧은 drain_timeout으로 버퍼에 쌓인 잔여 샘플을 소비하여 가장 최근 값만 취함
         while drained < max_drain_lines:
             extra = self._read_stream_line_once(
                 timeout_s=drain_timeout_s,

@@ -306,6 +306,8 @@ class HmiWindow(QWidget):
                 event.ignore()
                 return
 
+            # WA_DeleteOnClose 설정 시 destroyed 시그널이 _on_process_destroyed를 호출하여 참조를 정리하므로
+            # 여기서 직접 None으로 끊으면 destroyed 이전에 dangling ref가 됨
             # ✅ 여기서 self.process_window = None 으로 끊지 않는다.
             #    실제 삭제 완료 시 destroyed -> _on_process_destroyed()가 정리하도록 맡긴다.
 

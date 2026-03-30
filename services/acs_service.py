@@ -45,6 +45,7 @@ def _fmt_pressure_human(pressure: float) -> str:
         if p == 0.0:
             return "0 Torr"
         import math
+        # 지수 부분을 유니코드 위첨자로 변환하여 사람이 읽기 쉬운 형태로 표시
         exp = int(math.floor(math.log10(abs(p))))
         mantissa = p / (10.0 ** exp)
         sup_str = "".join(_SUP.get(c, c) for c in str(exp))
@@ -485,6 +486,7 @@ class ACSServiceWorker(QThread):
         raw = (s or "").strip().replace("$", "").strip()
         tokens = [t.strip() for t in raw.split(",") if t.strip()]
         if tokens:
+            # CSV 형식: 마지막 토큰이 압력값인 경우가 많으므로 역순으로 파싱 시도
             for t in reversed(tokens):
                 try:
                     return float(t)

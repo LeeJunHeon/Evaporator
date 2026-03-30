@@ -81,6 +81,7 @@ class IniLineEditor:
             self.lines[i] = f"{indent}{key}{sp}= {value}\n"
             return
 
+        # 키가 없으면 섹션 끝 빈 줄 앞에 삽입: 주석 블록과 빈 줄 사이에 끼어들지 않도록
         insert_at = e
         while insert_at > s + 1 and self.lines[insert_at - 1].strip() == "":
             insert_at -= 1

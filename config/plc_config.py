@@ -84,6 +84,7 @@ def load_plc_settings(ini_path: Optional[str | Path] = None, section: str = "plc
     io_sec = "io_policy"
 
     def _get_int2(key: str, default: int) -> int:
+        # 장비 전용 섹션이 우선; 없으면 공용 [io_policy] 섹션에서 상속
         if cfg.has_option(section, key):
             return cfg.getint(section, key)
         if cfg.has_option(io_sec, key):

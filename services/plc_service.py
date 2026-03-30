@@ -379,6 +379,7 @@ class PlcServiceWorker(QThread):
                 self._publish_disconnected_snapshot()
 
         async def connect_until_ok() -> None:
+            # 지수 백오프 재연결: 실패할수록 대기 시간이 factor배씩 증가하여 max_s로 수렴
             base = float(getattr(self._settings, "reconnect_backoff_base_s", getattr(self._settings, "reconnect_interval_s", 0.6)) or 0.6)
             factor = float(getattr(self._settings, "reconnect_backoff_factor", 1.7) or 1.7)
             max_s = float(getattr(self._settings, "reconnect_backoff_max_s", 5.0) or 5.0)
@@ -497,6 +498,7 @@ class PlcServiceWorker(QThread):
             return
 
         # ✅ 재시도 중인 명령이 있으면 “순서 보존”을 위해 가장 먼저 처리
+        # 큐에 새 명령이 쌓여도 retry 슬롯이 먼저 나가야 명령 순서가 보장된다
         if self._retry_cmd is not None:
             await self._execute_one_command(plc, self._retry_cmd)
             # 성공하면 _execute_one_command에서 self._retry_cmd를 None으로 정리함
@@ -535,7 +537,8 @@ class PlcServiceWorker(QThread):
                 if rn in ("DAC_POWER_1", "DAC_POWER_2"):
                     ch = 1 if rn.endswith("_1") else 2
                     await plc.set_dac_power(ch, int(cmd.value))
-                    # DAC=0 쓰기 직후 해당 채널 EMA 리셋 (power-on 스파이크 방지)
+                    # DAC=0 쓰기 직후 EMA 리셋: 전원 OFF 후 필터 누적값이 남아
+                    # 다음 ON 시 초기 readback 스파이크가 오탐되는 것을 방지
                     if int(cmd.value) == 0:
                         if rn == "DAC_POWER_1":
                             self._adc_ema_1.reset()
@@ -744,6 +747,7 @@ class PlcServiceWorker(QThread):
             11    -> 11
         """
         x = int(v) & 0xFFFF
+        # MSB(0x8000)가 1이면 2의 보수 음수로 해석
         return x - 0x10000 if x >= 0x8000 else x
 
     @classmethod
@@ -798,6 +802,7 @@ class PlcServiceWorker(QThread):
             adc1_scaled = 0.0
         # EMA 스무딩: HMI/엔진은 filtered 값만 사용
         adc1_filtered = round(self._adc_ema_1.update(adc1_scaled), 2)
+        # filtered: 엔진/HMI 표시용(EMA 스무딩), RAW: CSV 로그용 원본 보존
         out["POWER_READ_1"] = adc1_filtered          # 엔진/HMI용 (스무딩됨)
         out["POWER_READ_1_RAW"] = adc1_scaled        # CSV 로그용 원본
 

@@ -36,6 +36,7 @@ def _raise_engine_failed(step_name: str, detail: str) -> None:
     EngineFailed는 engine.py 안에 있으므로 런타임 지연 import로 raise.
     순환 import 방지용.
     """
+    # 모듈 최상위 import 대신 호출 시점에 import해서 evap_runtime ↔ engine 순환 참조 방지
     from process.engine import EngineFailed
     raise EngineFailed(step_name, detail)
 
@@ -157,6 +158,7 @@ def _evap_adjust_dac(
     tol = abs(tr) * float(tol_ratio)
     err = tr - float(rate)
 
+    # 오차가 허용 범위 이내면 DAC를 변경하지 않음
     if abs(err) <= tol:
         return dac
 
@@ -185,9 +187,11 @@ def _filter_hold_rate(
 
     if prev_filtered is not None:
         prev = float(prev_filtered)
+        # 순간 스파이크 억제: 이전 값 대비 max_jump_abs 초과 시 clamp 후 EMA 적용
         if max_jump_abs > 0.0 and abs(sample - prev) > max_jump_abs:
             sample = prev + max_jump_abs if sample > prev else prev - max_jump_abs
             jump_clamped = True
+        # EMA(지수 이동 평균): filtered = prev + alpha * (sample - prev)
         a = min(1.0, max(0.01, float(alpha)))
         filtered = prev + a * (sample - prev)
 
@@ -215,11 +219,14 @@ def _compute_hold_pi_delta(
     tolerance = abs(float(target_rate)) * float(tol_ratio)
 
     if abs(error) <= tolerance:
+        # 허용 범위 내면 적분 항을 천천히 감쇠시켜 offset 누적 방지
         return 0, integral_state * 0.85, error, True
 
     dt = max(0.1, float(interval_s))
+    # 오차를 목표값 대비 비율로 정규화 → Kp/Ki 게인 튜닝을 rate 절대값과 무관하게 유지
     error_ratio = error / max(abs(float(target_rate)), 1e-6)
     next_integral = integral_state + (error_ratio * dt)
+    # 적분 windup 방지: 상/하한 clamp
     next_integral = max(-abs(float(integral_limit)), min(abs(float(integral_limit)), next_integral))
 
     max_step = max(1, int(max_delta))
@@ -362,6 +369,7 @@ def _read_selected_adc_total(
     # 임시 하드웨어 매핑:
     # Power1 only 운전에서는 실제 Power1 feedback을 ADC2로 본다.
     # 반환값도 logical 기준으로 맞춰 downstream 표시/UI가 헷갈리지 않게 한다.
+    # (배선 이슈로 ADC 채널이 물리적으로 반전된 경우에 대한 보정)
     if power1_feedback_adc2 and use_p1 and (not use_p2):
         logical_p1 = a2
         logical_p2 = a1
@@ -437,6 +445,7 @@ def _load_runtime_process_config(meta: dict, *, step_name: str) -> dict:
         if hold_sec < 0:
             _raise_engine_failed(step_name, f"EVAP: ramp_steps[{idx}].hold_sec must be >= 0")
 
+        # ramp_steps는 target_adc가 단조 증가해야 함: 이전 step보다 낮은 target 설정 금지
         if last_adc >= 0 and target_adc < last_adc:
             _raise_engine_failed(
                 step_name,
@@ -793,6 +802,7 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         engine._safe_shutdown_sequence(tag=tag)
 
         shutdown_done = True
+        # engine 레벨 플래그 설정: EngineStopRequested 처리 시 안전정지 중복 실행 방지
         setattr(engine, "_shutdown_already_executed", True)
 
     def _run_preopen_guard(prev_filtered: Optional[float]) -> Optional[float]:

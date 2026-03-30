@@ -424,6 +424,7 @@ class AsyncPLC:
         COM9 이하도 그대로 써도 되지만, 일관성 위해 COM10+만 보정.
         """
         p = str(port).strip()
+        # COM10 이상은 \\.\COM10 형식으로 변환해야 Windows 드라이버가 올바르게 인식
         if p.upper().startswith("COM") and len(p) > 4:
             return f"\\\\.\\{p}"
         return p
@@ -548,6 +549,7 @@ class AsyncPLC:
         """
         assert self._inst is not None
 
+        # coil 0(R_P_SW) → 32(AIR_SW) → 5(TMP_SW) 순서로 응답 확인
         addrs = (0, 32, 5)
         self._inf("_ping_sync: start (try coils=%s, fc=1)", addrs)
 

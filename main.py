@@ -66,6 +66,7 @@ def main():
     app = QApplication(sys.argv)
     if sys.platform == "win32":
         from PySide6.QtGui import QFont
+        # Windows에서 기본 폰트가 한자 계열로 fallback되는 것을 막기 위해 맑은 고딕 강제 지정
         font = app.font()
         font.setFamily("Malgun Gothic")
         app.setFont(font)
@@ -85,7 +86,7 @@ def main():
     # ✅ HMI 로그는 PLC binder가 찍는 포맷([HH:MM:SS] ...)으로 통일
     def _hmi_log(msg: object) -> None:
         s = str(msg).rstrip('\n')
-        # 1) 가능하면 HmiPlcBinder의 로그 포맷/스크롤 정책을 그대로 사용
+        # binder의 _set_hmi_log를 우선 사용해 스크롤/포맷 정책을 통일; 없으면 타임스탬프 직접 부착
         try:
             fn = getattr(plc_binder, '_set_hmi_log', None)
             if callable(fn):
@@ -208,6 +209,7 @@ def main():
 
         deadline = time.monotonic() + max(0.5, float(timeout_s))
 
+        # Qt 이벤트 루프를 주기적으로 처리해야 engine 스레드의 finished 시그널이 전달됨
         while time.monotonic() < deadline:
             try:
                 if not bool(is_running_fn()):

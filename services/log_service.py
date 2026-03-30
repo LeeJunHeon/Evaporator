@@ -208,7 +208,7 @@ class LogWriterWorker(QThread):
             "detail",
         ]
 
-        # ✅ NAS 복구 감지 주기(초)
+        # NAS 장애 복구 시 fallback 파일을 NAS로 병합하는 주기 체크 타임스탬프
         self._last_migrate_check_ts = 0.0
         self._migrate_interval_s = 5.0
 
@@ -216,6 +216,7 @@ class LogWriterWorker(QThread):
         return ",".join(self._tele_fieldnames)
     
     def _write_csv_preamble(self) -> None:
+        # CSV 파일 맨 앞에 "# key=value" 형식의 메타 주석을 기록 (빈 파일일 때만 실행)
         if self._tele_fp is None:
             return
 
@@ -531,7 +532,7 @@ class LogWriterWorker(QThread):
                 wf.write(rf.read())
             return
 
-        # dst가 이미 있으면 src의 preamble/header는 건너뛰고 data row만 append
+        # NAS 복구 시 fallback CSV를 병합: 기존 NAS 파일에 header를 중복하지 않고 data 행만 이어 붙인다
         with open(src, "r", encoding="utf-8-sig", errors="replace") as rf:
             lines = rf.readlines()
 

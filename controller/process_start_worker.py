@@ -253,8 +253,7 @@ class ProcessStartWorker(QThread):
                 # is_running이 없으면 그냥 start 시도
                 self.stm.start()
         except Exception:
-            # 여기서 예외를 바로 실패로 처리하지 않는 이유:
-            # 일부 서비스는 이미 running 상태에서 start() 호출 시 예외가 날 수 있기 때문
+            # 이미 실행 중인 서비스에서 start() 재호출 시 예외가 발생할 수 있어 무시
             pass
 
     def _wait_until_connected(self, *, timeout_s: float) -> bool:
@@ -269,6 +268,7 @@ class ProcessStartWorker(QThread):
 
             self.msleep(max(10, int(self.config.poll_interval_ms)))
 
+        # 타임아웃 직후 마지막으로 한 번 더 확인 (루프 조건 경계에서 놓치는 경우 방지)
         return bool(self._read_connected_state())
 
     def _read_connected_state(self) -> bool:
@@ -437,4 +437,5 @@ class ProcessStartWorker(QThread):
         return not self._cancel_requested
 
 
+# sentinel: crystal health check API가 없는 STM 서비스 구현체를 구분하는 고유 객체
 _NOT_SUPPORTED = object()

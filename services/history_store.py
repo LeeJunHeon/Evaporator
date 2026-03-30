@@ -127,6 +127,7 @@ class HistoryStore:
         return Path(root) / self._subdir / self._db_name
 
     def _write_db_path(self) -> Optional[Path]:
+        # primary_root 먼저 시도하고, 실패하면 fallback_root에 기록 → 저장 경로 이중화
         for root in self._roots_for_query():
             path = self._db_path_for_root(root)
             try:
@@ -200,6 +201,7 @@ class HistoryStore:
         conn.commit()
 
     def _ensure_columns(self, conn: sqlite3.Connection) -> None:
+        # PRAGMA table_info으로 기존 컬럼 목록을 조회 후, 없는 컬럼만 ALTER TABLE ADD로 추가
         existing = {
             str((row["name"] if isinstance(row, sqlite3.Row) else row[1]) or "").strip()
             for row in conn.execute("PRAGMA table_info(run_summaries)").fetchall()
@@ -338,6 +340,7 @@ class HistoryStore:
                             continue
 
                         prev = merged.get(run_id)
+                        # primary/fallback 양쪽에 같은 run_id가 있으면 최신 finished_ts를 우선
                         if prev is None or float(data.get("finished_ts") or 0.0) >= float(prev.get("finished_ts") or 0.0):
                             merged[run_id] = data
             except Exception:

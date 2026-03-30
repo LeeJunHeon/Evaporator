@@ -204,6 +204,7 @@ def _u32(v: int) -> int:
 
 
 def _i16_from_u16(v: int) -> int:
+    # MSB(bit15)가 1이면 2의 보수 음수로 해석 (온도 등 부호 있는 값)
     v &= 0xFFFF
     return v - 0x10000 if v & 0x8000 else v
 
@@ -242,6 +243,7 @@ def _join_u32(b0: int, b1: int, b2: int, b3: int) -> int:
 
 
 def _bcc_xor(buf: bytes) -> int:
+    # USS 프로토콜 체크섬: STX부터 마지막 데이터 바이트까지 XOR 누산
     c = 0
     for b in buf:
         c ^= b
@@ -249,6 +251,7 @@ def _bcc_xor(buf: bytes) -> int:
 
 
 def _make_pke(query_designator: int, pnu: int) -> int:
+    # PKE 워드: 상위 4비트 = AK(접근 지정자), 하위 11비트 = PNU(파라미터 번호)
     return ((query_designator & 0xF) << 12) | (pnu & 0x07FF)
 
 
@@ -313,7 +316,7 @@ class Turbovac(BaseSerialDevice):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
-        # polling 때도 start bit가 날아가지 않도록 현재 제어 상태 유지
+        # 매 telegram마다 control_word가 함께 전송되므로 초기값 0이 TMP를 건드리지 않도록 prime_*로 명시 필요
         self._address = USB_FIXED_ADDRESS
         self._control_word: int = 0
         self._setpoint_hz: int = 0
@@ -409,7 +412,7 @@ class Turbovac(BaseSerialDevice):
         payload.append(hsw_hi)
         payload.append(hsw_lo)
 
-        payload.extend(b"\x00" * 8)
+        payload.extend(b"\x00" * 8)  # PZD4~PZD7: 미사용 프로세스 데이터 (USS 규격상 0으로 채움)
 
         if len(payload) != 23:
             raise AssertionError(f"invalid frame body length: {len(payload)}")
@@ -560,6 +563,7 @@ class Turbovac(BaseSerialDevice):
         prev_cw = self._control_word
         prev_hsw = self._setpoint_hz
 
+        # reset은 start bit(bit0)가 살아있으면 동작하지 않으므로 bit0 내린 뒤 bit7(RESET) 세팅
         cw_reset = (prev_cw | (1 << CW_ENABLE_PROCESS) | (1 << CW_RESET_ERROR))
         cw_reset &= ~(1 << CW_START_STOP)
         self._txrx(stw=cw_reset, hsw=0)
@@ -684,6 +688,7 @@ class Turbovac(BaseSerialDevice):
         if include_extended:
             motor_temp_c = _safe_call(None, self.read_parameter_i16, 7)
 
+            # P171: 마지막 에러 코드 (indexed 방식 실패 시 non-indexed로 fallback)
             last_error_code = _safe_call(None, self.read_parameter_u16, 171, index=0)
             if last_error_code is None:
                 last_error_code = _safe_call(0, self.read_parameter_u16, 171)

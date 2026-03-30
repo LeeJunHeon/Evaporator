@@ -103,6 +103,7 @@ class BaseSerialDevice:
             ser = self._require()
             t0 = time.time()
             buf = bytearray()
+            # pyserial의 read(n)은 최대 n바이트 반환: timeout 내 부분 읽기가 발생할 수 있어 루프로 보장
             while len(buf) < n and (time.time() - t0) < timeout_s:
                 chunk = ser.read(n - len(buf))
                 if chunk:

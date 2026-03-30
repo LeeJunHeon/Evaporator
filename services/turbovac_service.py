@@ -231,6 +231,7 @@ class TurbovacService(QObject):
     def has_tmp_error(self) -> bool:
         snap = self._last_snapshot or {}
         sw = int(snap.get("status_word", 0) or 0)
+        # status_word 비트 3: CANopen/장비 표준 에러 플래그 위치
         return bool(sw & (1 << 3))
 
     def has_tmp_warning(self) -> bool:
@@ -447,6 +448,7 @@ class TurbovacService(QObject):
 
             # 핵심:
             # 최초 attach/reconnect 시 현재 의도에 맞는 전략으로 probe
+            # assume_running=True 면 이미 회전 중인 TMP와 연결 시 제어권을 안전하게 가져옴
             assume_running = bool(self._connect_hint_running)
             fast = dev.connect_and_probe(assume_running=assume_running)
 

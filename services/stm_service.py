@@ -46,6 +46,7 @@ def _format_stm_io_trace_legacy0(d: dict) -> str:
     ok = bool(d.get("ok", True))
 
     # dep.rate: TX=V, RX=A<value> (값은 1/1000 Å/s 단위)
+    # STM100 프로토콜: 증착률은 "V" 커맨드로 조회, 응답 앞의 "A" 접두사 제거 후 100 나눔
     if tx == "V":
         try:
             if rx.startswith("A") or rx.startswith("a"):
@@ -227,6 +228,7 @@ class _CmdReadCrystalHealth:
 # Worker Thread
 # ============================================================
 
+# STM이 측정값 준비 중일 때 일시적으로 ValueUnavailable을 반환할 수 있어 즉시 재연결하지 않고 허용
 _MAX_UNAVAILABLE_BEFORE_RECONNECT = 10  # 연속 N회 ValueUnavailable → fail 로 간주
 
 
@@ -687,12 +689,14 @@ class STMServiceWorker(QThread):
             self._conn_backoff_s = float(self._conn_backoff_base_s)  # ✅ 성공 시 reset
 
             # ✅ (1) power lost flag(B) 정리: L ack (실패해도 연결은 유지)
+            # 전원 재공급 후 장비가 내부적으로 세운 "전원 손실" 플래그를 해제해야 정상 측정 가능
             try:
                 self._stm.ack_power_failure_flag()
             except Exception as e:
                 self.sig_error.emit(f"[STMService] ack_power_failure_flag failed: {e!r}")
 
             # ✅ (2) 1회 프라임 read: 첫 응답 ''/-------- 완화 (실패해도 연결은 유지)
+            # 연결 직후 첫 폴링에서 빈 응답이 오는 경우를 처리하기 위한 워밍업 읽기
             try:
                 _ = self._stm.get_thickness_angstrom()
                 _ = self._stm.get_rate_angstrom_per_s()
@@ -741,7 +745,7 @@ class STMServiceWorker(QThread):
         except Exception as e:
             if isinstance(e, STM100ValueUnavailableError):
                 self._unavailable_count += 1
-                # 연속 N회 초과 시 fail 로 간주 → 재연결 트리거
+                # 일시적 "값 없음"은 허용; 연속 N회 초과 시에만 실제 fail 로 간주
                 if self._unavailable_count > _MAX_UNAVAILABLE_BEFORE_RECONNECT:
                     self._fail_count += 1
             else:

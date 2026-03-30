@@ -354,6 +354,7 @@ class HmiPlcBinder(QObject):
         
     def is_ui_connected(self) -> bool:
         """UI 표시/버튼 enable 기준 연결 상태 (링크 연결 + 최근 I/O OK)."""
+        # 링크만 연결되어도 I/O가 없으면 조작 차단 → coil 수신 후에야 True
         with self._state_lock:
             return bool(self._connected) and bool(self._io_healthy)
 
@@ -746,6 +747,7 @@ class HmiPlcBinder(QObject):
             finally:
                 self._tmp_attach_prompt_open = False
 
+        # 현재 이벤트 루프 사이클 종료 후 실행: UI 스레드 블로킹 없이 QMessageBox 표시
         QTimer.singleShot(0, _run)
 
     def _on_acs_connected(self, ok: bool) -> None:
@@ -990,7 +992,7 @@ class HmiPlcBinder(QObject):
             except Exception as e:
                 self._set_hmi_log(f"[WARN] ALL STOP delegate failed: {e!r} -> fallback hard stop")
 
-        # 2) 실행 중 공정이 없거나 위임 실패 시에만 direct hard stop fallback
+        # 2) 공정이 없거나 위임 실패 시: 셔터/DAC/파워 직접 OFF → 안전 최소 보장
         if self._turbovac_service is not None:
             try:
                 self._set_tmp_connect_hint(False)
@@ -1198,6 +1200,7 @@ class HmiPlcBinder(QObject):
                 continue
             target = bool(states.get(b.coil_name, False))
             try:
+                # QSignalBlocker로 setChecked 중 toggled 시그널 재발생 방지
                 with QSignalBlocker(w):
                     w.setChecked(target)
             except Exception:

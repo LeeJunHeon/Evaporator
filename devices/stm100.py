@@ -27,8 +27,10 @@ _DENSITY_MIN = 0.500
 _DENSITY_MAX = 99.99
 _Z_MIN = 0.100
 _Z_MAX = 9.999
+# _Z_FILM_MAX는 Multi-Film(jN/kN) 전용: STM-100 매뉴얼상 film별 Z는 최대 99.99
 _Z_FILM_MAX = 99.99
 
+# A=정상(전원 유지), B=정상(전원 손실 플래그 있음) → 둘 다 OK로 처리
 _OK_CODES = {"A", "B"}
 _CODE_MEANING = {
     "A": "OK (No reset)",
@@ -311,9 +313,9 @@ class STM100(BaseSerialDevice):
 
                     payload, chk_ok = read_frame(ser, timeout_s=timeout_s)
 
-                # checksum 불일치(노이즈)는 “복구 가능 오류”로 처리
+                # 체크섬 불일치는 케이블/노이즈 문제로 자주 발생하므로 재시도 가능 오류로 처리
                 if not chk_ok:
-                    raise STM100ProtocolError(f"STM-100 checksum mismatch. rx={payload!r}")
+                    raise STM100ProtocolError(f”STM-100 checksum mismatch. rx={payload!r}”)
 
                 code = payload[0] if payload else ""
                 body = payload[1:] if len(payload) > 1 else ""
@@ -716,7 +718,7 @@ class STM100(BaseSerialDevice):
         - verify=True면 E?/F? (또는 jN?/kN?)로 read-back 검증
         """
 
-        # ✅ STM-100 전송 포맷과 동일하게 “보내는 값”을 정규화해서 오탐 줄임
+        # 전송 포맷(compact float)으로 미리 정규화해 두어야 read-back 비교 시 부동소수점 오탐이 줄어든다
         den_sent_str = _fmt_compact_float(float(density_g_cm3), max_decimals=3)
         z_sent_str   = _fmt_compact_float(float(z_factor),     max_decimals=3)
         den_sent = float(den_sent_str)

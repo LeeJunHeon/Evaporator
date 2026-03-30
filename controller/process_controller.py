@@ -77,6 +77,7 @@ class ProcessController(QObject):
         self.acs = None
         self.turbovac = turbovac
         self.log = log
+        # (object id, signal 이름, slot id) 트리플로 중복 connect 방지 및 안전 disconnect 추적
         self._bound_signal_keys: set[tuple[int, str, int]] = set()
 
         self._recipe: Optional[ProcessRecipe] = None
@@ -356,6 +357,7 @@ class ProcessController(QObject):
             "temp_force_power2_sw": bool(ctx["power"]["temp_force_power2_sw"]),
             "power1_feedback_adc2": bool(ctx["power"]["power1_feedback_adc2"]),
         }
+        # process_config를 정렬된 JSON으로 직렬화 후 SHA-256 해시 → 이력 비교/추천 시 레시피 동일성 판별
         process_config_hash = self._hash_canonical_payload(process_config)
 
         fingerprint = {
@@ -626,6 +628,7 @@ class ProcessController(QObject):
     
     def _sanitize_process_name(self, raw_name: Any, *, fallback_material: str) -> str:
         process_name = str(raw_name or "").strip()
+        # 파일 시스템에서 사용 불가한 특수문자 제거 후 공백을 밑줄로 치환
         process_name = re.sub(r'[<>:"/\\|?*]+', "_", process_name)
         process_name = re.sub(r"\s+", "_", process_name).strip("._ ")
 
@@ -760,7 +763,7 @@ class ProcessController(QObject):
         w.sig_error.connect(self.sig_error)
         w.sig_result.connect(self._on_worker_result)
 
-        # 워커 종료 처리 / 메모리 정리
+        # finished 시 워커 참조 정리 + Qt 메모리 관리를 위해 deleteLater도 연결
         w.finished.connect(self._on_worker_finished)
         w.finished.connect(w.deleteLater)
 
@@ -968,6 +971,7 @@ class ProcessController(QObject):
         target_upper = target.upper()
 
         pulse_ms = self._extract_named_value(detail, "pulse_ms")
+        # ADC_READBACK는 폴링으로 자주 발생하므로 UI 로그에 표시하지 않음
         if cmd == "ADC_READBACK":
             return ""
 

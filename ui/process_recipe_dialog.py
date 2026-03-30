@@ -431,6 +431,7 @@ class ProcessRecipeDialog(QDialog):
             if target_adc <= 0:
                 QMessageBox.warning(self, "Recipe", f"Step {idx} target ADC must be greater than 0.")
                 return None
+            # Ramp step의 target_adc는 단조 증가해야 함: 이전 스텝보다 낮으면 램프가 역전되어 안전하지 않음
             if last_adc >= 0 and target_adc < last_adc:
                 QMessageBox.warning(self, "Recipe", f"Step {idx} target ADC must be greater than or equal to the previous step.")
                 return None

@@ -125,6 +125,7 @@ def _parse_int(v: Any) -> Optional[int]:
         return None
     # "10.0" 같은 값이 들어오면 의도치 않으니 에러로 처리
     if any(ch in s for ch in (".", "e", "E")):
+        # 소수점·지수 표기 포함된 문자열은 int 필드에서 거부: 레지스터 값/펄스 ms는 정수만 허용
         # 단, 사용자가 "1000e0" 같은 걸 쓸 수도 있는데 int로 쓰는 필드는
         # 보통 레지스터 값/펄스 ms라서 안전하게 막는 편이 낫다.
         raise ValueError(f"invalid int: {v!r}")
@@ -159,6 +160,7 @@ def _parse_enum_step_type(v: Any) -> StepType:
         return StepType(s)
     except Exception:
         # 사용자가 소문자/공백 넣어도 최대한 보정
+        # 소문자·공백 허용을 위해 대문자+언더스코어로 정규화 후 재시도
         s2 = s.strip().upper().replace(" ", "_")
         try:
             return StepType(s2)
@@ -256,6 +258,7 @@ def load_recipe_json(path: Union[str, Path], *, strict: bool = True) -> ProcessR
 def save_recipe_json(path: Union[str, Path], recipe: ProcessRecipe) -> None:
     p = Path(path)
     try:
+        # 저장 시 strict=False: 알 수 없는 코일 이름이 있어도 파일 저장은 허용하고 운영 로드 시 strict=True로 검출
         recipe.validate(strict=False)  # 저장 자체는 가능하도록(오타는 운영에서 strict로 잡기)
     except Exception:
         # validate 실패해도 저장은 허용하고 싶으면 여기서 pass 가능.
@@ -316,6 +319,7 @@ def load_recipe_csv(path: Union[str, Path], *, strict: bool = True) -> ProcessRe
         except Exception as e:
             raise RecipeIOError(f"CSV row parse error at line~{i+2} (header=1): {e!r} | row={raw}")
 
+    # idx 컬럼이 존재하면 파일 내 행 순서가 아닌 idx 기준으로 스텝 순서 재정렬
     parsed.sort(key=lambda x: x[0])
     steps = [s for _, s in parsed]
 

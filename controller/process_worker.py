@@ -56,7 +56,7 @@ class ProcessWorker(QThread):
         # ✅ 이전 콜백 저장(종료 후 원복)
         self._prev_callbacks = getattr(self._engine, "callbacks", None)
 
-        # 엔진 콜백을 Worker 시그널로 브릿지
+        # 엔진 콜백을 Worker 시그널로 브릿지: 엔진은 Qt를 모르고 콜백 호출만 하므로 여기서 emit
         self._engine.callbacks = EngineCallbacks(
             on_status=lambda st: self.sig_status.emit(st),
             on_step=lambda st: self.sig_step.emit(st),

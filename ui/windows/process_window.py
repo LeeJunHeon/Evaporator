@@ -630,6 +630,7 @@ class ProcessWindow(QWidget):
         return re.sub(pattern, "", text, flags=re.IGNORECASE).strip()
 
     def _format_process_log_line(self, raw: str) -> str:
+        # 이미 [HH:MM:SS] 또는 [YYYY-MM-DD HH:MM:SS] 접두사가 있으면 시간 부분 추출하여 재포맷
         text = str(raw or "").strip()
         if not text:
             return ""
@@ -1228,7 +1229,7 @@ class ProcessWindow(QWidget):
                 f"source={run_profile.get('initial_dac_source') or 'runtime'}"
             )
 
-        # 3) PLC precheck
+        # 공정 시작 순서: PLC precheck → STM 서비스 준비 → async preflight(crystal health) → pc.start_from_ui
         if not self._check_plc_ready_before_start():
             self._close_process_run_log()
             self._clear_run_power_flags()

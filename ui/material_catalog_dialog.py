@@ -230,6 +230,7 @@ class MaterialCatalogDialog(QDialog):
                 item = QTableWidgetItem(text)
                 self.table.setItem(r, c, item)
                 if c == 0:
+                    # note는 UI 컬럼에 없지만 UserRole로 숨겨서 저장 시 보존
                     item.setData(Qt.UserRole, m.note or "")
 
         self.table.blockSignals(False)

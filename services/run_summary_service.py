@@ -495,12 +495,14 @@ class RunSummaryService:
             elapsed = _to_float_or_none(row.get("elapsed_sec"))
             rate = row.get("rate")
             if elapsed is None or rate is None:
+                # 값 없는 구간은 안정 구간 타이머 리셋
                 start_elapsed = None
                 continue
 
             if abs(float(rate) - float(target_rate)) <= tolerance:
                 if start_elapsed is None:
                     start_elapsed = elapsed
+                # required_sec 이상 연속으로 허용 범위 내에 있을 때 안정 도달로 판정
                 if required_sec <= 0.0 or (elapsed - start_elapsed) >= required_sec:
                     return elapsed, row
             else:
@@ -722,6 +724,7 @@ class RunSummaryService:
         return "abnormal_end", ""
 
     def _process_config_hash(self, process_config: dict[str, Any]) -> str:
+        # 정렬된 JSON 직렬화 후 SHA-256 → 동일 설정이면 항상 같은 해시로 이력 검색 가능
         if not process_config:
             return ""
         payload = _canonical_json(process_config).encode("utf-8")

@@ -249,6 +249,7 @@ class HistoryRecommendationDialog(QDialog):
             return None
         result = dict(cfg)
         if not self.applyConfigCheck.isChecked():
+            # Config 파라미터 미적용 시 ramp_steps 형태만 반환: ProcessRecipeDialog가 나머지 config를 현재 값으로 유지
             result = {
                 "ramp_steps": result.get("ramp_steps"),
                 "step_count": result.get("step_count"),

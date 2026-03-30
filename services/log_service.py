@@ -90,7 +90,8 @@ class CmdSetBaseDir(_CmdBase):
 
 @dataclass(frozen=True)
 class CmdMarkSuccess(_CmdBase):
-    pass
+    material_name: str = ""
+    target_rate: float = 0.0
 
 @dataclass(frozen=True)
 class CmdStop(_CmdBase):
@@ -332,7 +333,7 @@ class LogWriterWorker(QThread):
             return
 
         if isinstance(cmd, CmdMarkSuccess):
-            self._handle_mark_success()
+            self._handle_mark_success(cmd)
             return
 
         if isinstance(cmd, CmdBarrier):
@@ -673,7 +674,16 @@ class LogWriterWorker(QThread):
         self._run_open_ts = 0.0
         self._run_meta = {}
 
-    def _handle_mark_success(self) -> None:
+    def _handle_mark_success(self, cmd: CmdMarkSuccess) -> None:
+        material = _safe_name(cmd.material_name, 20) if cmd.material_name else ""
+        rate_str = f"{cmd.target_rate:.1f}" if cmd.target_rate > 0 else ""
+        parts = ["SUCCESS"]
+        if material:
+            parts.append(material)
+        if rate_str:
+            parts.append(rate_str)
+        prefix = "_".join(parts) + "_"
+
         # .log 파일 rename
         if self._run_log_path and self._run_log_path.exists():
             try:
@@ -684,7 +694,7 @@ class LogWriterWorker(QThread):
                 parent = self._run_log_path.parent
                 old_name = self._run_log_path.name
                 if not old_name.startswith("SUCCESS_"):
-                    new_path = parent / f"SUCCESS_{old_name}"
+                    new_path = parent / f"{prefix}{old_name}"
                     self._run_log_path.rename(new_path)
                     self._run_log_path = new_path
                     self._run_log_fp = open(new_path, "a", encoding="utf-8", newline="")
@@ -704,7 +714,7 @@ class LogWriterWorker(QThread):
                 parent = self._tele_path.parent
                 old_name = self._tele_path.name
                 if not old_name.startswith("SUCCESS_"):
-                    new_path = parent / f"SUCCESS_{old_name}"
+                    new_path = parent / f"{prefix}{old_name}"
                     self._tele_path.rename(new_path)
                     self._tele_path = new_path
                     self._tele_fp = open(new_path, "a", encoding="utf-8-sig", newline="")
@@ -1239,12 +1249,12 @@ class LogService(QObject):
     def close_run(self) -> None:
         self._worker.post(CmdCloseRun())
 
-    def mark_run_success(self) -> dict:
+    def mark_run_success(self, material_name: str = "", target_rate: float = 0.0) -> dict:
         """
         공정 성공 시 호출.
-        현재 run의 .log / .csv 파일명 앞에 SUCCESS_ prefix를 붙여 rename.
+        현재 run의 .log / .csv 파일명 앞에 SUCCESS_<material>_<rate>_ prefix를 붙여 rename.
         """
-        self._worker.post(CmdMarkSuccess())
+        self._worker.post(CmdMarkSuccess(material_name=str(material_name or ""), target_rate=float(target_rate or 0.0)))
         return {}
 
     # ---------- telemetry ----------

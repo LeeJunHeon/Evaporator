@@ -158,6 +158,7 @@ class ProcessEngine:
         # last status emit timestamps
         self._last_status_emit_ts: float = 0.0
         self._last_telemetry_ts: float = 0.0
+        self._stm_log_ts: float = 0.0
 
         self._last_dac_power_1: Optional[int] = None
         self._last_dac_power_2: Optional[int] = None
@@ -200,6 +201,7 @@ class ProcessEngine:
         self._current_step_name = ""
         self._last_status_emit_ts = 0.0
         self._last_telemetry_ts = 0.0
+        self._stm_log_ts = 0.0
 
         # ✅ 이전 run의 잔상 제거
         self._last_dac_power_1 = None
@@ -1270,6 +1272,8 @@ class ProcessEngine:
         try:
             adc1, adc2 = self._get_power_read_pair_cached()
             adc1_raw, adc2_raw = self._get_power_read_raw_pair()
+            rate = self._get_rate()
+            thickness = self._get_thickness()
 
             self.log.telemetry({
                 "step": (self._ui_last_message or self._current_step_name),
@@ -1281,9 +1285,17 @@ class ProcessEngine:
                 "adc1_raw": adc1_raw,
                 "adc2": adc2,
                 "adc2_raw": adc2_raw,
-                "dep.rate": self._get_rate(),
-                "thickness_A": self._get_thickness(),
+                "dep.rate": rate,
+                "thickness_A": thickness,
             })
+
+            now = time.monotonic()
+            if (now - self._stm_log_ts) >= 1.0:
+                self._stm_log_ts = now
+                if rate is not None and thickness is not None:
+                    self._run_line(
+                        f"[STM] rate={rate:.3f} Å/s | thickness={thickness:.1f} Å"
+                    )
         except Exception:
             pass
 

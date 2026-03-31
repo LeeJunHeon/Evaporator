@@ -460,6 +460,11 @@ class ACSServiceWorker(QThread):
             # ✅ 성공하면 connect backoff reset
             self._conn_backoff_s = float(self._conn_backoff_base_s)
 
+            # query 모드일 때: 장비가 이전 세션의 CON 스트림 상태일 수 있으므로
+            # 연결 직후 스트림을 강제 중단시키고 버퍼를 비운다.
+            if not self._use_stream:
+                self._acs.stop_stream_if_running()
+
             self._apply_stream_mode_if_needed()
         except Exception as e:
             self.sig_error.emit(f"[ACSService] connect failed: {e!r}")

@@ -569,6 +569,27 @@ class ACS2000(BaseSerialDevice):
             "drained": drained,
         }
 
+    def stop_stream_if_running(self) -> None:
+        """
+        연결 직후 장비가 이전 세션의 CON 스트리밍 상태일 수 있으므로
+        CR 한 바이트를 보내서 스트림을 강제 중단시킨다.
+        ACS-2000 매뉴얼: "Press any button to stop transmission"
+        query 모드 재연결 시 반드시 호출해야 $PRD 명령이 정상 동작한다.
+        """
+        with self._lock:
+            try:
+                ser = self._require()
+                self._rx_prefetch.clear()
+                ser.write(b'\r')         # 아무 문자 전송 → 스트림 중단
+                ser.flush()
+                time.sleep(0.3)          # 장비가 스트림을 멈출 때까지 대기
+                ser.reset_input_buffer() # 스트림 잔여 데이터 제거
+                self._rx_prefetch.clear()
+            except Exception:
+                pass
+        self._streaming = False
+        self._con_interval_a = None
+
     def stop_stream_safe(self) -> None:
         self._streaming = False
         self._con_interval_a = None  # ✅ 자동 스트림 재시작 방지

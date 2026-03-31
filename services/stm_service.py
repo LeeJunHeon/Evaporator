@@ -864,6 +864,14 @@ class STMService(QObject):
             self._worker.stop()
         except Exception:
             pass
+        # 워커가 serial read에서 블로킹 중일 수 있으므로
+        # 메인 스레드에서 직접 포트를 닫아 블로킹을 강제 해제한다
+        try:
+            stm_dev = getattr(self._worker, "_stm", None)
+            if stm_dev is not None:
+                stm_dev.close()
+        except Exception:
+            pass
         try:
             self._worker.wait(int(wait_ms))
         except Exception:

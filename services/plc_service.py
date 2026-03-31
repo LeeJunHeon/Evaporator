@@ -883,6 +883,14 @@ class PLCService(QObject):
                 pass
             return False
 
+        # asyncio loop를 강제 stop → 블로킹 중인 I/O 태스크 해제
+        # PLC는 asyncio 기반이라 serial 직접 close 대신 loop.stop() 사용
+        try:
+            loop = getattr(self._worker, "_loop", None)
+            if loop is not None and not loop.is_closed():
+                loop.call_soon_threadsafe(loop.stop)
+        except Exception:
+            pass
         try:
             ok = bool(self._worker.wait(int(wait_ms)))
         except Exception as e:

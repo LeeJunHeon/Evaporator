@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import gc
+import json
 import re
 import time
 import warnings
@@ -153,6 +154,11 @@ class ProcessWindow(QWidget):
                             recommendation_service=None) -> None:
         self._plc_binder = plc_binder
         self._ini_path = Path(ini_path)
+
+        # process_config.json이 있으면 불러와서 적용 (껐다 켜도 설정 유지)
+        saved_cfg = self._load_process_config_from_file()
+        if saved_cfg is not None:
+            self._process_cfg = self._normalize_process_config(saved_cfg)
 
         self._process_controller = process_controller
         self._log_service = log_service
@@ -702,6 +708,7 @@ class ProcessWindow(QWidget):
 
     def _apply_process_config(self, new_cfg: Any, *, log_prefix: str) -> None:
         self._process_cfg = self._normalize_process_config(new_cfg)
+        self._save_process_config_to_file()
 
         steps = self._process_cfg.get("ramp_steps") or []
         step_desc = ", ".join(
@@ -1786,6 +1793,41 @@ class ProcessWindow(QWidget):
         else:
             self._material_2 = dict(data)
             self.ui.materialEdit2.setText(mat or "Select")
+
+    def _process_config_path(self) -> Optional[Path]:
+        """config/process_config.json 경로 반환. ini_path 미설정 시 None."""
+        ini = getattr(self, "_ini_path", None)
+        if ini is None:
+            return None
+        return Path(ini).parent / "process_config.json"
+
+    def _load_process_config_from_file(self) -> Optional[dict]:
+        """
+        config/process_config.json이 있으면 읽어서 반환.
+        없거나 파싱 실패 시 None 반환.
+        """
+        p = self._process_config_path()
+        if p is None or not p.exists():
+            return None
+        with contextlib.suppress(Exception):
+            with open(p, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return data
+        return None
+
+    def _save_process_config_to_file(self) -> None:
+        """
+        현재 self._process_cfg를 config/process_config.json에 저장한다.
+        실패 시 조용히 무시한다.
+        """
+        p = self._process_config_path()
+        if p is None:
+            return
+        with contextlib.suppress(Exception):
+            p.parent.mkdir(parents=True, exist_ok=True)
+            with open(p, "w", encoding="utf-8") as f:
+                json.dump(self._process_cfg, f, ensure_ascii=False, indent=2)
 
     def _default_process_config(self) -> dict[str, Any]:
         return {

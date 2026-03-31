@@ -891,16 +891,6 @@ class ProcessWindow(QWidget):
         return True
 
     def _prepare_stm_service_for_start(self) -> bool:
-        """
-        Start 吏곹썑 UI thread?먯꽌??
-        - FTM ON ?붿껌
-        - STMService 媛앹껜 ?앹꽦/start
-        - ProcessController??runtime device 二쇱엯
-        源뚯?留??섑뻾?쒕떎.
-
-        ?ㅼ젣 ?곌껐 ?湲?/ crystal health check??
-        ProcessStartWorker(QThread)?먯꽌 泥섎━?쒕떎.
-        """
         if self.hmi_window is None:
             self._append_process_log("[DEV][ERR] hmi_window is None -> cannot prepare STM")
             return False
@@ -910,23 +900,27 @@ class ProcessWindow(QWidget):
             self._append_process_log("[DEV][ERR] ini_path is None -> cannot prepare STM")
             return False
 
-
-        self._shutdown_stm_with_ftm_off_best_effort()
-
         binder = getattr(self.hmi_window, "_plc_binder", None)
         if binder is None:
             self._append_process_log("[DEV][ERR] plc_binder is None (cannot turn on FTM_SW)")
             return False
 
         try:
+            # FTM ON
             binder.enqueue_write("FTM_SW", True)
             self._append_process_log("[DEV] FTM_SW -> ON (before STM preflight)")
 
-            stm = STMService(ini_path=ini_path)
-            stm.start()
-
-            self._stm_service = stm
-            self.hmi_window._stm_service = stm
+            # 기존 STMService가 살아있으면 재사용, 없거나 죽어있을 때만 새로 생성
+            stm = self._stm_service
+            if stm is None or not (hasattr(stm, "is_running") and stm.is_running()):
+                self._append_process_log("[DEV] STM service 새로 생성")
+                stm = STMService(ini_path=ini_path)
+                stm.start()
+                self._stm_service = stm
+                if self.hmi_window is not None:
+                    self.hmi_window._stm_service = stm
+            else:
+                self._append_process_log("[DEV] 기존 STM service 재사용")
 
             self._acs_service = getattr(self.hmi_window, "_acs_service", None)
 
@@ -934,23 +928,17 @@ class ProcessWindow(QWidget):
             if pc is not None and hasattr(pc, "replace_runtime_devices"):
                 pc.replace_runtime_devices(stm=stm, acs=self._acs_service)
             else:
-                self._append_process_log("[DEV][WARN] ProcessController.replace_runtime_devices() ?놁쓬")
+                self._append_process_log("[DEV][WARN] ProcessController.replace_runtime_devices() 없음")
 
             self._append_process_log("[DEV] STM service prepared (health/preflight pending)")
             return True
 
         except Exception as e:
             self._append_process_log(f"[DEV][ERR] STM prepare failed: {e!r}")
-
             with contextlib.suppress(Exception):
                 binder.enqueue_write("FTM_SW", False)
                 self._append_process_log("[DEV] FTM_SW -> OFF (STM prepare failed)")
-
-            self._stm_service = None
-            if self.hmi_window is not None:
-                self.hmi_window._stm_service = None
             return False
-        
     def _set_start_busy(self, busy: bool) -> None:
         self._start_in_progress = bool(busy)
 
@@ -1136,18 +1124,14 @@ class ProcessWindow(QWidget):
         return not worker.isRunning()
 
     def _release_stm_runtime_only(self) -> None:
+        # UI signal 연결만 해제
         try:
             self._unbind_stm_ui()
         except Exception:
             pass
 
-        if self._stm_service is not None:
-            try:
-                self._stm_service.stop()
-                self._append_process_log("[DEV] STM stop() called")
-            except Exception as e:
-                self._append_process_log(f"[DEV][WARN] STM stop failed: {e!r}")
-
+        # 공정 엔진이 STM에 접근 못하도록 pc 참조만 제거
+        # STMService 자체는 stop하지 않음 — 다음 Start에서 재사용
         try:
             pc = self._process_controller
             if pc is not None and hasattr(pc, "replace_runtime_devices"):
@@ -1155,12 +1139,8 @@ class ProcessWindow(QWidget):
         except Exception:
             pass
 
-        self._stm_service = None
-        if self.hmi_window is not None:
-            self.hmi_window._stm_service = None
-
+        # self._stm_service는 None으로 설정하지 않음 — 재사용을 위해 유지
         gc.collect()
-        self._append_process_log("[DEV] STM released + gc.collect() (ACS kept alive)")
 
     def _shutdown_stm_with_ftm_off_best_effort(self) -> None:
         self._release_stm_runtime_only()

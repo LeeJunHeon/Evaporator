@@ -596,7 +596,7 @@ class ACS2000(BaseSerialDevice):
                 try:
                     ser.timeout = 0.05
                     t0 = time.time()
-                    while time.time() - t0 < 0.3:
+                    while time.time() - t0 < 1.5:
                         chunk = ser.read(256)
                         if not chunk:
                             time.sleep(0.05)

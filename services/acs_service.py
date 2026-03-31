@@ -454,6 +454,10 @@ class ACSServiceWorker(QThread):
 
         try:
             self._acs.connect()
+            try:
+                self._acs.stop_stream_if_running()
+            except Exception:
+                pass
             self._set_connected(True)
             self._fail_count = 0
 

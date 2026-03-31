@@ -114,6 +114,7 @@ def main():
             use_stream=False,
             stream_interval_a=1,
             channel=1,
+            max_fail_before_close=5,
         )
 
         # ✅ ACS UI/상태 관리는 binder가 전담

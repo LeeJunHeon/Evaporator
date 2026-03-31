@@ -103,16 +103,15 @@ def main():
     # ✅ STM은 Start에서(FTM ON 후) 연결한다.
     stm_service: Any = None
 
-    # ✅ ACS는 프로그램 부팅 즉시 연결하고, CON(1초) stream을 사용한다.
-    #    서비스 루프는 더 촘촘하게 돌면서 latest frame만 채택한다.
+    # ACS는 프로그램 부팅 즉시 연결하고, query 모드($PRD)로 읽는다.
+    # 1초마다 $PRD 쿼리를 전송하여 실시간 압력을 읽는다.
     acs_service: Any = None
     try:
         acs_service = ACSService(
             ini_path=ini_path,
-            poll_s=0.1,                # service loop는 더 자주 돌게
+            poll_s=1.0,                # 1초마다 한 번 쿼리
             reconnect_interval_s=1.0,
             use_stream=False,
-            poll_s=1.0,                # 1초마다 한 번 쿼리, 충분하고 깔끔함
             stream_interval_a=1,       # 1초 stream
             channel=1,
         )

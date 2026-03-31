@@ -1951,7 +1951,6 @@ class ProcessWindow(QWidget):
             new_cfg = getter()
         else:
             new_cfg = getattr(dlg, "config", None)
-        self._clear_recommendation_runtime_overrides()
         self._apply_process_config(new_cfg, log_prefix="[CFG] Process config updated |")
 
     def _open_process_recipe_dialog(self) -> None:

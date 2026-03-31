@@ -111,7 +111,8 @@ def main():
             ini_path=ini_path,
             poll_s=0.1,                # service loop는 더 자주 돌게
             reconnect_interval_s=1.0,
-            use_stream=True,           # CON stream 사용
+            use_stream=False,
+            poll_s=1.0,                # 1초마다 한 번 쿼리, 충분하고 깔끔함
             stream_interval_a=1,       # 1초 stream
             channel=1,
         )

@@ -202,6 +202,7 @@ class PlcServiceWorker(QThread):
 
         # 공정 실행 중일 때만 ADC readback trace를 emit
         self._process_logging: bool = False
+        self._plc_ref = None  # PLCService.stop()에서 포트 강제 닫기용
 
     def _publish_disconnected_snapshot(self) -> None:
         """
@@ -324,6 +325,7 @@ class PlcServiceWorker(QThread):
             dac_full_scale_code=self._settings.dac_full_scale_code,
             dac_offset_code=self._settings.dac_offset_code,
         )
+        self._plc_ref = plc   # PLCService.stop()에서 포트 강제 닫기용
 
         def _emit_connected(v: bool) -> None:
             v = bool(v)
@@ -905,6 +907,15 @@ class PLCService(QObject):
                 self.sig_error.emit(f"[PLCService] stop timeout after {int(wait_ms)} ms")
             except Exception:
                 pass
+
+        # wait() 후에도 PLC 시리얼 포트가 열려있으면 강제 닫기
+        # (loop.stop()이 AsyncPLC.close()보다 먼저 실행된 경우 대비)
+        try:
+            plc_ref = getattr(self._worker, "_plc_ref", None)
+            if plc_ref is not None:
+                plc_ref._close_sync()
+        except Exception:
+            pass
 
         return ok
 

@@ -114,7 +114,6 @@ def main():
             use_stream=False,
             stream_interval_a=1,
             channel=1,
-            max_fail_before_close=5,
         )
 
         # ✅ ACS UI/상태 관리는 binder가 전담
@@ -238,49 +237,36 @@ def main():
             except Exception:
                 pass
 
-        # 2) STM 서비스 stop (ProcessWindow에서 생성되므로 두 곳 모두 체크)
-        for stm_candidate in (
+        # run 파일 open/close는 ProcessWindow가 담당한다.
+
+        # 2) 외부 장비 서비스 stop
+        for svc in (
             getattr(hmi, "_stm_service", None),
-            getattr(getattr(hmi, "process_window", None), "_stm_service", None),
+            getattr(hmi, "_acs_service", None),
+            getattr(hmi, "_turbovac_service", None),
         ):
-            if stm_candidate is not None:
+            if svc is None:
+                continue
+            fn = getattr(svc, "stop", None)
+            if callable(fn):
                 try:
-                    stm_candidate.stop()
+                    fn()
                 except Exception:
                     pass
 
-        # 3) ACS 서비스 stop (closure 로컬 변수 직접 사용 — 확실한 참조)
-        if acs_service is not None:
-            try:
-                acs_service.stop()
-            except Exception:
-                pass
-
-        # 4) TMP 서비스 stop
-        if turbovac_service is not None:
-            try:
-                turbovac_service.stop()
-            except Exception:
-                pass
-
-        # 5) PLC binder stop (내부에서 PLCService.stop() → 시리얼 포트 닫기까지 처리)
+        # 4) 제일 마지막에 PLC binder stop
         try:
             if plc_binder is not None:
                 plc_binder.stop()
         except Exception:
             pass
 
-        # 6) LogService stop
+        # 5) 맨 마지막에 LogService stop
         try:
             if log_service is not None:
                 log_service.stop()
         except Exception:
             pass
-
-        # 7) GC + OS 드라이버 해제 여유
-        import gc
-        gc.collect()
-        time.sleep(0.3)
 
     app.aboutToQuit.connect(_shutdown_new_services)
 

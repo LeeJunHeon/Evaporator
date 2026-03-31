@@ -460,11 +460,6 @@ class ACSServiceWorker(QThread):
             # ✅ 성공하면 connect backoff reset
             self._conn_backoff_s = float(self._conn_backoff_base_s)
 
-            # query 모드일 때: 장비가 이전 세션의 CON 스트림 상태일 수 있으므로
-            # 연결 직후 스트림을 강제 중단시키고 버퍼를 비운다.
-            if not self._use_stream:
-                self._acs.stop_stream_if_running()
-
             self._apply_stream_mode_if_needed()
         except Exception as e:
             self.sig_error.emit(f"[ACSService] connect failed: {e!r}")
@@ -630,7 +625,7 @@ class ACSServiceWorker(QThread):
                 self._poll_once(now)
                 next_poll = now + self._poll_s
 
-            time.sleep(0.01)
+            self._stop_evt.wait(0.01)
 
 
 # ============================================================
@@ -704,18 +699,24 @@ class ACSService(QObject):
             self._worker.stop()
         except Exception:
             pass
-        # 워커가 serial read에서 블로킹 중일 수 있으므로
-        # 메인 스레드에서 직접 포트를 닫아 블로킹을 강제 해제한다
-        try:
-            acs_dev = getattr(self._worker, "_acs", None)
-            if acs_dev is not None:
-                acs_dev.close()
-        except Exception:
-            pass
+        # 워커의 _main_loop이 _stop_evt를 체크하고 자체 종료하도록 대기.
+        # 워커 run() finally에서 _safe_close()로 포트를 안전하게 닫음.
         try:
             self._worker.wait(int(wait_ms))
         except Exception:
             pass
+        # wait() 타임아웃 시에만 포트 강제 닫기 (워커가 serial.read()에 블로킹된 경우)
+        if self._worker.isRunning():
+            try:
+                acs_dev = getattr(self._worker, "_acs", None)
+                if acs_dev is not None:
+                    acs_dev.close()
+            except Exception:
+                pass
+            try:
+                self._worker.wait(2000)
+            except Exception:
+                pass
 
     def is_running(self) -> bool:
         return bool(self._worker.isRunning())

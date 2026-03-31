@@ -74,12 +74,15 @@ class BaseSerialDevice:
 
     def close(self) -> None:
         with self._lock:
-            if self._ser is None:
+            ser = self._ser
+            self._ser = None
+            if ser is None:
                 return
             try:
-                self._ser.close()
-            finally:
-                self._ser = None
+                if ser.is_open:
+                    ser.close()
+            except Exception:
+                pass
 
     def _require(self) -> "serial.Serial":
         if not self.is_connected or self._ser is None:

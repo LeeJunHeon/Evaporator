@@ -807,7 +807,7 @@ class STMServiceWorker(QThread):
                 self._poll_once(now)
                 next_poll = now + self._poll_s
 
-            time.sleep(0.01)
+            self._stop_evt.wait(0.01)
 
 
 # ============================================================
@@ -864,19 +864,24 @@ class STMService(QObject):
             self._worker.stop()
         except Exception:
             pass
-        # 워커가 serial.read()에서 블로킹 중일 수 있으므로
-        # 메인 스레드에서 포트를 먼저 닫아 블로킹을 강제 해제한다
-        try:
-            stm_dev = getattr(self._worker, "_stm", None)
-            if stm_dev is not None:
-                stm_dev.close()
-        except Exception:
-            pass
-        # 포트 닫은 후 워커 종료 대기
+        # 워커의 _main_loop이 _stop_evt를 체크하고 자체 종료하도록 대기.
+        # 워커 run() finally에서 _safe_close()로 포트를 안전하게 닫음.
         try:
             self._worker.wait(int(wait_ms))
         except Exception:
             pass
+        # wait() 타임아웃 시에만 포트 강제 닫기 (워커가 serial.read()에 블로킹된 경우)
+        if self._worker.isRunning():
+            try:
+                stm_dev = getattr(self._worker, "_stm", None)
+                if stm_dev is not None:
+                    stm_dev.close()
+            except Exception:
+                pass
+            try:
+                self._worker.wait(2000)
+            except Exception:
+                pass
 
     def is_running(self) -> bool:
         return bool(self._worker.isRunning())

@@ -572,21 +572,41 @@ class ACS2000(BaseSerialDevice):
     def stop_stream_if_running(self) -> None:
         """
         연결 직후 장비가 이전 세션의 CON 스트리밍 상태일 수 있으므로
-        CR 한 바이트를 보내서 스트림을 강제 중단시킨다.
-        ACS-2000 매뉴얼: "Press any button to stop transmission"
-        query 모드 재연결 시 반드시 호출해야 $PRD 명령이 정상 동작한다.
+        유효한 명령 프레임($VER)을 보내 스트림을 중단시키고,
+        실제로 읽어서 버퍼를 비운다.
+
+        - b'\\r' 단독 전송은 ACS-2000이 무시할 수 있어 스트림이 계속됨
+        - reset_input_buffer()는 CH340/CP2102 Windows 드라이버에서
+          OS 레벨 버퍼를 완전히 비우지 못함
+        → 유효한 명령 전송 + 직접 read drain 방식으로 대체
         """
         with self._lock:
             try:
                 ser = self._require()
                 self._rx_prefetch.clear()
-                ser.write(b'\r')         # 아무 문자 전송 → 스트림 중단
+
+                # $VER: 유효한 명령 → 장비가 현재 출력을 멈추고 응답 준비
+                # ACS-2000 매뉴얼: "Press any button to stop transmission"
+                ser.write(b'$VER\r')
                 ser.flush()
-                time.sleep(0.3)          # 장비가 스트림을 멈출 때까지 대기
-                ser.reset_input_buffer() # 스트림 잔여 데이터 제거
+
+                # 1.2초 동안 직접 read로 버퍼를 완전히 소진
+                # (reset_input_buffer 대신 직접 drain)
+                old_timeout = ser.timeout
+                try:
+                    ser.timeout = 0.05
+                    t0 = time.time()
+                    while time.time() - t0 < 1.2:
+                        chunk = ser.read(256)
+                        if not chunk:
+                            time.sleep(0.05)
+                finally:
+                    ser.timeout = old_timeout
+
                 self._rx_prefetch.clear()
             except Exception:
                 pass
+
         self._streaming = False
         self._con_interval_a = None
 

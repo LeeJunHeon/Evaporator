@@ -883,8 +883,7 @@ class ProcessWindow(QWidget):
                 connected = bool(getattr(snap, "connected", False))
 
             if not connected:
-                return _abort("PLC媛 ?곌껐?섏? ?딆븯?듬땲??
-PLC ?곌껐 ???ㅼ떆 ?쒖옉?섏꽭??")
+                return _abort("PLC가 연결되지 않았습니다.\nPLC 연결 후 다시 시작하세요.")
 
         except Exception as e:
             return _abort(f"PLC ?곌껐 ?곹깭 ?뺤씤 ?ㅽ뙣: {e!r}")
@@ -897,8 +896,7 @@ PLC ?곌껐 ???ㅼ떆 ?쒖옉?섏꽭??")
                 io_ok = bool(binder.is_ui_connected())
                 if not io_ok:
                     return _abort(
-                        "PLC가 연결 중이달니다 (I/O 안정화 대기).
-PLC 상태등이 정상으로 표시되면 다시 시작하세요."
+                        "PLC가 연결 중이달니다 (I/O 안정화 대기).\nPLC 상태등이 정상으로 표시되면 다시 시작하세요."
                     )
             except Exception:
                 pass  # 확인 불가 시 통과

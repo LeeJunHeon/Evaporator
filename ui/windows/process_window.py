@@ -779,8 +779,8 @@ class ProcessWindow(QWidget):
 
     def _bind_stm_ui(self, stm):
         """
-        ???듭떖: disconnect??'?꾩옱 self._stm_service'媛 ?꾨땲??
-                '?ㅼ젣濡?UI??connect ?섏뿀??STM ?몄뒪?댁뒪'?먯꽌留??댁빞 ?쒕떎.
+        주의: disconnect 시 '현재 self._stm_service'가 아니라
+               '실제로 UI에 connect 했던 STM 인스턴스'에서만 해야 한다.
         """
         if stm is None:
             self._unbind_stm_ui()
@@ -804,9 +804,9 @@ class ProcessWindow(QWidget):
 
     def _unbind_stm_ui(self):
         """
-        ??'?곌껐?덈뜕 ?곸씠 ?녿뒗 媛앹껜'?먯꽌 disconnect瑜??쒕룄?섎㈃
-        Failed to disconnect RuntimeWarning???щ떎.
-        ??洹몃옒?? UI???곌껐?덈뜕 stm???곕줈 湲곗뼲?대몢怨?洹?stm留?disconnect?쒕떎.
+        '연결했던 것이 아닌 객체'에서 disconnect를 시도하면
+        Failed to disconnect RuntimeWarning이 뜬다.
+        따라서 UI에 연결했던 stm으로 거슬러올라가 그 stm만 disconnect한다.
         """
         stm = self._stm_ui_stm
         if (not self._stm_ui_bound) or (stm is None):
@@ -846,8 +846,8 @@ class ProcessWindow(QWidget):
     
     def _check_plc_ready_before_start(self) -> bool:
         """
-        Start 踰꾪듉 ?뚮?????PLC ?곌껐 ?곹깭瑜?癒쇱? ?뺤씤?쒕떎.
-        PLC媛 ?딄릿 ?곹깭硫?STM ?곌껐/공정 시작?쇰줈 ?섏뼱媛吏 ?딄쾶 留됰뒗??
+        Start 버튼 클릭 전 PLC 연결 상태를 확인한다.
+        PLC가 불량 상태면 STM 연결/공정 시작으로 넘어가지 않도록 막는다.
         """
         def _abort(msg: str) -> bool:
             self._append_process_log(f"[PRECHECK][BLOCK] PLC: {msg}")
@@ -855,19 +855,19 @@ class ProcessWindow(QWidget):
             return False
 
         if self.hmi_window is None:
-            return _abort("HMI window媛 ?놁뒿?덈떎. PLC ?곹깭瑜??뺤씤?????놁뒿?덈떎.")
+            return _abort("HMI window가 없습니다. PLC 상태를 확인할 수 없습니다.")
 
         binder = getattr(self.hmi_window, "_plc_binder", None)
         if binder is None:
-            return _abort("plc_binder媛 ?놁뒿?덈떎. PLC ?곌껐 ?곹깭瑜??뺤씤?????놁뒿?덈떎.")
+            return _abort("plc_binder가 없습니다. PLC 연결 상태를 확인할 수 없습니다.")
 
         try:
             plc = binder.get_plc_service()
         except Exception as e:
-            return _abort(f"PLC ?쒕퉬??議고쉶 ?ㅽ뙣: {e!r}")
+            return _abort(f"PLC 서비스 조회 실패: {e!r}")
 
         if plc is None:
-            return _abort("PLC ?쒕퉬?ㅺ? ?놁뒿?덈떎.")
+            return _abort("PLC 서비스가 없습니다.")
 
         try:
             connected = False
@@ -886,7 +886,7 @@ class ProcessWindow(QWidget):
                 return _abort("PLC가 연결되지 않았습니다.\nPLC 연결 후 다시 시작하세요.")
 
         except Exception as e:
-            return _abort(f"PLC ?곌껐 ?곹깭 ?뺤씤 ?ㅽ뙣: {e!r}")
+            return _abort(f"PLC 연결 상태 확인 실패: {e!r}")
 
         # is_ui_connected(): 링크 연결 + 최근 I/O 정상 여부 (reconnect 중이면 False)
         # binder에서 왕인 (plc 서비스가 아닌 binder 레벨에서 I/O 건강성을 추적)
@@ -989,7 +989,7 @@ class ProcessWindow(QWidget):
     def _start_async_preflight(self, run_cfg: dict[str, Any]) -> None:
         stm = self._stm_service
         if stm is None:
-            QMessageBox.warning(self, "STM", "STM ?쒕퉬?ㅺ? 以鍮꾨릺吏 ?딆븯?듬땲??")
+            QMessageBox.warning(self, "STM", "STM 서비스가 초기화되지 않았습니다.")
             self._close_process_run_log()
             self._clear_run_power_flags()
             self._active_run_id = None
@@ -1055,7 +1055,7 @@ class ProcessWindow(QWidget):
             self._abort_start_preflight(
                 show_warning=False,
                 title="Process",
-                message="STM preflight媛 痍⑥냼?섏뿀?듬땲??",
+                message="STM preflight가 취소되었습니다.",
             )
             return
 
@@ -1063,7 +1063,7 @@ class ProcessWindow(QWidget):
             self._abort_start_preflight(
                 show_warning=True,
                 title="STM Pre-check",
-                message=str(getattr(result, "message", "STM preflight ?ㅽ뙣")),
+                message=str(getattr(result, "message", "STM preflight 실패")),
             )
             return
 
@@ -1082,7 +1082,7 @@ class ProcessWindow(QWidget):
             self._abort_start_preflight(
                 show_warning=True,
                 title="Process",
-                message="start_from_ui媛 援ы쁽?섏뼱 ?덉? ?딆뒿?덈떎.",
+                message="start_from_ui가 설정되어 있지 않습니다.",
             )
             return
 
@@ -1177,12 +1177,12 @@ class ProcessWindow(QWidget):
 
         pc = self._process_controller
         if pc is None:
-            QMessageBox.warning(self, "Process", "ProcessController媛 ?곌껐?섏? ?딆븯?듬땲??")
+            QMessageBox.warning(self, "Process", "ProcessController가 연결되지 않았습니다.")
             return
 
         try:
             if hasattr(pc, "is_running") and pc.is_running():
-                QMessageBox.information(self, "Process", "?대? 怨듭젙???ㅽ뻾 以묒엯?덈떎.")
+                QMessageBox.information(self, "Process", "이미 공정이 실행 중입니다.")
                 return
         except Exception:
             pass
@@ -1511,8 +1511,8 @@ class ProcessWindow(QWidget):
 
     def _try_update_last_power(self, st: Any) -> None:
         """
-        洹몃옒?꾩슜 power???댁젣 ADC total ?곗꽑.
-        ?꾩쭅 engine.py 媛 adc瑜?status?????ｋ뒗 ?숈븞? DAC fallback ?덉슜.
+        마지막 실제 ADC total 저장.
+        참고: engine.py 가 adc를 status에 전달하는 방식은 DAC fallback 적용.
         """
         def _set_pair(v1: Any, v2: Any) -> bool:
             graph_power, _display_adc1, _display_adc2 = self._resolve_power_feedback_for_ui(
@@ -1627,13 +1627,13 @@ class ProcessWindow(QWidget):
 
                     if not current_status.startswith("에러 발생"):
                         if rid:
-                            self._set_process_status("怨듭젙 醫낅즺", f"run_id={rid}")
+                            self._set_process_status("공정 종료", f"run_id={rid}")
                         else:
-                            self._set_process_status("怨듭젙 醫낅즺", "?뺤? ?먮뒗 鍮꾩젙??醫낅즺")
+                            self._set_process_status("공정 종료", "정지 또는 정의된 종료")
 
             except Exception as e:
                 self._append_process_log(f"[FINISHED][WARN] finalize failed: {e!r}")
-                self._set_process_status("怨듭젙 醫낅즺")
+                self._set_process_status("공정 종료")
 
         finally:
             with contextlib.suppress(Exception):
@@ -1657,8 +1657,8 @@ class ProcessWindow(QWidget):
 
     def _wait_process_stop(self, timeout_s: float = 3.0) -> bool:
         """
-        closeEvent?먯꽌 stop ?붿껌 ??怨듭젙 worker媛 ?ㅼ젣濡?硫덉톬?붿?
-        吏㏐쾶 湲곕떎由곕떎.
+        closeEvent에서 stop 요청 후 공정 worker가 실제로 멈출 때까지
+        기다린다.
         """
         pc = self._process_controller
         if pc is None:
@@ -1686,11 +1686,11 @@ class ProcessWindow(QWidget):
     
     def _estimate_stop_wait_timeout_s(self) -> float:
         """
-        closeEvent?먯꽌 stop ?붿껌 ???쇰쭏??湲곕떎由댁? 怨꾩궛.
-        engine shutdown ramp 湲곗?:
-        - 1珥덈쭏??100 媛먯냼
-        - max(dac1, dac2) 湲곗??쇰줈 ?湲곗떆媛?異붿젙
-        - ?ъ쑀 踰꾪띁 異붽?
+        closeEvent에서 stop 요청 후 기다릴 시간을 계산.
+        engine shutdown ramp 소요시간:
+        - 1초당 100 감소
+        - max(dac1, dac2) 기준으로 예상 시간 계산
+        - 여유 시간 추가
         """
         dac1 = 0.0
         dac2 = 0.0
@@ -1729,8 +1729,8 @@ class ProcessWindow(QWidget):
                 QMessageBox.warning(
                     self,
                     "Process",
-                    "STM 以鍮??묒뾽???꾩쭅 醫낅즺?섏? ?딆븯?듬땲??\n"
-                    "?좎떆 ???ㅼ떆 ?レ븘二쇱꽭??"
+                    "STM 점검 작업이 완료되지 않았습니다.\n"
+                    "다시 시도해 주세요."
                 )
                 self._close_stop_guard = False
                 event.ignore()
@@ -1754,8 +1754,8 @@ class ProcessWindow(QWidget):
             QMessageBox.warning(
                 self,
                 "Process",
-                "怨듭젙 ?뺤? ?꾨즺瑜??꾩쭅 ?뺤씤?섏? 紐삵뻽?듬땲??\n"
-                "DAC ramp-down 醫낅즺 ???ㅼ떆 ?レ븘二쇱꽭??"
+                "공정 안전 종료를 확인하지 못했습니다.\n"
+                "DAC ramp-down 완료 후 다시 시도해 주세요."
             )
             self._close_stop_guard = False
             event.ignore()
@@ -2178,7 +2178,7 @@ class ProcessWindow(QWidget):
             self._rt_timer.stop()
 
     def _tick_rt_ui(self) -> None:
-        """1珥덈쭏??lineedit + 洹몃옒??媛깆떊"""
+        """1초마다 lineedit + 그래프 갱신"""
         rate = self._to_float_or_none(self._last_rate)
 
 
@@ -2226,12 +2226,12 @@ class ProcessWindow(QWidget):
         adc2: Optional[float],
     ) -> tuple[Optional[float], Optional[float], Optional[float]]:
         """
-        諛섑솚媛?
+        반환값:
             graph_power, display_adc1, display_adc2
         """
         use1, use2 = self._selected_power_flags()
 
-        # ?꾩옱 ?섎뱶?⑥뼱 ?꾩떆 ?고쉶:
+        # 현재 선택된 전원 표시 조회:
 
         if use1 and not use2 and self._power1_feedback_uses_adc2:
             fb = self._to_float_or_none(adc2)
@@ -2246,7 +2246,7 @@ class ProcessWindow(QWidget):
 
     @staticmethod
     def _clamp_nonneg(v: Optional[float]) -> Optional[float]:
-        """?뚯닔??0?쇰줈 ?대옩?? (None? 洹몃?濡?"""
+        """음수를 0으로 클램핑. (None은 그대로)"""
         if v is None:
             return None
         try:
@@ -2265,7 +2265,7 @@ class ProcessWindow(QWidget):
             return None
 
     def _is_main_deposition(self) -> bool:
-        """硫붿씤 怨듭젙(硫붿씤 ?뷀꽣 OPEN)???뚮쭔 True."""
+        """메인 공정(메인 셔터 OPEN) 중이면 True."""
         pc = self._process_controller
         try:
             if pc is None or (not pc.is_running()):
@@ -2286,8 +2286,8 @@ class ProcessWindow(QWidget):
         
     def _selected_power_flags(self) -> tuple[bool, bool]:
         """
-        怨듭젙/preflight 以묒뿉???쒖옉 ?쒖젏??latch??power ?좏깮 ?곹깭瑜??ъ슜?쒕떎.
-        idle ?곹깭?먯꽌留??꾩옱 UI 泥댄겕諛뺤뒪 媛믪쓣 ?쎈뒗??
+        공정/preflight 이전에 시작 시점에 latch된 power 선택 상태를 사용한다.
+        idle 상태에서만 현재 UI 체크박스 값을 읽는다.
         """
         if self._run_use_power1 is not None and self._run_use_power2 is not None:
             return bool(self._run_use_power1), bool(self._run_use_power2)
@@ -2306,9 +2306,9 @@ class ProcessWindow(QWidget):
 
     def _sum_selected_pair(self, p1: Optional[float], p2: Optional[float]) -> Optional[float]:
         """
-        ?좏깮??power 湲곗??쇰줈 ?⑹궛.
-        - 1媛??좏깮: ?대떦 梨꾨꼸 媛?
-        - 2媛??좏깮: ?⑷퀎
+        선택된 power 기준으로 계산.
+        - 1개 선택: 해당 채널 값
+        - 2개 선택: 합산
         """
         use1, use2 = self._selected_power_flags()
 
@@ -2326,7 +2326,7 @@ class ProcessWindow(QWidget):
 
     def _read_plc_power_dac_pair(self) -> tuple[Optional[float], Optional[float]]:
         """
-        PLC snapshot?먯꽌 DAC command 2梨꾨꼸??媛곴컖 ?쎈뒗??
+        PLC snapshot에서 DAC command 2채널 값을 읽는다.
         """
         if self.hmi_window is None:
             return None, None
@@ -2355,8 +2355,8 @@ class ProcessWindow(QWidget):
 
     def _update_dac_power_ui(self, p1: Optional[float], p2: Optional[float]) -> None:
         """
-        DAC ?쒖떆移?currentDac1Edit/currentDac2Edit)??媛?異쒕젰.
-        怨듭젙/preflight 以묒뿉???꾩옱 泥댄겕諛뺤뒪 ?곹깭媛 ?꾨땲??run ?쒖옉 ?쒖젏 latch 湲곗??쇰줈 ?쒖떆?쒕떎.
+        DAC 표시 위젯(currentDac1Edit/currentDac2Edit)에 값 업데이트.
+        공정/preflight 이전에 현재 체크박스 상태가 아니라 run 시작 시점 latch 기준으로 표시한다.
         """
         use1, use2 = self._selected_power_flags()
 
@@ -2380,8 +2380,8 @@ class ProcessWindow(QWidget):
         
     def _convert_power_read_to_amp(self, raw: Optional[float]) -> Optional[float]:
         """
-        plc_service.py?먯꽌 ?대? sanitize + scale ??媛믪쓣 洹몃?濡??ъ슜?쒕떎.
-        ??
+        plc_service.py에서 이미 sanitize + scale 된 값을 그대로 사용한다.
+        예:
             0.0
             100.0
             253.4
@@ -2426,8 +2426,8 @@ class ProcessWindow(QWidget):
 
     def _update_actual_power_ui(self, p1: Optional[float], p2: Optional[float]) -> None:
         """
-        湲곗〈 actualPower1/2 ??ADC ?쒖떆移몄쑝濡??ъ슜.
-        怨듭젙/preflight 以묒뿉???꾩옱 泥댄겕諛뺤뒪 ?곹깭媛 ?꾨땲??run ?쒖옉 ?쒖젏 latch 湲곗??쇰줈 ?쒖떆?쒕떎.
+        기존 actualPower1/2 를 ADC 표시 위젯으로 사용.
+        공정/preflight 이전에 현재 체크박스 상태가 아니라 run 시작 시점 latch 기준으로 표시한다.
         """
         use1, use2 = self._selected_power_flags()
 
@@ -2450,7 +2450,7 @@ class ProcessWindow(QWidget):
             pass
 
     def _reset_process_ui(self, *, reset_monitor: bool = True) -> None:
-        """怨듭젙 醫낅즺 ?? ?낅젰媛?臾쇱쭏 ?좏깮/洹몃옒???쒖떆媛?珥덇린??"""
+        """공정 종료 후 입력칸 초기화/그래프 표시 초기화"""
         for wname in ("processNameEdit", "deprateEdit", "deprateEdit2", "thicknessEdit", "delayEdit"):
             w = getattr(self.ui, wname, None)
             if w is not None and hasattr(w, "setText"):
@@ -2704,9 +2704,9 @@ class ProcessWindow(QWidget):
 
     def _emergency_safe_shutdown_plc_best_effort(self) -> None:
         """
-        鍮꾩긽 fallback ?꾩슜 PLC 醫낅즺.
-        ?뺤긽 Stop/Abort/Error 醫낅즺??engine.py ??safety shutdown 寃쎈줈媛 ?대떦?쒕떎.
-        ???⑥닔??controller/worker stop ?붿껌??遺덇??ν븷 ?뚮쭔 ?ъ슜?쒕떎.
+        비상 fallback 용 PLC 종료.
+        정상 Stop/Abort/Error 종료는 engine.py 의 safety shutdown 경로가 담당한다.
+        이 함수는 controller/worker stop 요청이 실패할 경우에만 사용한다.
         """
         if self.hmi_window is None:
             return

@@ -247,21 +247,13 @@ class ProcessRecipeDialog(QDialog):
         body_root.addStretch(1)
 
         command_row = QHBoxLayout()
-        self.historyButton = QPushButton("로그 스캔", self)
-        self.historyButton.setToolTip(
-            "NAS에 저장된 공정 로그를 읽어 추천 데이터베이스를 갱신합니다.\n"
-            "처음 사용하거나 새 로그가 쌓였을 때 실행하세요."
-        )
-        self.historyButton.clicked.connect(self._on_history_clicked)
-        self.hintLabel = QLabel("처음 사용 시:  로그 스캔 → 이전 설정 불러오기 순으로 진행하세요", self)
+        self.hintLabel = QLabel("같은 소재의 이전 성공 공정 설정을 불러옵니다.", self)
         self.hintLabel.setStyleSheet("font-size: 10px; color: #888888;")
-        self.recommendButton = QPushButton("이전 설정 불러오기", self)
+        self.recommendButton = QPushButton("이전 공정 불러오기", self)
         self.recommendButton.setToolTip(
-            "같은 소재의 이전 성공 공정 설정을 불러옵니다.\n"
-            "로그 스캔을 먼저 실행해야 데이터가 나타납니다."
+            "로그를 자동으로 스캔한 뒤, 같은 소재의 이전 성공 공정 설정을 불러옵니다."
         )
         self.recommendButton.clicked.connect(self._on_recommend_clicked)
-        command_row.addWidget(self.historyButton)
         command_row.addWidget(self.hintLabel)
         command_row.addStretch(1)
         command_row.addWidget(self.recommendButton)
@@ -467,6 +459,15 @@ class ProcessRecipeDialog(QDialog):
         if not callable(self._recommend_callback):
             QMessageBox.information(self, "Recommendation", "Recommendation is not available.")
             return
+
+        # 1) 먼저 로그 스캔 (history_callback이 있으면)
+        if self._history_callback is not None:
+            try:
+                self._history_callback(self)
+            except Exception:
+                pass
+
+        # 2) 그 다음 이전 설정 불러오기
         payload = self._recommend_callback(self.get_config(), self)
         if not payload:
             return
@@ -478,12 +479,6 @@ class ProcessRecipeDialog(QDialog):
             self.infoLabel.setStyleSheet("color: #1a7a1a; font-weight: bold;")
             self.hintLabel.setVisible(False)
         self._last_recommendation = dict(payload.get("recommendation") or {})
-
-    def _on_history_clicked(self) -> None:
-        if not callable(self._history_callback):
-            QMessageBox.information(self, "History Rebuild", "History rebuild is not available.")
-            return
-        self._history_callback(self)
 
     def accept(self) -> None:
         cfg = self.get_config()

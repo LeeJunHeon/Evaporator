@@ -111,7 +111,7 @@ def main():
             ini_path=ini_path,
             poll_s=1.0,
             reconnect_interval_s=1.0,
-            use_stream=False,
+            use_stream=True,
             stream_interval_a=1,
             channel=1,
         )

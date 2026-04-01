@@ -1151,7 +1151,13 @@ class ProcessController(QObject):
         except Exception:
             return
 
-        msg = self._strip_device_prefix(d.get("msg", ""), "ACS")
+        # acs_service에서 msg=""로 suppression한 경우 → fallback 없이 바로 return
+        # (정상 polling trace는 [POLL] 통합 로그로 대체됨)
+        raw_msg = d.get("msg", None)
+        if raw_msg is not None and str(raw_msg).strip() == "":
+            return
+
+        msg = self._strip_device_prefix(raw_msg or "", "ACS")
         if not msg:
             msg = self._format_acs_trace_message(d)
         if not msg:

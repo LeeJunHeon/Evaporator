@@ -239,7 +239,20 @@ def main():
 
         # run 파일 open/close는 ProcessWindow가 담당한다.
 
-        # 2) 외부 장비 서비스 stop
+        # 2-a) ACS 스트림 먼저 종료 (장비에 명시적으로 CON 스트림 종료 명령 전달)
+        # → 다음 실행 시 버퍼에 오래된 스트림 데이터가 없도록 보장
+        try:
+            _acs = acs_service
+            if _acs is not None:
+                worker = getattr(_acs, "_worker", None)
+                if worker is not None:
+                    acs_dev = getattr(worker, "_acs", None)
+                    if acs_dev is not None and hasattr(acs_dev, "stop_stream_if_running"):
+                        acs_dev.stop_stream_if_running()
+        except Exception:
+            pass
+
+        # 2-b) 외부 장비 서비스 stop
         for svc in (
             getattr(hmi, "_stm_service", None),
             getattr(hmi, "_acs_service", None),

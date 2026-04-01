@@ -1300,14 +1300,36 @@ class ProcessEngine:
                 rate_v = rate if rate is not None else 0.0
                 thick_nm = (thickness_a / 10.0) if thickness_a is not None else None
 
+                # step.meta에서 파워 선택 정보 읽기
+                _meta = dict(step.meta or {}) if step is not None and hasattr(step, "meta") else {}
+                _use_p1 = bool(_meta.get("use_power1", False))
+                _use_p2 = bool(_meta.get("use_power2", False))
+
+                # DAC 문자열 구성
+                _dac_parts = []
+                if _use_p1 and self._last_dac_power_1 is not None:
+                    _dac_parts.append(f"DAC1={self._last_dac_power_1}")
+                if _use_p2 and self._last_dac_power_2 is not None:
+                    _dac_parts.append(f"DAC2={self._last_dac_power_2}")
+                # meta 없는 step이면 nonzero DAC fallback
+                if not _dac_parts and not (_use_p1 or _use_p2):
+                    if self._last_dac_power_1 is not None:
+                        _dac_parts.append(f"DAC1={self._last_dac_power_1}")
+                    if self._last_dac_power_2 is not None:
+                        _dac_parts.append(f"DAC2={self._last_dac_power_2}")
+
+                # ADC 문자열 (현재 배선: 항상 ADC2 피드백)
+                _adc_str = f"ADC2={adc2_v:.1f}" if adc2_v is not None else "ADC2=---"
+
+                _plc_str = (", ".join(_dac_parts) + ", " + _adc_str) if _dac_parts else _adc_str
+
                 pres_str = f"{pressure:.2e}" if pressure is not None else "---"
-                adc_str = f"ADC2={adc2_v:.1f}" if adc2_v is not None else "ADC2=---"
                 stm_str = (
                     f"rate={rate_v:.3f} Å/s, thick={thick_nm:.2f} nm"
                     if thick_nm is not None else "---"
                 )
                 self._run_line(
-                    f"[POLL] PLC: {adc_str} | ACS: {pres_str} Torr | STM: {stm_str}"
+                    f"[POLL] PLC: {_plc_str} | ACS: {pres_str} Torr | STM: {stm_str}"
                 )
         except Exception:
             pass

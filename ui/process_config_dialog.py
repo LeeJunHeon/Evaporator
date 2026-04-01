@@ -50,6 +50,11 @@ PROCESS_CONFIG_TOOLTIPS = {
         "예: 100 → 목표의 2배 이상이면 스파이크.\n"
         "예: 50 → 목표의 1.5배 이상이면 스파이크."
     ),
+    "ramp_spike_abort_sec": (
+        "Ramp-up 중 스파이크 지속 허용 시간 (초).\n"
+        "dep.rate이 스파이크 판정 기준 이상으로 이 시간을 초과하면 공정을 종료합니다.\n"
+        "예: 10 → 10초 이상 지속되면 공정 종료."
+    ),
 }
 
 
@@ -274,6 +279,7 @@ class ProcessConfigDialog(QDialog):
         self.spikeAbortRatioSpin = self._make_double_spin(1.0, 20.0, step=0.5, decimals=1)
         self.spikeGraceSSpin = self._make_double_spin(0.0, 30.0, step=0.5, decimals=1)
         self.rampSpikePctSpin = self._make_double_spin(10.0, 500.0, step=10.0, decimals=0)
+        self.rampSpikeAbortSecSpin = self._make_double_spin(1.0, 120.0, step=1.0, decimals=0)
         self._add_form_row(safety_form, "최대 ADC", self.adcMaxSpin, "adc_max")
         self._add_form_row(safety_form, "최대 DAC", self.dacMaxSpin, "dac_max")
         self._add_form_row(safety_form, "물질 부족 판정 비율", self.rateAbortRatioSpin, "rate_abort_ratio")
@@ -283,6 +289,7 @@ class ProcessConfigDialog(QDialog):
         self._add_form_row(safety_form, "스파이크 감지 배율", self.spikeAbortRatioSpin, "spike_abort_ratio")
         self._add_form_row(safety_form, "스파이크 유예 시간 (s)", self.spikeGraceSSpin, "spike_grace_s")
         self._add_form_row(safety_form, "Ramp 스파이크 필터 (%)", self.rampSpikePctSpin, "ramp_spike_pct")
+        self._add_form_row(safety_form, "Ramp 스파이크 허용 시간 (s)", self.rampSpikeAbortSecSpin, "ramp_spike_abort_sec")
         body_root.addWidget(safety_box)
         body_root.addStretch(1)
 
@@ -345,6 +352,7 @@ class ProcessConfigDialog(QDialog):
         self.spikeAbortRatioSpin.setValue(float(cfg.get("spike_abort_ratio", 3.0)))
         self.spikeGraceSSpin.setValue(float(cfg.get("spike_grace_s", 5.0)))
         self.rampSpikePctSpin.setValue(float(cfg.get("ramp_spike_pct", 100.0)))
+        self.rampSpikeAbortSecSpin.setValue(float(cfg.get("ramp_spike_abort_sec", 10.0)))
 
     def get_config(self) -> dict[str, Any]:
         cfg = dict(self._initial_config)
@@ -372,6 +380,7 @@ class ProcessConfigDialog(QDialog):
                 "spike_abort_ratio": float(self.spikeAbortRatioSpin.value()),
                 "spike_grace_s": float(self.spikeGraceSSpin.value()),
                 "ramp_spike_pct": float(self.rampSpikePctSpin.value()),
+                "ramp_spike_abort_sec": float(self.rampSpikeAbortSecSpin.value()),
             }
         )
         return self._normalize_config(cfg)

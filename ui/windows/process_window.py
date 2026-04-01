@@ -873,6 +873,7 @@ class ProcessWindow(QWidget):
             connected = False
 
 
+            # is_connected(): 링크 연결 여부
             is_connected_fn = getattr(plc, "is_connected", None)
             if callable(is_connected_fn):
                 connected = bool(is_connected_fn())
@@ -882,10 +883,25 @@ class ProcessWindow(QWidget):
                 connected = bool(getattr(snap, "connected", False))
 
             if not connected:
-                return _abort("PLC媛 ?곌껐?섏? ?딆븯?듬땲??\nPLC ?곌껐 ???ㅼ떆 ?쒖옉?섏꽭??")
+                return _abort("PLC媛 ?곌껐?섏? ?딆븯?듬땲??
+PLC ?곌껐 ???ㅼ떆 ?쒖옉?섏꽭??")
 
         except Exception as e:
             return _abort(f"PLC ?곌껐 ?곹깭 ?뺤씤 ?ㅽ뙣: {e!r}")
+
+        # is_ui_connected(): 링크 연결 + 최근 I/O 정상 여부 (reconnect 중이면 False)
+        # binder에서 왕인 (plc 서비스가 아닌 binder 레벨에서 I/O 건강성을 추적)
+        binder = getattr(self.hmi_window, "_plc_binder", None)
+        if binder is not None and hasattr(binder, "is_ui_connected"):
+            try:
+                io_ok = bool(binder.is_ui_connected())
+                if not io_ok:
+                    return _abort(
+                        "PLC가 연결 중이달니다 (I/O 안정화 대기).
+PLC 상태등이 정상으로 표시되면 다시 시작하세요."
+                    )
+            except Exception:
+                pass  # 확인 불가 시 통과
 
         self._append_process_log("[PRECHECK] PLC OK: connected")
         return True

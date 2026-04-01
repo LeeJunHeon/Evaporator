@@ -1231,7 +1231,7 @@ class ProcessEngine:
             # 메시지가 없는 tick emit이 들어와도 마지막 메시지를 유지해 UI가 빈 문자열로 덮이는 것 방지
             message = self._ui_last_message
 
-        adc1, adc2 = self._get_power_read_pair_cached()
+        adc1, adc2 = self._get_power_read_raw_pair()
 
         st = ProcessStatus(
             phase=self._phase,
@@ -1275,7 +1275,6 @@ class ProcessEngine:
 
     def _emit_telemetry(self, recipe: ProcessRecipe, step: ProcessStep) -> None:
         try:
-            adc1, adc2 = self._get_power_read_pair_cached()
             adc1_raw, adc2_raw = self._get_power_read_raw_pair()
             rate = self._get_rate()
             thickness = self._get_thickness()
@@ -1286,10 +1285,8 @@ class ProcessEngine:
                 "pressure_torr": self._get_pressure(),
                 "dac1": (self._last_dac_power_1 if self._is_plc_ready() else None),
                 "dac2": (self._last_dac_power_2 if self._is_plc_ready() else None),
-                "adc1": adc1,
-                "adc1_raw": adc1_raw,
-                "adc2": adc2,
-                "adc2_raw": adc2_raw,
+                "adc1": adc1_raw,
+                "adc2": adc2_raw,
                 "dep.rate": rate,
                 "thickness_A": thickness,
             })
@@ -1372,7 +1369,6 @@ class ProcessEngine:
             if detail:
                 line += f" | {str(detail)}"
 
-            adc1, adc2 = self._get_power_read_pair_cached()
             adc1_raw, adc2_raw = self._get_power_read_raw_pair()
 
             self.log.telemetry({
@@ -1381,10 +1377,8 @@ class ProcessEngine:
                 "pressure_torr": self._get_pressure(),
                 "dac1": (self._last_dac_power_1 if self._is_plc_ready() else None),
                 "dac2": (self._last_dac_power_2 if self._is_plc_ready() else None),
-                "adc1": adc1,
-                "adc1_raw": adc1_raw,
-                "adc2": adc2,
-                "adc2_raw": adc2_raw,
+                "adc1": adc1_raw,
+                "adc2": adc2_raw,
                 "dep.rate": self._get_rate(),
                 "thickness_A": self._get_thickness(),
             })

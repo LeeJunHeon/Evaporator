@@ -190,7 +190,7 @@ class LogWriterWorker(QThread):
 
         # ProcessLog CSV 컬럼
         # - DAC/ADC 둘 다 저장
-        # - adc1/adc2 = EMA 필터 적용 후 값, adc1_raw/adc2_raw = PLC 원본
+        # - adc1/adc2 = PLC raw 값 (EMA 필터 열 제거)
         # - 그래프는 ADC 기준이지만, 추적/디버깅을 위해 DAC도 함께 보관
         self._tele_fieldnames = [
             "time",
@@ -198,10 +198,8 @@ class LogWriterWorker(QThread):
             "pressure_torr",
             "dac1",
             "adc1",
-            "adc1_raw",
             "dac2",
             "adc2",
-            "adc2_raw",
             "dep.rate",
             "thickness_A",
             "step",
@@ -949,10 +947,8 @@ class LogWriterWorker(QThread):
         row2.setdefault("pressure_torr", "")
         row2.setdefault("dac1", "")
         row2.setdefault("adc1", "")
-        row2.setdefault("adc1_raw", "")
         row2.setdefault("dac2", "")
         row2.setdefault("adc2", "")
-        row2.setdefault("adc2_raw", "")
         row2.setdefault("dep.rate", "")
         row2.setdefault("thickness_A", "")
         row2.setdefault("step", "")

@@ -403,7 +403,10 @@ class RunSummaryService:
                 "dac2": _to_float_or_none(row.get("dac2")),
                 "adc2": _to_float_or_none(row.get("adc2")),
                 "rate": _to_float_or_none(row.get("dep.rate")),
-                "thickness": _to_float_or_none(row.get("thickness_A")),
+                "thickness": _to_float_or_none(
+                    row.get("thickness_nm") if row.get("thickness_nm") not in (None, "")
+                    else row.get("thickness_A")
+                ),
                 "step": str(row.get("step", "") or "").strip(),
                 "detail": str(row.get("detail", "") or "").strip(),
             }
@@ -549,12 +552,9 @@ class RunSummaryService:
             if "tag=EVAP_DONE_SHUTTER_CLOSE" in detail:
                 return _to_float_or_none(row.get("elapsed_sec"))
 
-            event = str(row.get("event", "") or "").upper()
-            target = str(row.get("target", "") or "").strip().upper()
-            event_value = str(row.get("event_value", "") or "").strip().lower()
-            if event == "WRITE_COIL" and target == "MAIN_SHUTTER_SW" and event_value in ("0", "false"):
-                elapsed = _to_float_or_none(row.get("elapsed_sec"))
-                return elapsed
+            # NOTE: WRITE_COIL MAIN_SHUTTER_SW=0 fallback은 의도적으로 제거.
+            # 공정 초기화 시점에도 MAIN_SHUTTER_SW=0이 발생하므로
+            # 태그 없는 WRITE_COIL 기반 fallback은 잘못된 행을 잡아버린다.
 
         return None
 

@@ -174,7 +174,8 @@ def _format_stm_io_trace(d: dict) -> str:
 
     if detail:
         return f"[STM] TX={tx!r} RX={rx!r} ({detail})"
-    return f"[STM] TX={tx!r} RX={rx!r}"
+    # 일반 E/F/B polling TX/RX는 [POLL] 통합 로그로 대체되므로 suppression
+    return ""
 
 
 # ============================================================

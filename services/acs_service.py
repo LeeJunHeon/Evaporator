@@ -72,14 +72,15 @@ def _format_acs_io_trace(d: dict) -> str:
         except Exception:
             pass
 
-    # pressure 없으면 raw 출력
+    # pressure 없으면 오류만 출력, 정상 polling은 suppression
     tx = d.get("tx", "")
     rx = d.get("rx", "")
     token = d.get("token", "")
     detail = d.get("detail", "")
     if not ok:
         return f"[ACS] 통신 오류 — token={token!r} tx={tx!r} rx={rx!r} {detail}".strip()
-    return f"[ACS] token={token!r} rx={rx!r}"
+    # ok=True인 정상 polling trace는 [POLL] 통합 로그로 대체되므로 suppression
+    return ""
 
 
 # ============================================================

@@ -1118,6 +1118,8 @@ class ProcessController(QObject):
         msg = self._strip_device_prefix(d.get("msg", ""), "STM")
         if not msg:
             msg = self._format_stm_trace_message(d)
+        if not msg:
+            return
 
         self._emit_process_trace_log(
             tag="STM",
@@ -1152,6 +1154,8 @@ class ProcessController(QObject):
         msg = self._strip_device_prefix(d.get("msg", ""), "ACS")
         if not msg:
             msg = self._format_acs_trace_message(d)
+        if not msg:
+            return
 
         self._emit_process_trace_log(
             tag="ACS",

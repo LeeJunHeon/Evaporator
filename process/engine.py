@@ -1295,10 +1295,20 @@ class ProcessEngine:
             now = time.monotonic()
             if (now - self._stm_log_ts) >= 1.0:
                 self._stm_log_ts = now
-                if rate is not None and thickness_a is not None:
-                    self._run_line(
-                        f"[STM] rate={rate:.3f} Å/s | thickness={thickness_a / 10.0:.2f} nm"
-                    )
+                pressure = self._get_pressure()
+                adc1_v, adc2_v = self._get_power_read_raw_pair()
+                rate_v = rate if rate is not None else 0.0
+                thick_nm = (thickness_a / 10.0) if thickness_a is not None else None
+
+                pres_str = f"{pressure:.2e}" if pressure is not None else "---"
+                adc_str = f"ADC2={adc2_v:.1f}" if adc2_v is not None else "ADC2=---"
+                stm_str = (
+                    f"rate={rate_v:.3f} Å/s, thick={thick_nm:.2f} nm"
+                    if thick_nm is not None else "---"
+                )
+                self._run_line(
+                    f"[POLL] PLC: {adc_str} | ACS: {pres_str} Torr | STM: {stm_str}"
+                )
         except Exception:
             pass
 

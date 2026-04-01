@@ -762,21 +762,8 @@ class PlcServiceWorker(QThread):
         out["POWER_READ_2"] = adc2_scaled
         out["POWER_READ_2_RAW"] = adc2_scaled
 
-        # ADC readback trace — 공정 실행 중(_process_logging=True)에만 emit (CH1+CH2 1줄로 합산)
-        if self._process_logging:
-            try:
-                self.sig_cmd_trace.emit({
-                    "ok": True,
-                    "event": "ADC_READBACK",
-                    "target": "ADC",
-                    "value": adc1_scaled,
-                    "tag": "POLL",
-                    "detail": f"CH1={adc1_scaled:.1f}, CH2={adc2_scaled:.1f}",
-                    "msg": f"[PLC] ADC 1 = {adc1_scaled:.1f}, ADC 2 = {adc2_scaled:.1f}",
-                    "result": adc1_scaled,
-                })
-            except Exception:
-                pass
+        # ADC_READBACK trace는 [POLL] 통합 로그로 대체되므로 suppression
+        # (engine.py _emit_telemetry에서 1초 1줄로 통합 출력)
 
         return out
     

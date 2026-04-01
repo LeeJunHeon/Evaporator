@@ -247,8 +247,8 @@ def main():
                 worker = getattr(_acs, "_worker", None)
                 if worker is not None:
                     acs_dev = getattr(worker, "_acs", None)
-                    if acs_dev is not None and hasattr(acs_dev, "stop_stream_if_running"):
-                        acs_dev.stop_stream_if_running()
+                    if acs_dev is not None and hasattr(acs_dev, "stop_stream_safe"):
+                        acs_dev.stop_stream_safe()
         except Exception:
             pass
 

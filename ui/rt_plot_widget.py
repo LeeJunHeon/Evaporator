@@ -382,8 +382,8 @@ class DepositionPlotWidget(QWidget):
             ys = [v for _, v in self._power_buf]  # fallback
 
         y_max = max(ys)
-        y_upper = max(1.0, y_max * 1.10)
-        self._ax_power.setRange(0.0, y_upper)
+        y_upper = max(self._p_def_max, y_max * 1.10)
+        self._ax_power.setRange(self._p_def_min, y_upper)
 
         self._apply_power_label_format(y_upper)
 

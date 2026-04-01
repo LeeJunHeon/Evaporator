@@ -218,56 +218,98 @@ class HmiWindow(QWidget):
         self._refresh_process_window_runtime_refs()
 
     def open_config_dialog(self) -> None:
-        """Config 팝업 → Save(=Accepted)면 즉시 장비 재연결 (기존 유지)"""
+        """Config 팝업 → Save(=Accepted)면 변경된 장비만 재연결"""
+        def _read_section(section: str) -> dict:
+            try:
+                from configparser import ConfigParser
+                cfg = ConfigParser(interpolation=None)
+                cfg.read(self._ini_path, encoding="utf-8")
+                if cfg.has_section(section):
+                    return dict(cfg[section])
+            except Exception:
+                pass
+            return {}
+
+        # dlg.exec() 전에 스냅샷 (저장 전 값)
+        before = {
+            "plc": _read_section("plc"),
+            "acs2000": _read_section("acs2000"),
+            "turbovac": _read_section("turbovac"),
+        }
+
         dlg = ConfigDialog(ini_path=self._ini_path, parent=self)
         ret = dlg.exec()
         if ret == QDialog.Accepted:
-            self._apply_config_and_reconnect()
+            self._apply_config_and_reconnect(before_snapshot=before)
 
-    def _apply_config_and_reconnect(self) -> None:
+    def _apply_config_and_reconnect(self, *, before_snapshot: dict | None = None) -> None:
+        def _read_section(section: str) -> dict:
+            try:
+                from configparser import ConfigParser
+                cfg = ConfigParser(interpolation=None)
+                cfg.read(self._ini_path, encoding="utf-8")
+                if cfg.has_section(section):
+                    return dict(cfg[section])
+            except Exception:
+                pass
+            return {}
+
+        before = before_snapshot or {}
         errors: list[str] = []
+        reloaded: list[str] = []
 
-        # ✅ 1) PLC 즉시 재연결
-        try:
-            if self._plc_binder:
-                new_plc_settings = load_plc_settings(self._ini_path)
-                self._plc_binder.reload_settings(new_plc_settings)
-        except Exception as e:
-            errors.append(f"PLC reconnect failed: {e}")
+        plc_changed = _read_section("plc") != before.get("plc", {})
+        acs_changed = _read_section("acs2000") != before.get("acs2000", {})
+        tmp_changed = _read_section("turbovac") != before.get("turbovac", {})
 
-        # ✅ 2) ACS는 "항상 켜져있는 장비"이므로 config 저장 시 즉시 reload 적용
-        try:
-            if self._acs_service is not None:
-                # devices.ini 반영
-                if hasattr(self._acs_service, "reload_from_ini"):
-                    self._acs_service.reload_from_ini(self._ini_path)
-                # CON 모드 유지(1초)
-                if hasattr(self._acs_service, "set_stream_mode"):
-                    self._acs_service.set_stream_mode(stream=True, stream_interval_a=1)
-        except Exception as e:
-            errors.append(f"ACS reconnect failed: {e}")
+        # ✅ 1) PLC — 설정이 바뀐 경우에만 재연결
+        if plc_changed:
+            try:
+                if self._plc_binder:
+                    new_plc_settings = load_plc_settings(self._ini_path)
+                    self._plc_binder.reload_settings(new_plc_settings)
+                    reloaded.append("PLC")
+            except Exception as e:
+                errors.append(f"PLC reconnect failed: {e}")
 
-        # ✅ 3) TMP(TURBOVAC)도 config 저장 시 즉시 reload 적용
-        try:
-            if self._turbovac_service is not None:
-                if hasattr(self._turbovac_service, "reload_from_ini"):
-                    self._turbovac_service.reload_from_ini(self._ini_path)
-                elif hasattr(self._turbovac_service, "reload_config"):
-                    self._turbovac_service.reload_config()
-                else:
-                    raise RuntimeError("TurbovacService에 reload_from_ini/reload_config가 없습니다.")
-        except Exception as e:
-            errors.append(f"TMP reconnect failed: {e}")
+        # ✅ 2) ACS — 설정이 바뀐 경우에만 reload
+        if acs_changed:
+            try:
+                if self._acs_service is not None:
+                    if hasattr(self._acs_service, "reload_from_ini"):
+                        self._acs_service.reload_from_ini(self._ini_path)
+                    if hasattr(self._acs_service, "set_stream_mode"):
+                        self._acs_service.set_stream_mode(stream=True, stream_interval_a=1)
+                    reloaded.append("ACS")
+            except Exception as e:
+                errors.append(f"ACS reconnect failed: {e}")
+
+        # ✅ 3) TMP(TURBOVAC) — 설정이 바뀐 경우에만 reload
+        if tmp_changed:
+            try:
+                if self._turbovac_service is not None:
+                    if hasattr(self._turbovac_service, "reload_from_ini"):
+                        self._turbovac_service.reload_from_ini(self._ini_path)
+                    elif hasattr(self._turbovac_service, "reload_config"):
+                        self._turbovac_service.reload_config()
+                    else:
+                        raise RuntimeError("TurbovacService에 reload_from_ini/reload_config가 없습니다.")
+                    reloaded.append("TMP")
+            except Exception as e:
+                errors.append(f"TMP reconnect failed: {e}")
 
         # ✅ 4) STM은 Start에서만(F.T.M ON 후) 연결 (기존 규칙 유지)
         if errors:
             QMessageBox.warning(self, "Reconnect", "일부 장비 재연결 실패:\n" + "\n".join(errors))
         else:
-            QMessageBox.information(
-                self,
-                "Reconnect",
-                "저장 완료. (PLC/ACS/TMP 즉시 적용)\nSTM은 다음 Start에서 FTM ON 후 새로 연결됩니다.",
-            )
+            if reloaded:
+                msg = (
+                    f"저장 완료. 변경된 장비 재연결: {', '.join(reloaded)}\n"
+                    "STM은 다음 Start에서 FTM ON 후 새로 연결됩니다."
+                )
+            else:
+                msg = "저장 완료. (변경된 장비 없음 — 재연결 생략)"
+            QMessageBox.information(self, "Reconnect", msg)
 
     def _confirm_exit(self) -> bool:
         ret = QMessageBox.question(

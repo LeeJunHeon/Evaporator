@@ -1277,7 +1277,8 @@ class ProcessEngine:
         try:
             adc1_raw, adc2_raw = self._get_power_read_raw_pair()
             rate = self._get_rate()
-            thickness = self._get_thickness()
+            thickness_a = self._get_thickness()
+            thickness_nm = (thickness_a / 10.0) if thickness_a is not None else None
 
             self.log.telemetry({
                 "step": (self._ui_last_message or self._current_step_name),
@@ -1288,15 +1289,15 @@ class ProcessEngine:
                 "adc1": adc1_raw,
                 "adc2": adc2_raw,
                 "dep.rate": rate,
-                "thickness_A": thickness,
+                "thickness_nm": thickness_nm,
             })
 
             now = time.monotonic()
             if (now - self._stm_log_ts) >= 1.0:
                 self._stm_log_ts = now
-                if rate is not None and thickness is not None:
+                if rate is not None and thickness_a is not None:
                     self._run_line(
-                        f"[STM] rate={rate:.3f} Å/s | thickness={thickness:.1f} Å"
+                        f"[STM] rate={rate:.3f} Å/s | thickness={thickness_a / 10.0:.2f} nm"
                     )
         except Exception:
             pass
@@ -1370,6 +1371,8 @@ class ProcessEngine:
                 line += f" | {str(detail)}"
 
             adc1_raw, adc2_raw = self._get_power_read_raw_pair()
+            _th_a = self._get_thickness()
+            _th_nm = (_th_a / 10.0) if _th_a is not None else None
 
             self.log.telemetry({
                 "step": (self._ui_last_message or self._current_step_name),
@@ -1380,7 +1383,7 @@ class ProcessEngine:
                 "adc1": adc1_raw,
                 "adc2": adc2_raw,
                 "dep.rate": self._get_rate(),
-                "thickness_A": self._get_thickness(),
+                "thickness_nm": _th_nm,
             })
         except Exception:
             pass

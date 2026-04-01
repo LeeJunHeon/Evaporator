@@ -631,7 +631,7 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         adc_max = 200
 
     engine._run_line(
-        f"[CFG] target_rate={target_rate} Å/s | target_thickness={target_th} Å"
+        f"[CFG] target_rate={target_rate} Å/s | target_thickness={target_th/10.0:.2f} nm ({target_th:.0f} Å)"
         f" | delay={delay_min:.1f}min | adc_max={adc_max}"
     )
     rate_tol_ratio = float(proc_cfg["rate_tol_ratio"])
@@ -1226,8 +1226,8 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
 
             engine._emit_status(
                 message=(
-                    f"HOLD | remain {remain_th:.1f}Å "
-                    f"( {dep_th:.1f}/{target_th:.1f}Å ) | "
+                    f"HOLD | remain {remain_th/10.0:.2f}nm "
+                    f"( {dep_th/10.0:.2f}/{target_th/10.0:.2f}nm ) | "
                     f"rate={rt:.3f}"
                     f"{'' if filtered_rate is None else f' | filtered={filtered_rate:.3f}'} | "
                     f"ADC={adc_total:.1f} | DAC={dac}"

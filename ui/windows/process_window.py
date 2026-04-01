@@ -2202,7 +2202,8 @@ class ProcessWindow(QWidget):
             pass
 
         try:
-            self.ui.currentThicknessEdit.setText(f"{th:.1f}" if th is not None else "---")
+            th_nm = (th / 10.0) if th is not None else None
+            self.ui.currentThicknessEdit.setText(f"{th_nm:.2f}" if th_nm is not None else "---")
         except Exception:
             pass
 
@@ -2579,7 +2580,9 @@ class ProcessWindow(QWidget):
             target_rate = rate1
 
 
-        target_thk = self._read_float("thicknessEdit")
+        target_thk_nm = self._read_float("thicknessEdit")
+        # UI 입력은 nm 단위 → 내부는 Å 단위로 변환
+        target_thk = (target_thk_nm * 10.0) if target_thk_nm is not None else None
         delay_min = self._read_float("delayEdit")
         if require_thickness:
             if target_thk is None:

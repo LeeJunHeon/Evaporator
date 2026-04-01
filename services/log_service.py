@@ -201,7 +201,7 @@ class LogWriterWorker(QThread):
             "dac2",
             "adc2",
             "dep.rate",
-            "thickness_A",
+            "thickness_nm",
             "step",
             "detail",
         ]
@@ -950,7 +950,7 @@ class LogWriterWorker(QThread):
         row2.setdefault("dac2", "")
         row2.setdefault("adc2", "")
         row2.setdefault("dep.rate", "")
-        row2.setdefault("thickness_A", "")
+        row2.setdefault("thickness_nm", "")
         row2.setdefault("step", "")
         row2.setdefault("detail", "")
 

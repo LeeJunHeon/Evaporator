@@ -1089,7 +1089,7 @@ class Ui_Form(object):
         self.materialLabel.setText(QCoreApplication.translate("Form", "Material Name", None))
         self.stopProcess.setText(QCoreApplication.translate("Form", "Stop", None))
         self.startProcess.setText(QCoreApplication.translate("Form", "Start", None))
-        self.thicknessLabel.setText(QCoreApplication.translate("Form", "Thickness (Å)", None))
+        self.thicknessLabel.setText(QCoreApplication.translate("Form", "Thickness (nm)", None))
         self.delayLabel.setText(QCoreApplication.translate("Form", "Shutter Delay (min)", None))
         #self.pwoerLabel.setText(QCoreApplication.translate("Form", "Power Ramp", None))
         self.deprateLabel.setText(QCoreApplication.translate("Form", "Dep.Rate (Å/s)", None))
@@ -1122,7 +1122,7 @@ class Ui_Form(object):
         self.currentRateLabel.setText(QCoreApplication.translate("Form", "Cur Rate (Å/s)", None))
 
         # Thick는 전체 1칸
-        self.currentThicknessLabel.setText(QCoreApplication.translate("Form", "Cur Thick (Å)", None))
+        self.currentThicknessLabel.setText(QCoreApplication.translate("Form", "Cur Thick (nm)", None))
 
         self.currentRateEdit.setText(QCoreApplication.translate("Form", "---", None))
         self.currentThicknessEdit.setText(QCoreApplication.translate("Form", "---", None))

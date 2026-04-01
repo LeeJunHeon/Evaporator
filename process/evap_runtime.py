@@ -497,6 +497,10 @@ def _load_runtime_process_config(meta: dict, *, step_name: str) -> dict:
     if spike_grace_s < 0.0:
         spike_grace_s = 0.0
 
+    ramp_spike_pct = float(process_config.get("ramp_spike_pct", 100.0) or 100.0)
+    if ramp_spike_pct < 10.0:
+        ramp_spike_pct = 10.0
+
     hold_max_dac_delta = int(process_config.get("hold_max_dac_delta", fine_step_dac) or fine_step_dac)
     if hold_max_dac_delta <= 0:
         hold_max_dac_delta = max(1, fine_step_dac)
@@ -557,6 +561,7 @@ def _load_runtime_process_config(meta: dict, *, step_name: str) -> dict:
         "rate_abort_sec": rate_abort_sec,
         "spike_abort_ratio": spike_abort_ratio,
         "spike_grace_s": spike_grace_s,
+        "ramp_spike_pct": ramp_spike_pct,
         "sensor_none_abort_s": sensor_none_abort_s,
         "adc_none_abort_s": adc_none_abort_s,
         "hold_control_mode": hold_control_mode,
@@ -641,6 +646,7 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
     rate_abort_sec = float(proc_cfg["rate_abort_sec"])
     spike_abort_ratio = float(proc_cfg.get("spike_abort_ratio", 3.0) or 3.0)
     spike_grace_s = float(proc_cfg.get("spike_grace_s", 5.0) or 5.0)
+    ramp_spike_pct = float(proc_cfg.get("ramp_spike_pct", 100.0) or 100.0)
     sensor_none_abort_s = float(proc_cfg["sensor_none_abort_s"])
     adc_none_abort_s = float(proc_cfg["adc_none_abort_s"])
 
@@ -764,6 +770,15 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         stable_start_ts: Optional[float],
     ) -> tuple[bool, Optional[float]]:
         tol = abs(target_rate) * rate_tol_ratio
+
+        # Ramp-up 스파이크 필터:
+        # target_rate의 (100 + ramp_spike_pct)% 이상이면 센서 스파이크로 간주
+        # → stable 카운트를 올리지 않고 리셋
+        # 예: ramp_spike_pct=100, target=1.0 → 2.0 이상이면 스파이크
+        spike_limit = abs(target_rate) * (1.0 + ramp_spike_pct / 100.0)
+        if rt >= spike_limit:
+            return False, None  # 스파이크: stable 카운트 리셋
+
         if rt >= target_rate - tol:
             now_m = time.monotonic()
             if stable_start_ts is None:

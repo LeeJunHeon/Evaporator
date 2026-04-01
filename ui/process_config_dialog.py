@@ -43,6 +43,13 @@ PROCESS_CONFIG_TOOLTIPS = {
     "adc_none_abort_s": "ADC 신호 없음 허용 시간(초).\n이 시간 동안 ADC 값이 없으면 공정을 종료합니다.",
     "spike_abort_ratio": "STM 스파이크 감지 기준 배율.\n예: 3.0 → dep.rate가 목표의 3배 이상이면 센서 오류로 간주.",
     "spike_grace_s": "스파이크 감지 후 물질 부족 판정 유예 시간(초).\n이 시간 동안은 rate가 낮아도 공정을 종료하지 않습니다.",
+    "ramp_spike_pct": (
+        "Ramp-up 중 스파이크 필터 기준 (%).\n"
+        "dep.rate가 목표값의 (100 + 이 값)% 이상이면 센서 스파이크로 간주하여\n"
+        "stable 카운트를 올리지 않습니다.\n"
+        "예: 100 → 목표의 2배 이상이면 스파이크.\n"
+        "예: 50 → 목표의 1.5배 이상이면 스파이크."
+    ),
 }
 
 
@@ -266,6 +273,7 @@ class ProcessConfigDialog(QDialog):
         self.adcNoneAbortSpin = self._make_double_spin(0.0, 99999.0, step=1.0, decimals=1)
         self.spikeAbortRatioSpin = self._make_double_spin(1.0, 20.0, step=0.5, decimals=1)
         self.spikeGraceSSpin = self._make_double_spin(0.0, 30.0, step=0.5, decimals=1)
+        self.rampSpikePctSpin = self._make_double_spin(10.0, 500.0, step=10.0, decimals=0)
         self._add_form_row(safety_form, "최대 ADC", self.adcMaxSpin, "adc_max")
         self._add_form_row(safety_form, "최대 DAC", self.dacMaxSpin, "dac_max")
         self._add_form_row(safety_form, "물질 부족 판정 비율", self.rateAbortRatioSpin, "rate_abort_ratio")
@@ -274,6 +282,7 @@ class ProcessConfigDialog(QDialog):
         self._add_form_row(safety_form, "ADC 신호 없음 허용 시간 (s)", self.adcNoneAbortSpin, "adc_none_abort_s")
         self._add_form_row(safety_form, "스파이크 감지 배율", self.spikeAbortRatioSpin, "spike_abort_ratio")
         self._add_form_row(safety_form, "스파이크 유예 시간 (s)", self.spikeGraceSSpin, "spike_grace_s")
+        self._add_form_row(safety_form, "Ramp 스파이크 필터 (%)", self.rampSpikePctSpin, "ramp_spike_pct")
         body_root.addWidget(safety_box)
         body_root.addStretch(1)
 
@@ -335,6 +344,7 @@ class ProcessConfigDialog(QDialog):
         self.adcNoneAbortSpin.setValue(float(cfg.get("adc_none_abort_s", 5.0)))
         self.spikeAbortRatioSpin.setValue(float(cfg.get("spike_abort_ratio", 3.0)))
         self.spikeGraceSSpin.setValue(float(cfg.get("spike_grace_s", 5.0)))
+        self.rampSpikePctSpin.setValue(float(cfg.get("ramp_spike_pct", 100.0)))
 
     def get_config(self) -> dict[str, Any]:
         cfg = dict(self._initial_config)
@@ -361,6 +371,7 @@ class ProcessConfigDialog(QDialog):
                 "adc_none_abort_s": float(self.adcNoneAbortSpin.value()),
                 "spike_abort_ratio": float(self.spikeAbortRatioSpin.value()),
                 "spike_grace_s": float(self.spikeGraceSSpin.value()),
+                "ramp_spike_pct": float(self.rampSpikePctSpin.value()),
             }
         )
         return self._normalize_config(cfg)

@@ -1623,11 +1623,16 @@ class ProcessWindow(QWidget):
 
                 if ok:
                     self._append_process_log(f"[FINISHED][OK] run_id={rid}")
-                    self._set_process_status("공정 완료", f"run_id={rid}" if rid else "")
+                    _run_cfg = self._active_run_cfg or {}
+                    _mat = str(_run_cfg.get("material_name", "") or "").strip()
+                    _rate = float(_run_cfg.get("target_rate", 0.0) or 0.0)
+                    _thk_a = float(_run_cfg.get("target_thickness", 0.0) or 0.0)
+                    _thk_nm = _thk_a / 10.0
+                    _detail = f"재료: {_mat} | rate: {_rate:.1f} Å/s | 두께: {_thk_nm:.1f} nm" if _mat else ""
+                    self._set_process_status("✅ 공정 성공", _detail)
                     ls = self._log_service
                     if ls is not None and hasattr(ls, "mark_run_success"):
                         with contextlib.suppress(Exception):
-                            _run_cfg = self._active_run_cfg or {}
                             ls.mark_run_success(
                                 material_name=_run_cfg.get("material_name", ""),
                                 target_rate=float(_run_cfg.get("target_rate", 0.0) or 0.0),
@@ -1636,12 +1641,14 @@ class ProcessWindow(QWidget):
                 else:
                     self._append_process_log(f"[FINISHED][ABNORMAL] run_id={rid}")
 
-
-                    if not current_status.startswith("에러 발생"):
-                        if rid:
-                            self._set_process_status("공정 종료", f"run_id={rid}")
-                        else:
-                            self._set_process_status("공정 종료", "정지 또는 정의된 종료")
+                    _err = getattr(result, "error", None)
+                    if _err is not None:
+                        _reason = str(
+                            getattr(_err, "message", "") or getattr(_err, "where", "") or "알 수 없는 오류"
+                        )
+                        self._set_process_status("❌ 공정 실패", _reason)
+                    elif not current_status.startswith("에러 발생"):
+                        self._set_process_status("⛔ 공정 정지", "사용자 정지 요청")
 
             except Exception as e:
                 self._append_process_log(f"[FINISHED][WARN] finalize failed: {e!r}")

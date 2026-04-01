@@ -487,13 +487,13 @@ class ProcessWindow(QWidget):
             return
 
         total_h = max(520, int(panel_height or 0))
-        status_h = max(92, min(122, int(total_h * 0.13)))
+        status_h = max(108, min(140, int(total_h * 0.15)))   # 92→108, 0.13→0.15
         log_h = max(180, min(250, int(total_h * 0.26)))
         graph_h = max(220, total_h - status_h - log_h - 16)
 
         with contextlib.suppress(Exception):
             monitor.setMinimumHeight(status_h)
-            monitor.setMaximumHeight(max(status_h + 16, int(total_h * 0.19)))
+            monitor.setMaximumHeight(max(status_h + 16, int(total_h * 0.21)))  # 0.19→0.21
         with contextlib.suppress(Exception):
             graph.setMinimumHeight(graph_h)
         with contextlib.suppress(Exception):

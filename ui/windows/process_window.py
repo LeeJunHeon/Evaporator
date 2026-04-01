@@ -1720,56 +1720,14 @@ class ProcessWindow(QWidget):
         return max(3.0, min(timeout_s, 30.0))
 
     def closeEvent(self, event):
-
-        if not getattr(self, "_close_stop_guard", False):
-            self._close_stop_guard = True
-            try:
-                self._on_stop_clicked()
-            except Exception:
-                pass
-
-
-        if self._has_active_start_preflight():
-            stopped = True
-            try:
-                stopped = self._wait_start_preflight_stop(timeout_s=5.0)
-            except Exception:
-                stopped = True
-
-            if not stopped:
-                self._append_process_log("[UI][WARN] STM preflight stop wait timeout -> close canceled")
-                QMessageBox.warning(
-                    self,
-                    "Process",
-                    "STM 점검 작업이 완료되지 않았습니다.\n"
-                    "다시 시도해 주세요."
-                )
-                self._close_stop_guard = False
-                event.ignore()
-                return
-
-
-        timeout_s = 3.0
-        try:
-            timeout_s = self._estimate_stop_wait_timeout_s()
-        except Exception:
-            timeout_s = 8.0
-
-        stopped = True
-        try:
-            stopped = self._wait_process_stop(timeout_s=timeout_s)
-        except Exception:
-            stopped = True
-
-        if not stopped:
-            self._append_process_log(f"[UI][WARN] Process stop wait timeout ({timeout_s:.1f}s) -> close canceled")
-            QMessageBox.warning(
-                self,
-                "Process",
-                "공정 안전 종료를 확인하지 못했습니다.\n"
-                "DAC ramp-down 완료 후 다시 시도해 주세요."
-            )
-            self._close_stop_guard = False
+        reply = QMessageBox.question(
+            self,
+            "Process",
+            "Process 창을 닫으시겠습니까?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
             event.ignore()
             return
 

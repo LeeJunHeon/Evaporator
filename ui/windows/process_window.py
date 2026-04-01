@@ -100,11 +100,11 @@ class ProcessWindow(QWidget):
         self._material_1 = None
         self._material_2 = None
 
-        # 공정 시작 ?쒖젏 power ?좏깮 ?곹깭 latch
+        # 공정 시작 직전 power 사용 상태 latch
         self._run_use_power1: Optional[bool] = None
         self._run_use_power2: Optional[bool] = None
 
-        # ?꾩옱 ?섎뱶?⑥뼱 ?꾩떆 ?고쉶 ?뺤콉
+        # 현재 재료별 ADC 조회 캐시
 
 
         self._power2_temporarily_disabled: bool = True
@@ -138,7 +138,7 @@ class ProcessWindow(QWidget):
         self._last_power: Optional[float] = None
 
         self._plot: Optional[DepositionPlotWidget] = None
-        self._init_rt_plot()  # graphWidget ?먮━??plot ?쎌엯
+        self._init_rt_plot()  # graphWidget 초기화 및 plot 연결
 
         self._rt_timer = QTimer(self)
         self._rt_timer.setInterval(1000)
@@ -1202,7 +1202,7 @@ class ProcessWindow(QWidget):
             QMessageBox.warning(self, "Process", "Run profile is not available.")
             return
         
-        self._set_process_status("공정 시작 ?붿껌", "PLC / STM pre-check 吏꾪뻾")
+        self._set_process_status("공정 시작 중", "PLC / STM pre-check 진행")
 
         self._latch_run_power_flags(run_cfg)
         self._active_run_cfg = dict(run_cfg)
@@ -1525,7 +1525,7 @@ class ProcessWindow(QWidget):
             return True
 
         try:
-            # dict ?뺥깭
+            # dict 탐색
             if isinstance(st, dict):
                 for k in ("adc_total", "power_actual", "actual_power", "power_read", "adc"):
                     if k in st and st[k] is not None:
@@ -1905,7 +1905,7 @@ class ProcessWindow(QWidget):
                 dac_interval_sec = 30.0
 
             try:
-                hold_src = d.get("hold_sec", d.get("delay_s", 0.0))   # delay_s留??명솚 ?덉슜
+                hold_src = d.get("hold_sec", d.get("delay_s", 0.0))   # delay_s로 호환 적용
                 hold_sec = max(0.0, float(hold_src))
             except Exception:
                 hold_sec = 0.0
@@ -2136,7 +2136,7 @@ class ProcessWindow(QWidget):
         return result
 
     def _init_rt_plot(self) -> None:
-        """ui.graphWidget ?먮━??DepositionPlotWidget???쎌엯"""
+        """ui.graphWidget 초기화 및 DepositionPlotWidget에 연결"""
         host = getattr(self.ui, "graphWidget", None)
         if host is None:
             return
@@ -2195,7 +2195,7 @@ class ProcessWindow(QWidget):
         show_th = self._is_main_deposition()
         th = self._to_float_or_none(self._last_thickness) if show_th else None
 
-        # 1) rate/thickness ?쒖떆
+        # 1) rate/thickness 표시
         try:
             self.ui.currentRateEdit.setText(f"{rate:.3f}" if rate is not None else "---")
         except Exception:
@@ -2206,7 +2206,7 @@ class ProcessWindow(QWidget):
         except Exception:
             pass
 
-        # 2) DAC / actual power ?쒖떆
+        # 2) DAC / actual power 표시
         self._update_dac_power_ui(dac1, dac2)
         self._update_actual_power_ui(display_adc1, display_adc2)
 
@@ -2395,7 +2395,7 @@ class ProcessWindow(QWidget):
 
     def _read_plc_power_actual_pair(self) -> tuple[Optional[float], Optional[float]]:
         """
-        PLC snapshot?먯꽌 actual power readback 2梨꾨꼸???쎈뒗??
+        PLC snapshot에서 actual power readback 2채널을 읽는다.
         """
         if self.hmi_window is None:
             return None, None
@@ -2560,7 +2560,7 @@ class ProcessWindow(QWidget):
             target_rate = rate2
 
         else:
-            # Power1 + Power2 ?숈떆 ?좏깮
+            # Power1 + Power2 동시 사용
 
 
             if rate1 is None:

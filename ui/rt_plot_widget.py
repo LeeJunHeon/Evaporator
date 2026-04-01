@@ -178,11 +178,13 @@ class DepositionPlotWidget(QWidget):
         self._ax_rate.setLabelFormat("%.3f")
         self._ax_rate.setTitleText("Dep. Rate (Å/s)")
         self._chart.addAxis(self._ax_rate, Qt.AlignLeft)
+        self._ax_rate.setRange(0.0, 2.0)   # 초기 Y축: 0~2.0 Å/s (Qt 기본 0~1 방지)
 
         # Right Y axis (power)
         self._ax_power = QValueAxis()
         self._ax_power.setTitleText(self._power_title)
         self._chart.addAxis(self._ax_power, Qt.AlignRight)
+        self._ax_power.setRange(self._p_def_min, self._p_def_max)  # 초기 Y축: 기본 ADC 범위 (Qt 기본 0~1 방지)
 
         # Attach axes
         self._rate_series.attachAxis(self._ax_x)
@@ -394,7 +396,7 @@ class DepositionPlotWidget(QWidget):
 
         self._set_x_range(0.0, x2)
 
-        self._ax_rate.setRange(0.0, 2.5)
+        self._ax_rate.setRange(0.0, 2.0)   # dep.rate 초기 Y축: 0~2.0 Å/s
         self._ax_rate.setLabelFormat("%.1f")
 
         # MODIFIED: 고정 범위가 있으면 그것을 사용, 없으면 기본 범위

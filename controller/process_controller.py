@@ -1093,6 +1093,16 @@ class ProcessController(QObject):
         except Exception:
             return
 
+        # HOLD 구간 DAC 변경 로그는 [POLL]에 통합되어 있으므로 억제
+        # ok=True인 HOLD_CONTROL CmdWriteReg만 억제, 실패 시에는 유지
+        _tag_str = str(d.get("tag", "") or "").strip()
+        if (
+            "HOLD_CONTROL" in _tag_str
+            and str(d.get("event", "")) == "CmdWriteReg"
+            and bool(d.get("ok", True))
+        ):
+            return
+
         msg = self._strip_device_prefix(d.get("msg", ""), "PLC")
         if not msg:
             msg = self._format_plc_trace_message(d)

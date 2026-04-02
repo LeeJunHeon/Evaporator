@@ -507,6 +507,10 @@ def _load_runtime_process_config(meta: dict, *, step_name: str) -> dict:
     if ramp_spike_abort_sec < 1.0:
         ramp_spike_abort_sec = 1.0
 
+    ramp_spike_abort_ratio = float(process_config.get("ramp_spike_abort_ratio", 10.0) or 10.0)
+    if ramp_spike_abort_ratio < 1.0:
+        ramp_spike_abort_ratio = 10.0
+
     hold_max_dac_delta = int(process_config.get("hold_max_dac_delta", fine_step_dac) or fine_step_dac)
     if hold_max_dac_delta <= 0:
         hold_max_dac_delta = max(1, fine_step_dac)
@@ -582,6 +586,7 @@ def _load_runtime_process_config(meta: dict, *, step_name: str) -> dict:
         "spike_grace_s": spike_grace_s,
         "ramp_spike_pct": ramp_spike_pct,
         "ramp_spike_abort_sec": ramp_spike_abort_sec,
+        "ramp_spike_abort_ratio": ramp_spike_abort_ratio,
         "sensor_none_abort_s": sensor_none_abort_s,
         "adc_none_abort_s": adc_none_abort_s,
         "hold_control_mode": hold_control_mode,
@@ -672,6 +677,7 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
     spike_grace_s = float(proc_cfg.get("spike_grace_s", 5.0) or 5.0)
     ramp_spike_pct = float(proc_cfg.get("ramp_spike_pct", 100.0) or 100.0)
     ramp_spike_abort_sec = float(proc_cfg.get("ramp_spike_abort_sec", 10.0) or 10.0)
+    ramp_spike_abort_ratio = float(proc_cfg.get("ramp_spike_abort_ratio", 10.0) or 10.0)
     sensor_none_abort_s = float(proc_cfg["sensor_none_abort_s"])
     adc_none_abort_s = float(proc_cfg["adc_none_abort_s"])
     pre_hold_entry_ratio = float(proc_cfg.get("pre_hold_entry_ratio", 2.0) or 2.0)
@@ -953,25 +959,12 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
                     )
                     break
 
-                # 스파이크 지속 시간 추적
-                spike_limit_check = abs(target_rate) * (1.0 + ramp_spike_pct / 100.0)
-                if rt >= spike_limit_check:
-                    if spike_over_limit_start_ts is None:
-                        spike_over_limit_start_ts = time.monotonic()
-                    elif (time.monotonic() - spike_over_limit_start_ts) >= ramp_spike_abort_sec:
-                        _raise_engine_failed(
-                            step.name,
-                            f"EVAP: Ramp-up 중 dep.rate 과도 지속 abort "
-                            f"(rate={rt:.3f} >= {spike_limit_check:.3f} Å/s, "
-                            f"{ramp_spike_abort_sec:.1f}초 이상 지속)"
-                        )
-                else:
-                    spike_over_limit_start_ts = None  # 정상 범위 복귀 시 타이머 리셋
-
-                # Pre-Hold 진입 체크: rate가 target * entry_ratio 이상 지속 시 Pre-Hold 모드
+                # [1] Pre-Hold 먼저 체크 — Pre-Hold가 처리할 구간인지 확인
+                _pre_hold_in_range = False
                 if pre_hold_timeout_sec > 0:
                     _ph_limit = target_rate * pre_hold_entry_ratio
                     if rt >= _ph_limit:
+                        _pre_hold_in_range = True
                         if pre_hold_over_start_ts is None:
                             pre_hold_over_start_ts = time.monotonic()
                         elif (time.monotonic() - pre_hold_over_start_ts) >= pre_hold_entry_sec:
@@ -987,6 +980,24 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
                             break
                     else:
                         pre_hold_over_start_ts = None
+
+                # [2] spike_abort 체크 — Pre-Hold 구간이면 타이머 리셋 (Pre-Hold가 처리 중)
+                spike_limit_check = abs(target_rate) * ramp_spike_abort_ratio
+                if _pre_hold_in_range:
+                    # Pre-Hold가 이미 감시 중 → spike_abort 타이머 리셋
+                    spike_over_limit_start_ts = None
+                elif rt >= spike_limit_check:
+                    if spike_over_limit_start_ts is None:
+                        spike_over_limit_start_ts = time.monotonic()
+                    elif (time.monotonic() - spike_over_limit_start_ts) >= ramp_spike_abort_sec:
+                        _raise_engine_failed(
+                            step.name,
+                            f"EVAP: Ramp-up 중 dep.rate 과도 지속 abort "
+                            f"(rate={rt:.3f} >= {spike_limit_check:.3f} Å/s, "
+                            f"{ramp_spike_abort_sec:.1f}초 이상 지속)"
+                        )
+                else:
+                    spike_over_limit_start_ts = None
 
                 adc_ok, adc_reached_start_ts = _update_adc_reached_state(
                     adc_total,

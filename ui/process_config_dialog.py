@@ -55,6 +55,12 @@ PROCESS_CONFIG_TOOLTIPS = {
         "dep.rate이 스파이크 판정 기준 이상으로 이 시간을 초과하면 공정을 종료합니다.\n"
         "예: 10 → 10초 이상 지속되면 공정 종료."
     ),
+    "ramp_spike_abort_ratio": (
+        "Ramp-up 중 abort 기준 배율 (target 대비).\n"
+        "dep.rate이 목표값의 이 배수 이상으로 ramp_spike_abort_sec초 지속되면 공정을 종료합니다.\n"
+        "예: 10.0 → 목표 1.0 Å/s 기준, rate >= 10.0 Å/s가 지속되면 abort.\n"
+        "Pre-Hold가 활성화된 경우 이 조건에 도달하기 전에 Pre-Hold가 먼저 발동됩니다."
+    ),
     "pre_hold_entry_ratio": (
         "Pre-Hold 진입 배율 (target 대비).\n"
         "Ramp 중 dep.rate이 목표 rate의 이 배수 이상으로 진입 지속 시간만큼 지속되면\n"
@@ -137,6 +143,7 @@ class ProcessConfigDialog(QDialog):
             "adc_none_abort_s": 5.0,
             "spike_abort_ratio": 3.0,
             "spike_grace_s": 5.0,
+            "ramp_spike_abort_ratio": 10.0,
             "pre_hold_entry_ratio": 2.0,
             "pre_hold_entry_sec": 5.0,
             "pre_hold_ready_ratio": 0.3,
@@ -237,6 +244,7 @@ class ProcessConfigDialog(QDialog):
             "adc_none_abort_s": _as_float("adc_none_abort_s", 5.0, 0.0),
             "spike_abort_ratio": _as_float("spike_abort_ratio", 3.0, 1.0),
             "spike_grace_s": _as_float("spike_grace_s", 5.0, 0.0),
+            "ramp_spike_abort_ratio": _as_float("ramp_spike_abort_ratio", 10.0, 1.0),
             "pre_hold_entry_ratio": _as_float("pre_hold_entry_ratio", 2.0, 1.0),
             "pre_hold_entry_sec": _as_float("pre_hold_entry_sec", 5.0, 0.0),
             "pre_hold_ready_ratio": _as_float("pre_hold_ready_ratio", 0.3, 0.01, 1.0),
@@ -310,6 +318,7 @@ class ProcessConfigDialog(QDialog):
         self.spikeGraceSSpin = self._make_double_spin(0.0, 30.0, step=0.5, decimals=1)
         self.rampSpikePctSpin = self._make_double_spin(10.0, 500.0, step=10.0, decimals=0)
         self.rampSpikeAbortSecSpin = self._make_double_spin(1.0, 120.0, step=1.0, decimals=0)
+        self.rampSpikeAbortRatioSpin = self._make_double_spin(1.0, 100.0, step=0.5, decimals=1)
         self._add_form_row(safety_form, "최대 ADC", self.adcMaxSpin, "adc_max")
         self._add_form_row(safety_form, "최대 DAC", self.dacMaxSpin, "dac_max")
         self._add_form_row(safety_form, "물질 부족 판정 비율", self.rateAbortRatioSpin, "rate_abort_ratio")
@@ -320,6 +329,7 @@ class ProcessConfigDialog(QDialog):
         self._add_form_row(safety_form, "스파이크 유예 시간 (s)", self.spikeGraceSSpin, "spike_grace_s")
         self._add_form_row(safety_form, "Ramp 스파이크 필터 (%)", self.rampSpikePctSpin, "ramp_spike_pct")
         self._add_form_row(safety_form, "Ramp 스파이크 허용 시간 (s)", self.rampSpikeAbortSecSpin, "ramp_spike_abort_sec")
+        self._add_form_row(safety_form, "Ramp abort 기준 배율 (target 대비)", self.rampSpikeAbortRatioSpin, "ramp_spike_abort_ratio")
         body_root.addWidget(safety_box)
 
         prehold_box = QGroupBox("Pre-Hold 대기")
@@ -396,6 +406,7 @@ class ProcessConfigDialog(QDialog):
         self.spikeGraceSSpin.setValue(float(cfg.get("spike_grace_s", 5.0)))
         self.rampSpikePctSpin.setValue(float(cfg.get("ramp_spike_pct", 100.0)))
         self.rampSpikeAbortSecSpin.setValue(float(cfg.get("ramp_spike_abort_sec", 10.0)))
+        self.rampSpikeAbortRatioSpin.setValue(float(cfg.get("ramp_spike_abort_ratio", 10.0)))
         self.preHoldEntryRatioSpin.setValue(float(cfg.get("pre_hold_entry_ratio", 2.0)))
         self.preHoldEntrySecSpin.setValue(float(cfg.get("pre_hold_entry_sec", 5.0)))
         self.preHoldReadyRatioSpin.setValue(float(cfg.get("pre_hold_ready_ratio", 0.3)))
@@ -428,6 +439,7 @@ class ProcessConfigDialog(QDialog):
                 "spike_grace_s": float(self.spikeGraceSSpin.value()),
                 "ramp_spike_pct": float(self.rampSpikePctSpin.value()),
                 "ramp_spike_abort_sec": float(self.rampSpikeAbortSecSpin.value()),
+                "ramp_spike_abort_ratio": float(self.rampSpikeAbortRatioSpin.value()),
                 "pre_hold_entry_ratio": float(self.preHoldEntryRatioSpin.value()),
                 "pre_hold_entry_sec": float(self.preHoldEntrySecSpin.value()),
                 "pre_hold_ready_ratio": float(self.preHoldReadyRatioSpin.value()),

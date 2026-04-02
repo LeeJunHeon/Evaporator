@@ -117,6 +117,7 @@ class _CmdBase:
     tag: str = ""
     reply: Any = None
     retries_left: int = 0   # ✅ 디바이스(plc.py)의 io_policy에 맡김 (서비스 기본 재시도는 끔)
+    silent: bool = False    # True이면 성공 sig_cmd_trace를 발행하지 않음 (폴링/HOLD 억제용)
 
 
 @dataclass
@@ -538,20 +539,22 @@ class PlcServiceWorker(QThread):
                     else:
                         detail = f"pulse_ms={int(cmd.pulse_ms)}"
 
-                trace_d = {
-                    "ok": True,
-                    "event": type(cmd).__name__,
-                    "target": target,
-                    "value": value,
-                    "tag": getattr(cmd, "tag", ""),
-                    "detail": detail,
-                    "result": result,
-                }
-                try:
-                    trace_d["msg"] = _format_plc_cmd_trace(trace_d)
-                except Exception:
-                    pass
-                self.sig_cmd_trace.emit(trace_d)
+                # silent=True이면 성공 trace 발행 생략 (HOLD/Pre-Hold DAC 등 폴링성 명령 억제)
+                if not getattr(cmd, "silent", False):
+                    trace_d = {
+                        "ok": True,
+                        "event": type(cmd).__name__,
+                        "target": target,
+                        "value": value,
+                        "tag": getattr(cmd, "tag", ""),
+                        "detail": detail,
+                        "result": result,
+                    }
+                    try:
+                        trace_d["msg"] = _format_plc_cmd_trace(trace_d)
+                    except Exception:
+                        pass
+                    self.sig_cmd_trace.emit(trace_d)
             except Exception:
                 pass
 
@@ -922,9 +925,9 @@ class PLCService(QObject):
         self._worker.enqueue(CmdWriteCoil(coil_name=str(coil_name), on=bool(on), momentary=bool(momentary), pulse_ms=pulse_ms, tag=tag, reply=fut))
         return fut
 
-    def submit_write_reg(self, reg_name: str, value: int, *, tag: str = ""):
+    def submit_write_reg(self, reg_name: str, value: int, *, tag: str = "", silent: bool = False):
         fut = concurrent.futures.Future()
-        self._worker.enqueue(CmdWriteReg(reg_name=str(reg_name), value=int(value), tag=tag, reply=fut))
+        self._worker.enqueue(CmdWriteReg(reg_name=str(reg_name), value=int(value), tag=tag, reply=fut, silent=silent))
         return fut
 
     def submit_set_dac_current(self, ch: int, ma: float, *, tag: str = ""):

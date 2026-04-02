@@ -731,14 +731,15 @@ class ProcessEngine:
         self._wait_future(fut, timeout_s=max(self._plc_cmd_timeout_s, pulse_ms / 1000.0 + 0.5), where=f"PLC_PULSE_COIL {coil} ({pulse_ms}ms)")
         self._tele_event(event="PULSE_COIL", target=str(coil), value=int(pulse_ms), detail=f"tag={tag}")
 
-    def _plc_write_reg(self, reg: Optional[str], value: int, *, tag: str) -> None:
+    def _plc_write_reg(self, reg: Optional[str], value: int, *, tag: str, silent: bool = False) -> None:
         if not reg:
             raise EngineFailed(tag, "reg is None")
 
         reg_name = str(reg)
         v = int(value)
 
-        fut = self.plc.submit_write_reg(reg_name=reg_name, value=v, tag=tag)
+        # silent=True이면 PLC 서비스에도 silent 전달 → sig_cmd_trace 미발행
+        fut = self.plc.submit_write_reg(reg_name=reg_name, value=v, tag=tag, silent=silent)
         self._wait_future(fut, timeout_s=self._plc_cmd_timeout_s, where=f"PLC_WRITE_REG {reg_name}={v}")
 
         # ✅ telemetry(dac1/dac2) 정확도 확보: DAC 레지스터면 마지막값 갱신
@@ -748,8 +749,10 @@ class ProcessEngine:
         elif rn == "DAC_POWER_2":
             self._last_dac_power_2 = v
 
-        ev = "SET_DAC" if rn in ("DAC_POWER_1", "DAC_POWER_2") else "WRITE_REG"
-        self._tele_event(event=ev, target=rn, value=v, detail=f"tag={tag}")
+        # silent=True이면 _tele_event(CSV detail 행)도 생략
+        if not silent:
+            ev = "SET_DAC" if rn in ("DAC_POWER_1", "DAC_POWER_2") else "WRITE_REG"
+            self._tele_event(event=ev, target=rn, value=v, detail=f"tag={tag}")
 
     def _plc_set_dac_ma(self, ch: int, ma: float, *, tag: str) -> None:
         ch_i = int(ch)

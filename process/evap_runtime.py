@@ -126,14 +126,16 @@ def _stm_zero_thickness(engine, recipe: ProcessRecipe, step: ProcessStep, *, mod
 # --------------------------------------------------------
 # EVAP helpers
 # --------------------------------------------------------
-def _evap_apply_dac(engine, use_p1: bool, use_p2: bool, dac: int, *, tag: str) -> None:
-    """선택된 채널에만 DAC 값을 적용(동기 submit + wait)."""
+def _evap_apply_dac(engine, use_p1: bool, use_p2: bool, dac: int, *, tag: str, silent: bool = False) -> None:
+    """선택된 채널에만 DAC 값을 적용(동기 submit + wait).
+    silent=True이면 PLC sig_cmd_trace 및 _tele_event를 생략 (HOLD/Pre-Hold 제어 주기용).
+    """
     dac = int(max(0, dac))
     if use_p1:
-        engine._plc_write_reg("DAC_POWER_1", dac, tag=f"{tag}_CH1")
+        engine._plc_write_reg("DAC_POWER_1", dac, tag=f"{tag}_CH1", silent=silent)
         engine._last_dac_power_1 = dac
     if use_p2:
-        engine._plc_write_reg("DAC_POWER_2", dac, tag=f"{tag}_CH2")
+        engine._plc_write_reg("DAC_POWER_2", dac, tag=f"{tag}_CH2", silent=silent)
         engine._last_dac_power_2 = dac
 
 
@@ -1189,7 +1191,7 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
                         ph_control_delta = 0
                     if ph_control_delta != 0:
                         dac = max(0, min(dac_max, dac + ph_control_delta))
-                        _evap_apply_dac(engine, use_p1, use_p2, dac, tag="EVAP_PRE_HOLD_CONTROL")
+                        _evap_apply_dac(engine, use_p1, use_p2, dac, tag="EVAP_PRE_HOLD_CONTROL", silent=True)
 
                     ph_last_control_m = now_m
 
@@ -1387,7 +1389,7 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
                         control_delta = 0
                 if control_delta != 0:
                     dac = max(0, min(dac_max, int(dac + control_delta)))
-                    _evap_apply_dac(engine, use_p1, use_p2, dac, tag="EVAP_HOLD_CONTROL")
+                    _evap_apply_dac(engine, use_p1, use_p2, dac, tag="EVAP_HOLD_CONTROL", silent=True)
 
                 engine._tele_event(
                     event="HOLD_CONTROL",

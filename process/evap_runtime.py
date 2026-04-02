@@ -527,6 +527,19 @@ def _load_runtime_process_config(meta: dict, *, step_name: str) -> dict:
     rate_jump_guard_ratio = float(process_config.get("rate_jump_guard_ratio", 0.50) or 0.50)
     rate_jump_guard_abs = float(process_config.get("rate_jump_guard_abs", 0.15) or 0.15)
 
+    pre_hold_entry_ratio = float(process_config.get("pre_hold_entry_ratio", 2.0) or 2.0)
+    if pre_hold_entry_ratio < 1.0:
+        pre_hold_entry_ratio = 2.0
+    pre_hold_entry_sec = float(process_config.get("pre_hold_entry_sec", 5.0) or 5.0)
+    if pre_hold_entry_sec < 0.0:
+        pre_hold_entry_sec = 5.0
+    pre_hold_ready_ratio = float(process_config.get("pre_hold_ready_ratio", 0.3) or 0.3)
+    if pre_hold_ready_ratio < 0.0:
+        pre_hold_ready_ratio = 0.3
+    pre_hold_timeout_sec = float(process_config.get("pre_hold_timeout_sec", 180.0) or 180.0)
+    if pre_hold_timeout_sec < 0.0:
+        pre_hold_timeout_sec = 180.0
+
     if dac_max <= 0:
         _raise_engine_failed(step_name, "EVAP: process_config.dac_max must be > 0")
     if not (0.0 < rate_tol_ratio < 1.0):
@@ -578,6 +591,10 @@ def _load_runtime_process_config(meta: dict, *, step_name: str) -> dict:
         "rate_jump_guard_ratio": rate_jump_guard_ratio,
         "rate_jump_guard_abs": rate_jump_guard_abs,
         "hold_max_dac_delta": hold_max_dac_delta,
+        "pre_hold_entry_ratio": pre_hold_entry_ratio,
+        "pre_hold_entry_sec": pre_hold_entry_sec,
+        "pre_hold_ready_ratio": pre_hold_ready_ratio,
+        "pre_hold_timeout_sec": pre_hold_timeout_sec,
     }
 
 def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep) -> None:
@@ -655,6 +672,10 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
     ramp_spike_abort_sec = float(proc_cfg.get("ramp_spike_abort_sec", 10.0) or 10.0)
     sensor_none_abort_s = float(proc_cfg["sensor_none_abort_s"])
     adc_none_abort_s = float(proc_cfg["adc_none_abort_s"])
+    pre_hold_entry_ratio = float(proc_cfg.get("pre_hold_entry_ratio", 2.0) or 2.0)
+    pre_hold_entry_sec = float(proc_cfg.get("pre_hold_entry_sec", 5.0) or 5.0)
+    pre_hold_ready_ratio = float(proc_cfg.get("pre_hold_ready_ratio", 0.3) or 0.3)
+    pre_hold_timeout_sec = float(proc_cfg.get("pre_hold_timeout_sec", 180.0) or 180.0)
 
     dac = 0
     shutter_open = False
@@ -833,6 +854,15 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
             _evap_apply_dac(engine, use_p1, use_p2, dac, tag=f"{tag}_RAMPDOWN")
             time.sleep(1.0)
 
+        # DAC 0 도달 후 STM 즉시 종료
+        try:
+            if engine.stm is not None:
+                engine._plc_write_coil("FTM_SW", False, tag=f"{tag}_FTM_OFF")
+                engine.stm.stop()
+                engine._emit_status(message="EVAP 종료: STM 종료 완료", force=True)
+        except Exception:
+            pass
+
         engine._emit_status(message="EVAP 종료: DAC 0 도달 → 1분 후 전원 차단", force=True)
         _shutdown_wait(60.0, label="전원 차단 전 대기 (60초)")
 
@@ -879,6 +909,8 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         reached_stable = False
         stable_start_ts: Optional[float] = None
         spike_over_limit_start_ts: Optional[float] = None
+        pre_hold_triggered = False
+        pre_hold_over_start_ts: Optional[float] = None
 
         for step_cfg in ramp_steps:
             step_no = int(step_cfg["step_no"])
@@ -933,6 +965,26 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
                         )
                 else:
                     spike_over_limit_start_ts = None  # 정상 범위 복귀 시 타이머 리셋
+
+                # Pre-Hold 진입 체크: rate가 target * entry_ratio 이상 지속 시 Pre-Hold 모드
+                if pre_hold_timeout_sec > 0:
+                    _ph_limit = target_rate * pre_hold_entry_ratio
+                    if rt >= _ph_limit:
+                        if pre_hold_over_start_ts is None:
+                            pre_hold_over_start_ts = time.monotonic()
+                        elif (time.monotonic() - pre_hold_over_start_ts) >= pre_hold_entry_sec:
+                            pre_hold_triggered = True
+                            engine._emit_status(
+                                message=(
+                                    f"RAMP: Pre-Hold 모드 진입 "
+                                    f"(rate={rt:.3f} >= {_ph_limit:.3f} Å/s, "
+                                    f"{pre_hold_entry_sec:.1f}초 지속)"
+                                ),
+                                force=True,
+                            )
+                            break
+                    else:
+                        pre_hold_over_start_ts = None
 
                 adc_ok, adc_reached_start_ts = _update_adc_reached_state(
                     adc_total,
@@ -1010,14 +1062,146 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
 
                 time.sleep(0.1)
 
-            if reached_stable:
+            if reached_stable or pre_hold_triggered:
                 break
 
-        if not reached_stable:
+        if not reached_stable and not pre_hold_triggered:
             _raise_engine_failed(
                 step.name,
                 "EVAP: 모든 ramp_steps 종료 후에도 target_rate 안정 도달 실패"
             )
+
+        # -------------------------
+        # 1.5) Pre-Hold: shutter 닫힌 상태로 PID rate 안정화
+        # -------------------------
+        if pre_hold_triggered:
+            engine._emit_status(message="Pre-Hold: rate 안정화 대기 (shutter 닫힘)", force=True)
+            engine._tele_event(
+                event="PRE_HOLD_MODE",
+                target="MODE",
+                value=hold_control_mode,
+                detail=(
+                    f"entry_ratio={pre_hold_entry_ratio:.2f}, "
+                    f"ready_ratio={pre_hold_ready_ratio:.2f}, "
+                    f"timeout={pre_hold_timeout_sec:.0f}s, "
+                    f"kp={hold_pi_kp:.3f}, ki={hold_pi_ki:.3f}"
+                ),
+            )
+
+            ph_integral = 0.0
+            ph_prev_error_ratio: float = 0.0
+            ph_filtered_rate: Optional[float] = None
+            ph_windup_clamp: bool = False
+            ph_start_m = time.monotonic()
+            ph_last_control_m = 0.0
+            ph_stable_start_ts: Optional[float] = None
+
+            while True:
+                engine._check_stop(recipe, step)
+                engine._tick_emit(recipe, step)
+
+                now_m = time.monotonic()
+                ph_elapsed = now_m - ph_start_m
+
+                if ph_elapsed >= pre_hold_timeout_sec:
+                    _raise_engine_failed(
+                        step.name,
+                        f"EVAP: Pre-Hold 대기 타임아웃 ({pre_hold_timeout_sec:.0f}초 초과)"
+                    )
+
+                rt = _read_rate_or_abort(where="pre_hold")
+                adc_total = _read_adc_or_abort(where="pre_hold")
+
+                jump_guard_abs = max(rate_jump_guard_abs, abs(target_rate) * rate_jump_guard_ratio)
+                ph_filtered_rate, ph_control_valid, _ = _filter_hold_rate(
+                    rt,
+                    ph_filtered_rate,
+                    alpha=rate_filter_alpha,
+                    max_jump_abs=jump_guard_abs,
+                )
+
+                # 안정화 판정: ±pre_hold_ready_ratio 이내로 rate_stable_sec 이상 유지
+                ph_ready_lo = target_rate * (1.0 - pre_hold_ready_ratio)
+                ph_ready_hi = target_rate * (1.0 + pre_hold_ready_ratio)
+                if ph_ready_lo <= rt <= ph_ready_hi:
+                    if ph_stable_start_ts is None:
+                        ph_stable_start_ts = now_m
+                    elif (now_m - ph_stable_start_ts) >= rate_stable_sec:
+                        engine._emit_status(
+                            message=(
+                                f"Pre-Hold: rate 안정화 완료 (rate={rt:.3f} Å/s) "
+                                f"→ STM ZERO → Shutter Open"
+                            ),
+                            force=True,
+                        )
+                        break
+                else:
+                    ph_stable_start_ts = None
+
+                # PID 제어 (hold_control_interval_s 주기)
+                if (now_m - ph_last_control_m) >= hold_control_interval_s:
+                    ph_control_delta = 0
+                    try:
+                        if hold_control_mode == "PID":
+                            ph_control_delta, ph_integral, ph_prev_error_ratio, _, _, ph_windup_clamp = _compute_hold_pid_delta(
+                                current_dac=dac,
+                                target_rate=target_rate,
+                                filtered_rate=(ph_filtered_rate if ph_control_valid else None),
+                                interval_s=hold_control_interval_s,
+                                tol_ratio=rate_tol_ratio,
+                                kp=hold_pi_kp,
+                                ki=hold_pi_ki,
+                                kd=hold_pi_kd,
+                                integral_state=ph_integral,
+                                prev_error_ratio=ph_prev_error_ratio,
+                                integral_limit=hold_integral_limit,
+                                max_delta=hold_max_dac_delta,
+                                dac_max=dac_max,
+                            )
+                        elif hold_control_mode == "PI":
+                            ph_control_delta, ph_integral, _, _ = _compute_hold_pi_delta(
+                                current_dac=dac,
+                                target_rate=target_rate,
+                                filtered_rate=(ph_filtered_rate if ph_control_valid else None),
+                                interval_s=hold_control_interval_s,
+                                tol_ratio=rate_tol_ratio,
+                                kp=hold_pi_kp,
+                                ki=hold_pi_ki,
+                                integral_state=ph_integral,
+                                integral_limit=hold_integral_limit,
+                                max_delta=hold_max_dac_delta,
+                                dac_max=dac_max,
+                            )
+                        else:
+                            new_dac = _evap_adjust_dac(
+                                dac,
+                                (ph_filtered_rate if ph_control_valid else None),
+                                target_rate,
+                                tol_ratio=rate_tol_ratio,
+                                fine_step_dac=fine_step_dac,
+                                dac_max=dac_max,
+                            )
+                            ph_control_delta = int(new_dac - dac)
+                    except Exception:
+                        ph_control_delta = 0
+
+                    if ph_control_delta != 0 and ph_control_delta > 0 and adc_total >= adc_max:
+                        ph_control_delta = 0
+                    if ph_control_delta != 0:
+                        dac = max(0, min(dac_max, dac + ph_control_delta))
+                        _evap_apply_dac(engine, use_p1, use_p2, dac, tag="EVAP_PRE_HOLD_CONTROL")
+
+                    ph_last_control_m = now_m
+
+                engine._emit_status(
+                    message=(
+                        f"Pre-Hold | rate={rt:.3f}/{target_rate:.3f} Å/s | "
+                        f"DAC={dac} | ADC={adc_total:.1f} | 경과 {ph_elapsed:.0f}s"
+                    ),
+                    force=True,
+                )
+
+                time.sleep(0.1)
 
         # -------------------------
         # 2) 파워 유지

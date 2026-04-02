@@ -55,6 +55,28 @@ PROCESS_CONFIG_TOOLTIPS = {
         "dep.rate이 스파이크 판정 기준 이상으로 이 시간을 초과하면 공정을 종료합니다.\n"
         "예: 10 → 10초 이상 지속되면 공정 종료."
     ),
+    "pre_hold_entry_ratio": (
+        "Pre-Hold 진입 배율 (target 대비).\n"
+        "Ramp 중 dep.rate이 목표 rate의 이 배수 이상으로 진입 지속 시간만큼 지속되면\n"
+        "shutter를 열지 않고 PID로 rate를 안정화하는 Pre-Hold 모드에 진입합니다.\n"
+        "예: 2.0 → 목표의 2배 이상이면 Pre-Hold 진입."
+    ),
+    "pre_hold_entry_sec": (
+        "Pre-Hold 진입 지속 시간 (초).\n"
+        "dep.rate이 진입 배율 이상인 상태가 이 시간 이상 지속되면 Pre-Hold 모드로 전환합니다.\n"
+        "예: 5.0 → 5초 이상 지속되면 진입."
+    ),
+    "pre_hold_ready_ratio": (
+        "Pre-Hold 안정화 허용 범위 (±비율).\n"
+        "Pre-Hold 중 dep.rate이 목표 rate의 ±이 비율 이내로 안정화되면\n"
+        "STM ZERO 후 Main Shutter를 열고 정상 Hold 모드로 진입합니다.\n"
+        "예: 0.3 → 목표의 ±30% 이내면 안정화 판정."
+    ),
+    "pre_hold_timeout_sec": (
+        "Pre-Hold 최대 대기 시간 (초).\n"
+        "이 시간 내에 rate가 안정화되지 않으면 공정을 종료합니다.\n"
+        "0으로 설정 시 Pre-Hold 기능 비활성화."
+    ),
 }
 
 
@@ -115,6 +137,10 @@ class ProcessConfigDialog(QDialog):
             "adc_none_abort_s": 5.0,
             "spike_abort_ratio": 3.0,
             "spike_grace_s": 5.0,
+            "pre_hold_entry_ratio": 2.0,
+            "pre_hold_entry_sec": 5.0,
+            "pre_hold_ready_ratio": 0.3,
+            "pre_hold_timeout_sec": 180.0,
         }
 
     def _normalize_config(self, cfg: dict[str, Any]) -> dict[str, Any]:
@@ -211,6 +237,10 @@ class ProcessConfigDialog(QDialog):
             "adc_none_abort_s": _as_float("adc_none_abort_s", 5.0, 0.0),
             "spike_abort_ratio": _as_float("spike_abort_ratio", 3.0, 1.0),
             "spike_grace_s": _as_float("spike_grace_s", 5.0, 0.0),
+            "pre_hold_entry_ratio": _as_float("pre_hold_entry_ratio", 2.0, 1.0),
+            "pre_hold_entry_sec": _as_float("pre_hold_entry_sec", 5.0, 0.0),
+            "pre_hold_ready_ratio": _as_float("pre_hold_ready_ratio", 0.3, 0.01, 1.0),
+            "pre_hold_timeout_sec": _as_float("pre_hold_timeout_sec", 180.0, 0.0),
         }
 
     def _build_ui(self) -> None:
@@ -291,6 +321,19 @@ class ProcessConfigDialog(QDialog):
         self._add_form_row(safety_form, "Ramp 스파이크 필터 (%)", self.rampSpikePctSpin, "ramp_spike_pct")
         self._add_form_row(safety_form, "Ramp 스파이크 허용 시간 (s)", self.rampSpikeAbortSecSpin, "ramp_spike_abort_sec")
         body_root.addWidget(safety_box)
+
+        prehold_box = QGroupBox("Pre-Hold 대기")
+        prehold_form = QFormLayout(prehold_box)
+        self.preHoldEntryRatioSpin = self._make_double_spin(1.0, 20.0, step=0.1, decimals=1)
+        self.preHoldEntrySecSpin = self._make_double_spin(0.0, 60.0, step=0.5, decimals=1)
+        self.preHoldReadyRatioSpin = self._make_double_spin(0.01, 1.0, step=0.01, decimals=2)
+        self.preHoldTimeoutSecSpin = self._make_double_spin(0.0, 600.0, step=10.0, decimals=0)
+        self._add_form_row(prehold_form, "Pre-Hold 진입 배율 (target 대비)", self.preHoldEntryRatioSpin, "pre_hold_entry_ratio")
+        self._add_form_row(prehold_form, "Pre-Hold 진입 지속 시간 (초)", self.preHoldEntrySecSpin, "pre_hold_entry_sec")
+        self._add_form_row(prehold_form, "Pre-Hold 안정화 허용 범위 (±비율)", self.preHoldReadyRatioSpin, "pre_hold_ready_ratio")
+        self._add_form_row(prehold_form, "Pre-Hold 최대 대기 시간 (초)", self.preHoldTimeoutSecSpin, "pre_hold_timeout_sec")
+        body_root.addWidget(prehold_box)
+
         body_root.addStretch(1)
 
         buttons = QDialogButtonBox(
@@ -353,6 +396,10 @@ class ProcessConfigDialog(QDialog):
         self.spikeGraceSSpin.setValue(float(cfg.get("spike_grace_s", 5.0)))
         self.rampSpikePctSpin.setValue(float(cfg.get("ramp_spike_pct", 100.0)))
         self.rampSpikeAbortSecSpin.setValue(float(cfg.get("ramp_spike_abort_sec", 10.0)))
+        self.preHoldEntryRatioSpin.setValue(float(cfg.get("pre_hold_entry_ratio", 2.0)))
+        self.preHoldEntrySecSpin.setValue(float(cfg.get("pre_hold_entry_sec", 5.0)))
+        self.preHoldReadyRatioSpin.setValue(float(cfg.get("pre_hold_ready_ratio", 0.3)))
+        self.preHoldTimeoutSecSpin.setValue(float(cfg.get("pre_hold_timeout_sec", 180.0)))
 
     def get_config(self) -> dict[str, Any]:
         cfg = dict(self._initial_config)
@@ -381,6 +428,10 @@ class ProcessConfigDialog(QDialog):
                 "spike_grace_s": float(self.spikeGraceSSpin.value()),
                 "ramp_spike_pct": float(self.rampSpikePctSpin.value()),
                 "ramp_spike_abort_sec": float(self.rampSpikeAbortSecSpin.value()),
+                "pre_hold_entry_ratio": float(self.preHoldEntryRatioSpin.value()),
+                "pre_hold_entry_sec": float(self.preHoldEntrySecSpin.value()),
+                "pre_hold_ready_ratio": float(self.preHoldReadyRatioSpin.value()),
+                "pre_hold_timeout_sec": float(self.preHoldTimeoutSecSpin.value()),
             }
         )
         return self._normalize_config(cfg)

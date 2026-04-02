@@ -1098,6 +1098,9 @@ class ProcessWindow(QWidget):
                     self._plot.set_power_default_range(*adc_range)
                 if hasattr(self._plot, 'reset_plot'):
                     self._plot.reset_plot()
+                _target_rate = float(run_cfg.get("target_rate", 0.0) or 0.0)
+                if hasattr(self._plot, 'set_fixed_rate_max') and _target_rate > 0.0:
+                    self._plot.set_fixed_rate_max(_target_rate * 2.0)
             except Exception:
                 pass
 
@@ -1670,6 +1673,10 @@ class ProcessWindow(QWidget):
             self._active_run_cfg = None
             self._active_run_profile = None
             self._clear_run_power_flags()
+
+            with contextlib.suppress(Exception):
+                if self._plot is not None and hasattr(self._plot, 'set_fixed_rate_max'):
+                    self._plot.set_fixed_rate_max(None)
 
             with contextlib.suppress(Exception):
                 self._reset_process_ui(reset_monitor=False)

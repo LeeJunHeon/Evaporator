@@ -135,6 +135,7 @@ class DepositionPlotWidget(QWidget):
         self._p_def_min, self._p_def_max = float(power_default_range[0]), float(power_default_range[1])
         # MODIFIED: 고정 Y축 범위 저장 (None이면 auto-scale 유지)
         self._fixed_power_range = fixed_power_range
+        self._fixed_rate_max: Optional[float] = None
 
         self._t0: Optional[float] = None
         self._last_t: float = 0.0
@@ -343,6 +344,10 @@ class DepositionPlotWidget(QWidget):
             self._update_axes(self._last_t)
 
     def _update_rate_axis_for_range(self, x1: float, x2: float) -> None:
+        if self._fixed_rate_max is not None:
+            self._ax_rate.setRange(0.0, self._fixed_rate_max)
+            return
+
         if not self._rate_buf:
             return
 
@@ -396,7 +401,10 @@ class DepositionPlotWidget(QWidget):
 
         self._set_x_range(0.0, x2)
 
-        self._ax_rate.setRange(0.0, 2.0)   # dep.rate 초기 Y축: 0~2.0 Å/s
+        if self._fixed_rate_max is not None:
+            self._ax_rate.setRange(0.0, self._fixed_rate_max)
+        else:
+            self._ax_rate.setRange(0.0, 2.0)   # dep.rate 초기 Y축: 0~2.0 Å/s
         self._ax_rate.setLabelFormat("%.1f")
 
         # MODIFIED: 고정 범위가 있으면 그것을 사용, 없으면 기본 범위
@@ -574,3 +582,11 @@ class DepositionPlotWidget(QWidget):
         if not self._power_buf:
             self._ax_power.setRange(self._p_def_min, self._p_def_max)
             self._apply_power_label_format(self._p_def_max)
+
+    def set_fixed_rate_max(self, max_val: Optional[float]) -> None:
+        """dep.rate Y축 상한을 고정한다. None이면 auto-scale 복원."""
+        self._fixed_rate_max = float(max_val) if max_val is not None else None
+        if self._fixed_rate_max is not None:
+            self._ax_rate.setRange(0.0, self._fixed_rate_max)
+        else:
+            self._ax_rate.setRange(0.0, 2.0)

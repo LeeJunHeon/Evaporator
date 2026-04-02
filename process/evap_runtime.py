@@ -627,6 +627,8 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
        - DAC 1초에 100씩 ramp down
        - 이후 safety 재사용
     """
+    engine._graph_frozen = False
+
     meta = dict(step.meta or {})
 
     use_p1 = bool(meta.get("use_power1", False))
@@ -870,6 +872,7 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
                 engine._emit_status(message="EVAP 종료: STM 종료 완료", force=True)
         except Exception:
             pass
+        engine._graph_frozen = True
 
         engine._emit_status(message="EVAP 종료: DAC 0 도달 → 1분 후 전원 차단", force=True)
         _shutdown_wait(60.0, label="전원 차단 전 대기 (60초)")
@@ -1040,7 +1043,7 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
                         time.sleep(step_dac_interval_sec)
                     else:
                         dac = min(dac_max, dac + step_dac_step)
-                        _evap_apply_dac(engine, use_p1, use_p2, dac, tag=f"EVAP_RAMP_STEP{step_no}")
+                        _evap_apply_dac(engine, use_p1, use_p2, dac, tag=f"EVAP_RAMP_STEP{step_no}", silent=True)
                         last_dac_apply_m = now_m
                         remain_to_next_dac_s = step_dac_interval_sec
 

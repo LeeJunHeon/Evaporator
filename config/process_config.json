@@ -9,7 +9,7 @@
     }
   ],
   "dac_max": 4000,
-  "rate_tol_ratio": 0.05,
+  "rate_tol_ratio": 0.10,
   "rate_stable_sec": 3.0,
   "hold_control_interval_s": 2.0,
   "fine_step_dac": 10,

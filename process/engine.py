@@ -170,6 +170,7 @@ class ProcessEngine:
         # ✅ UI 표시용: 마지막 메시지 캐시 (tick emit이 message=""로 덮는 문제 방지)
         self._ui_last_message: str = ""
         self._shutdown_already_executed: bool = False
+        self._graph_frozen: bool = False
 
     # --------------------------------------------------------
     # External controls (thread-safe-ish: 단순 플래그)
@@ -1296,6 +1297,8 @@ class ProcessEngine:
             })
 
             now = time.monotonic()
+            if self._graph_frozen:
+                return
             if (now - self._stm_log_ts) >= 1.0:
                 self._stm_log_ts = now
                 pressure = self._get_pressure()
@@ -1331,8 +1334,10 @@ class ProcessEngine:
                     f"rate={rate_v:.3f} Å/s, thick={thick_nm:.2f} nm"
                     if thick_nm is not None else "---"
                 )
-                self._run_line(
-                    f"[POLL] PLC: {_plc_str} | ACS: {pres_str} Torr | STM: {stm_str}"
+                self._log_info(
+                    f"[POLL] PLC: {_plc_str} | ACS: {pres_str} Torr | STM: {stm_str}",
+                    tag="POLL",
+                    also_ui=True,
                 )
         except Exception:
             pass

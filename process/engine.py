@@ -1204,6 +1204,9 @@ class ProcessEngine:
         - status emit: _status_emit_interval_s
         - telemetry: recipe.telemetry_interval_s
         """
+        if getattr(self, '_graph_frozen', False):
+            return
+
         now = time.monotonic()
 
         if (now - self._last_status_emit_ts) >= self._status_emit_interval_s:

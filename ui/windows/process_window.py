@@ -1838,6 +1838,20 @@ class ProcessWindow(QWidget):
             "rate_abort_sec": 5.0,
             "sensor_none_abort_s": 5.0,
             "adc_none_abort_s": 5.0,
+            "adc_max": 200,
+            "hold_pi_kd": 0.0,
+            "spike_abort_ratio": 3.0,
+            "spike_grace_s": 5.0,
+            "ramp_spike_pct": 200.0,
+            "ramp_spike_abort_sec": 15.0,
+            "ramp_spike_abort_ratio": 10.0,
+            "pre_hold_entry_ratio": 3.0,
+            "pre_hold_entry_sec": 10.0,
+            "pre_hold_ready_ratio": 0.3,
+            "pre_hold_timeout_sec": 180.0,
+            "spike_dac_hold_threshold": 0.3,
+            "spike_dac_hold_sec": 10.0,
+            "tooling_factor": 100.0,
         }
 
     def _normalize_process_config(self, cfg: Any) -> dict[str, Any]:
@@ -1947,6 +1961,20 @@ class ProcessWindow(QWidget):
             "rate_abort_sec": _as_float(src, "rate_abort_sec", 5.0, 0.0),
             "sensor_none_abort_s": _as_float(src, "sensor_none_abort_s", 5.0, 0.0),
             "adc_none_abort_s": _as_float(src, "adc_none_abort_s", 5.0, 0.0),
+            "adc_max": _as_int(src, "adc_max", 200, 1),
+            "hold_pi_kd": _as_float(src, "hold_pi_kd", 0.0, 0.0),
+            "spike_abort_ratio": _as_float(src, "spike_abort_ratio", 3.0, 1.0),
+            "spike_grace_s": _as_float(src, "spike_grace_s", 5.0, 0.0),
+            "ramp_spike_pct": _as_float(src, "ramp_spike_pct", 200.0, 0.0),
+            "ramp_spike_abort_sec": _as_float(src, "ramp_spike_abort_sec", 15.0, 0.0),
+            "ramp_spike_abort_ratio": _as_float(src, "ramp_spike_abort_ratio", 10.0, 1.0),
+            "pre_hold_entry_ratio": _as_float(src, "pre_hold_entry_ratio", 3.0, 1.0),
+            "pre_hold_entry_sec": _as_float(src, "pre_hold_entry_sec", 10.0, 0.0),
+            "pre_hold_ready_ratio": _as_float(src, "pre_hold_ready_ratio", 0.3, 0.01, 1.0),
+            "pre_hold_timeout_sec": _as_float(src, "pre_hold_timeout_sec", 180.0, 0.0),
+            "spike_dac_hold_threshold": _as_float(src, "spike_dac_hold_threshold", 0.3, 0.0),
+            "spike_dac_hold_sec": _as_float(src, "spike_dac_hold_sec", 10.0, 0.0),
+            "tooling_factor": _as_float(src, "tooling_factor", 100.0, 10.0, 399.0),
         }
 
     def _open_process_config_dialog(self) -> None:

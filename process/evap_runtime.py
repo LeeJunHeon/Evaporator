@@ -855,7 +855,7 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
 
             return ((now_m - stable_start_ts) >= stable_sec), stable_start_ts
 
-        return False, None
+        return False, stable_start_ts
 
     def _ramp_down_then_shutdown(*, tag: str) -> None:
         nonlocal dac, shutter_open, shutdown_done

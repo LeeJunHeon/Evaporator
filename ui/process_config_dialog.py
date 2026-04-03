@@ -83,12 +83,6 @@ PROCESS_CONFIG_TOOLTIPS = {
         "이 시간 내에 rate가 안정화되지 않으면 공정을 종료합니다.\n"
         "0으로 설정 시 Pre-Hold 기능 비활성화."
     ),
-    "tooling_factor": (
-        "STM-100 Tooling Factor (%).\n"
-        "공정 시작 시 J= 명령으로 장비에 자동 적용됩니다.\n"
-        "범위: 10.0 ~ 399.0 %\n"
-        "보정 공식: 새값 = 현재값 × (STM표시 / 실측두께)"
-    ),
 }
 
 
@@ -154,7 +148,6 @@ class ProcessConfigDialog(QDialog):
             "pre_hold_entry_sec": 5.0,
             "pre_hold_ready_ratio": 0.3,
             "pre_hold_timeout_sec": 180.0,
-            "tooling_factor": 100.0,
         }
 
     def _normalize_config(self, cfg: dict[str, Any]) -> dict[str, Any]:
@@ -256,7 +249,6 @@ class ProcessConfigDialog(QDialog):
             "pre_hold_entry_sec": _as_float("pre_hold_entry_sec", 5.0, 0.0),
             "pre_hold_ready_ratio": _as_float("pre_hold_ready_ratio", 0.3, 0.01, 1.0),
             "pre_hold_timeout_sec": _as_float("pre_hold_timeout_sec", 180.0, 0.0),
-            "tooling_factor": _as_float("tooling_factor", 100.0, 10.0, 399.0),
         }
 
     def _build_ui(self) -> None:
@@ -352,12 +344,6 @@ class ProcessConfigDialog(QDialog):
         self._add_form_row(prehold_form, "Pre-Hold 최대 대기 시간 (초)", self.preHoldTimeoutSecSpin, "pre_hold_timeout_sec")
         body_root.addWidget(prehold_box)
 
-        stm_box = QGroupBox("STM 파라미터")
-        stm_form = QFormLayout(stm_box)
-        self.toolingFactorSpin = self._make_double_spin(10.0, 399.0, step=1.0, decimals=1)
-        self._add_form_row(stm_form, "Tooling Factor (%)", self.toolingFactorSpin, "tooling_factor")
-        body_root.addWidget(stm_box)
-
         body_root.addStretch(1)
 
         buttons = QDialogButtonBox(
@@ -425,7 +411,6 @@ class ProcessConfigDialog(QDialog):
         self.preHoldEntrySecSpin.setValue(float(cfg.get("pre_hold_entry_sec", 5.0)))
         self.preHoldReadyRatioSpin.setValue(float(cfg.get("pre_hold_ready_ratio", 0.3)))
         self.preHoldTimeoutSecSpin.setValue(float(cfg.get("pre_hold_timeout_sec", 180.0)))
-        self.toolingFactorSpin.setValue(float(cfg.get("tooling_factor", 100.0)))
 
     def get_config(self) -> dict[str, Any]:
         cfg = dict(self._initial_config)
@@ -459,7 +444,6 @@ class ProcessConfigDialog(QDialog):
                 "pre_hold_entry_sec": float(self.preHoldEntrySecSpin.value()),
                 "pre_hold_ready_ratio": float(self.preHoldReadyRatioSpin.value()),
                 "pre_hold_timeout_sec": float(self.preHoldTimeoutSecSpin.value()),
-                "tooling_factor": float(self.toolingFactorSpin.value()),
             }
         )
         return self._normalize_config(cfg)

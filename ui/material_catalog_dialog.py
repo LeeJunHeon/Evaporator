@@ -27,6 +27,7 @@ class MaterialRow:
     material: str
     density_g_cm3: float
     z_factor: float
+    tooling_factor: float = 100.0
     note: str = ""
 
 
@@ -50,6 +51,9 @@ MATERIAL_PARAMS = [
     ("Material",         "material",      "str",     "물질 이름 (예: Al, Au, SiO2)"),
     ("Density (g/cm³)", "density_g_cm3", "float>0", "STM density. 0보다 커야 합니다."),
     ("Z factor",         "z_factor",      "float>0", "STM Z factor. 0보다 커야 합니다."),
+    ("Tooling (%)",      "tooling_factor", "float>0",
+     "STM Tooling Factor (%). 범위: 10.0~399.0. 기본값 100.0.\n"
+     "보정 공식: 새값 = 현재값 × (STM표시 / 실측두께)"),
 ]
 
 
@@ -180,12 +184,14 @@ class MaterialCatalogDialog(QDialog):
 
                 d = _to_float(it.get("density_g_cm3"), default=0.0)
                 z = _to_float(it.get("z_factor"), default=0.0)
+                tf = _to_float(it.get("tooling_factor"), default=100.0)
 
                 mats.append(
                     MaterialRow(
                         material=m,
                         density_g_cm3=d,
                         z_factor=z,
+                        tooling_factor=tf,
                         note=_to_str(it.get("note")),
                     )
                 )
@@ -204,6 +210,7 @@ class MaterialCatalogDialog(QDialog):
                 "material": m.material,
                 "density_g_cm3": float(m.density_g_cm3),
                 "z_factor": float(m.z_factor),
+                "tooling_factor": float(m.tooling_factor),
                 "note": m.note or "",
             }
 

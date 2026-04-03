@@ -1760,6 +1760,7 @@ class ProcessWindow(QWidget):
             "material": getattr(sel, "material", ""),
             "density_g_cm3": getattr(sel, "density_g_cm3", 0.0),
             "z_factor": getattr(sel, "z_factor", 0.0),
+            "tooling_factor": getattr(sel, "tooling_factor", 100.0),
             "note": getattr(sel, "note", ""),
         }
 
@@ -1851,7 +1852,6 @@ class ProcessWindow(QWidget):
             "pre_hold_timeout_sec": 180.0,
             "spike_dac_hold_threshold": 0.3,
             "spike_dac_hold_sec": 10.0,
-            "tooling_factor": 100.0,
         }
 
     def _normalize_process_config(self, cfg: Any) -> dict[str, Any]:
@@ -1974,7 +1974,6 @@ class ProcessWindow(QWidget):
             "pre_hold_timeout_sec": _as_float(src, "pre_hold_timeout_sec", 180.0, 0.0),
             "spike_dac_hold_threshold": _as_float(src, "spike_dac_hold_threshold", 0.3, 0.0),
             "spike_dac_hold_sec": _as_float(src, "spike_dac_hold_sec", 10.0, 0.0),
-            "tooling_factor": _as_float(src, "tooling_factor", 100.0, 10.0, 399.0),
         }
 
     def _open_process_config_dialog(self) -> None:
@@ -2704,6 +2703,7 @@ class ProcessWindow(QWidget):
             "material_name": mat_name,
             "density": den,
             "z_factor": zf,
+            "tooling_factor": float((base_mat or {}).get("tooling_factor", 0.0) or 0.0),
 
             "target_rate": float(target_rate),
             "target_thickness": float(target_thk),

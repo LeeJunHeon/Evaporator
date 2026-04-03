@@ -914,7 +914,7 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
 
         density = float(meta.get("density", 0.0) or 0.0)
         z_factor = float(meta.get("z_factor", 0.0) or 0.0)
-        tooling_pct = float(process_config.get("tooling_factor", 0.0) or 0.0)
+        tooling_pct = float(meta.get("tooling_factor", 0.0) or 0.0)
         if density > 0 and z_factor > 0:
             engine._emit_status(
                 message=(

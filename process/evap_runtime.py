@@ -837,7 +837,7 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         if rt >= spike_limit:
             return False, None  # 스파이크: stable 카운트 리셋
 
-        if rt >= target_rate - tol:
+        if (target_rate - tol) <= rt <= (target_rate + tol):
             now_m = time.monotonic()
             if stable_start_ts is None:
                 stable_start_ts = now_m
@@ -914,7 +914,7 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
 
         density = float(meta.get("density", 0.0) or 0.0)
         z_factor = float(meta.get("z_factor", 0.0) or 0.0)
-        tooling_pct = float(meta.get("tooling_factor", 0.0) or 0.0)
+        tooling_pct = float(meta.get("tooling_factor", 100.0) or 100.0)
         if density > 0 and z_factor > 0:
             engine._emit_status(
                 message=(

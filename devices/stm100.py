@@ -27,6 +27,8 @@ _DENSITY_MIN = 0.500
 _DENSITY_MAX = 99.99
 _Z_MIN = 0.100
 _Z_MAX = 9.999
+_TOOLING_MIN = 10.0
+_TOOLING_MAX = 399.0
 # _Z_FILM_MAX는 Multi-Film(jN/kN) 전용: STM-100 매뉴얼상 film별 Z는 최대 99.99
 _Z_FILM_MAX = 99.99
 
@@ -594,6 +596,30 @@ class STM100(BaseSerialDevice):
         cmd = f"F={v}"
         _ensure_cmd_len(cmd)
         self.query_text(cmd)
+
+    def set_tooling(self, tooling_pct: float) -> None:
+        """
+        J= : 현재 필름 Tooling Factor 설정 (단위: %)
+        STM-100 매뉴얼 Table 5.2 기준: J=[10.0~399]
+        """
+        _ensure_range("tooling_pct", tooling_pct, _TOOLING_MIN, _TOOLING_MAX)
+        v = _fmt_compact_float(tooling_pct, max_decimals=1)
+        cmd = f"J={v}"
+        _ensure_cmd_len(cmd)
+        self.query_text(cmd)
+
+    def get_tooling(self) -> float:
+        """J? : 현재 Tooling Factor 반환 (단위: %)"""
+        s = self.command("J", modifier="?")
+        ss = (s or "").strip()
+        if not ss:
+            raise STM100ValueUnavailableError("STM-100: empty tooling response")
+        if ss in _UNAVAILABLE_MARKERS or set(ss) == {"-"}:
+            raise STM100ValueUnavailableError(f"STM-100: tooling unavailable: {ss!r}")
+        try:
+            return float(ss)
+        except ValueError as e:
+            raise STM100ProtocolError(f"STM-100: invalid tooling response: {ss!r}") from e
 
     def get_z_factor(self) -> float:
         s = self.command("F", modifier="?")

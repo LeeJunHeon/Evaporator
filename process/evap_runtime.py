@@ -1259,6 +1259,9 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         last_hold_control_m = 0.0
         spike_dac_hold_start_ts: Optional[float] = None  # 스파이크 감지 시각
         prev_raw_rate: Optional[float] = None             # 직전 1초 rate (스파이크 판단용)
+        sw_thickness_a: float = 0.0     # 소프트웨어 두께 (Å 단위, STM과 동일 단위)
+        last_sw_rate: Optional[float] = None    # 직전 정상 rate (스파이크 시 대체값)
+        last_rt_update_m: float = time.monotonic()  # rate 적분용 타임스탬프
         rate_abort_start_ts: Optional[float] = None
         spike_detected_ts: Optional[float] = None
         abort_threshold = target_rate * rate_abort_ratio
@@ -1342,6 +1345,21 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
                 spike_dac_hold_start_ts is not None
                 and (time.monotonic() - spike_dac_hold_start_ts) < spike_dac_hold_sec
             )
+
+            # ── 소프트웨어 두께 계산 ──
+            now_sw_m = time.monotonic()
+            dt_sw = now_sw_m - last_rt_update_m
+            last_rt_update_m = now_sw_m
+
+            if dt_sw > 0 and rt is not None and rt >= 0:
+                # 스파이크 활성 중이면 직전 정상 rate 사용, 아니면 실제 rate 사용
+                rate_for_sw = last_sw_rate if _spike_dac_hold_active and last_sw_rate is not None else rt
+                if not _spike_dac_hold_active and rt < target_rate * spike_abort_ratio:
+                    last_sw_rate = rt  # 정상 rate만 기억
+                sw_thickness_a += rate_for_sw * dt_sw
+
+            # engine 캐시 갱신 (telemetry에서 읽어감)
+            engine._last_sw_thickness_nm = sw_thickness_a / 10.0
 
             # hold_control_interval_s 주기 제어
             now_m = time.monotonic()
@@ -1446,8 +1464,8 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
 
             engine._emit_status(
                 message=(
-                    f"HOLD | remain {remain_th/10.0:.2f}nm "
-                    f"( {dep_th/10.0:.2f}/{target_th/10.0:.2f}nm ) | "
+                    f"HOLD | remain {(target_th - sw_thickness_a)/10.0:.2f}nm "
+                    f"( SW:{sw_thickness_a/10.0:.2f}/{target_th/10.0:.2f}nm | STM:{dep_th/10.0:.2f}nm ) | "
                     f"rate={rt:.3f}"
                     f"{'' if filtered_rate is None else f' | filtered={filtered_rate:.3f}'} | "
                     f"ADC={adc_total:.1f} | DAC={dac}"
@@ -1455,7 +1473,7 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
                 force=True,
             )
 
-            if target_th > 0 and dep_th >= target_th:
+            if target_th > 0 and sw_thickness_a >= target_th:
                 break
 
             time.sleep(0.1)

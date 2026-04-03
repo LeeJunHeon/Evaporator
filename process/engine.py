@@ -171,6 +171,7 @@ class ProcessEngine:
         self._ui_last_message: str = ""
         self._shutdown_already_executed: bool = False
         self._graph_frozen: bool = False
+        self._last_sw_thickness_nm: Optional[float] = None  # 소프트웨어 두께 캐시
 
     # --------------------------------------------------------
     # External controls (thread-safe-ish: 단순 플래그)
@@ -1294,6 +1295,7 @@ class ProcessEngine:
                 "adc2": adc2_raw,
                 "dep.rate": rate,
                 "thickness_nm": thickness_nm,
+                "sw_thickness_nm": self._last_sw_thickness_nm,
             })
 
             now = time.monotonic()
@@ -1330,8 +1332,10 @@ class ProcessEngine:
                 _plc_str = (", ".join(_dac_parts) + ", " + _adc_str) if _dac_parts else _adc_str
 
                 pres_str = f"{pressure:.2e}" if pressure is not None else "---"
+                sw_th = self._last_sw_thickness_nm
                 stm_str = (
-                    f"rate={rate_v:.3f} Å/s, thick={thick_nm:.2f} nm"
+                    f"rate={rate_v:.3f} Å/s, STM_thick={thick_nm:.2f} nm"
+                    + (f", SW_thick={sw_th:.2f} nm" if sw_th is not None else ", SW_thick=---")
                     if thick_nm is not None else "---"
                 )
                 self._log_info(

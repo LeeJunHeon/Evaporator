@@ -11,7 +11,7 @@
   "dac_max": 4000,
   "rate_tol_ratio": 0.10,
   "rate_stable_sec": 3.0,
-  "hold_control_interval_s": 2.0,
+  "hold_control_interval_s": 5.0,
   "fine_step_dac": 10,
   "hold_control_mode": "PID",
   "hold_pi_kp": 10.0,

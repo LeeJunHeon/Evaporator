@@ -499,6 +499,13 @@ def _load_runtime_process_config(meta: dict, *, step_name: str) -> dict:
     if spike_grace_s < 0.0:
         spike_grace_s = 0.0
 
+    spike_dac_hold_threshold = float(process_config.get("spike_dac_hold_threshold", 0.3) or 0.3)
+    if spike_dac_hold_threshold <= 0.0:
+        spike_dac_hold_threshold = 0.3
+    spike_dac_hold_sec = float(process_config.get("spike_dac_hold_sec", 10.0) or 10.0)
+    if spike_dac_hold_sec <= 0.0:
+        spike_dac_hold_sec = 10.0
+
     ramp_spike_pct = float(process_config.get("ramp_spike_pct", 100.0) or 100.0)
     if ramp_spike_pct < 10.0:
         ramp_spike_pct = 10.0
@@ -584,6 +591,8 @@ def _load_runtime_process_config(meta: dict, *, step_name: str) -> dict:
         "rate_abort_sec": rate_abort_sec,
         "spike_abort_ratio": spike_abort_ratio,
         "spike_grace_s": spike_grace_s,
+        "spike_dac_hold_threshold": spike_dac_hold_threshold,
+        "spike_dac_hold_sec": spike_dac_hold_sec,
         "ramp_spike_pct": ramp_spike_pct,
         "ramp_spike_abort_sec": ramp_spike_abort_sec,
         "ramp_spike_abort_ratio": ramp_spike_abort_ratio,
@@ -677,6 +686,8 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
     rate_abort_sec = float(proc_cfg["rate_abort_sec"])
     spike_abort_ratio = float(proc_cfg.get("spike_abort_ratio", 3.0) or 3.0)
     spike_grace_s = float(proc_cfg.get("spike_grace_s", 5.0) or 5.0)
+    spike_dac_hold_threshold = float(proc_cfg.get("spike_dac_hold_threshold", 0.3) or 0.3)
+    spike_dac_hold_sec = float(proc_cfg.get("spike_dac_hold_sec", 10.0) or 10.0)
     ramp_spike_pct = float(proc_cfg.get("ramp_spike_pct", 100.0) or 100.0)
     ramp_spike_abort_sec = float(proc_cfg.get("ramp_spike_abort_sec", 10.0) or 10.0)
     ramp_spike_abort_ratio = float(proc_cfg.get("ramp_spike_abort_ratio", 10.0) or 10.0)
@@ -1246,6 +1257,8 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         shutter_open = True
 
         last_hold_control_m = 0.0
+        spike_dac_hold_start_ts: Optional[float] = None  # 스파이크 감지 시각
+        prev_raw_rate: Optional[float] = None             # 직전 1초 rate (스파이크 판단용)
         rate_abort_start_ts: Optional[float] = None
         spike_detected_ts: Optional[float] = None
         abort_threshold = target_rate * rate_abort_ratio
@@ -1319,9 +1332,20 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
             else:
                 rate_abort_start_ts = None
 
+            # ── 스파이크 감지: 이전 rate 대비 spike_dac_hold_threshold 이상 상승 ──
+            if prev_raw_rate is not None and rt > prev_raw_rate + spike_dac_hold_threshold:
+                spike_dac_hold_start_ts = time.monotonic()
+            prev_raw_rate = rt
+
+            # 스파이크 활성 중이면 PID 건너뜀 (DAC 고정)
+            _spike_dac_hold_active = (
+                spike_dac_hold_start_ts is not None
+                and (time.monotonic() - spike_dac_hold_start_ts) < spike_dac_hold_sec
+            )
+
             # hold_control_interval_s 주기 제어
             now_m = time.monotonic()
-            if (now_m - last_hold_control_m) >= hold_control_interval_s:
+            if (not _spike_dac_hold_active) and (now_m - last_hold_control_m) >= hold_control_interval_s:
                 control_delta = 0
                 control_error: Optional[float] = None
                 control_mode_used = hold_control_mode

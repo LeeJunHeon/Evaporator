@@ -1745,6 +1745,14 @@ class ProcessWindow(QWidget):
             event.ignore()
             return
 
+        pc = self._process_controller
+        if pc is not None:
+            try:
+                if hasattr(pc, "is_running") and bool(pc.is_running()):
+                    pc.stop()
+            except Exception:
+                pass
+
         if self.hmi_window is not None:
             self.hmi_window.process_window = None
 

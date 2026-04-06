@@ -755,6 +755,11 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         next_ui_m = start_m
 
         while True:
+            try:
+                engine._check_stop(recipe, step)
+            except Exception:
+                return
+
             engine._tick_emit(recipe, step)
 
             now_m = time.monotonic()

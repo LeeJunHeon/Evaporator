@@ -742,10 +742,9 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         engine._emit_status(message=f"[남은 00:00] {label} 완료", force=True)
 
     def _shutdown_wait(wait_s: float, *, label: str) -> None:
-        """stop 요청을 무시하고 지정 시간을 끝까지 대기하는 함수.
+        """지정 시간 대기하는 함수.
         _ramp_down_then_shutdown() 내부에서만 사용.
-        stop 플래그가 이미 set된 상태에서도 60초 대기를 스킵하지 않기 위해
-        engine._check_stop() 호출을 제거한 버전."""
+        stop 요청 시 즉시 대기를 중단하고 리턴한다."""
         wait_s = float(wait_s)
         if wait_s <= 0:
             return

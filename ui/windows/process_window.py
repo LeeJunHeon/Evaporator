@@ -1753,6 +1753,8 @@ class ProcessWindow(QWidget):
             except Exception:
                 pass
 
+        self._close_process_run_log()
+
         if self.hmi_window is not None:
             self.hmi_window.process_window = None
 

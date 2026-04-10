@@ -606,12 +606,9 @@ class ProcessController(QObject):
     ) -> list[ProcessStep]:
         use_p1 = bool(power["use_power1"])
         use_p2 = bool(power["use_power2"])
-        temp_force_power2_sw = bool(power["temp_force_power2_sw"])
 
-        if use_p2:
-            raise ValueError("현재 build_evap_steps는 Power2 공정을 지원하지 않습니다.")
-        if not use_p1:
-            raise ValueError("현재 build_evap_steps는 Power1 선택이 필요합니다.")
+        if not (use_p1 or use_p2):
+            raise ValueError("use_power1/use_power2 중 최소 1개는 True여야 합니다.")
 
         steps: list[ProcessStep] = [
             ProcessStep(name="MAIN_SHUTTER_CLOSE", type=StepType.PLC_WRITE_COIL, coil="MAIN_SHUTTER_SW", on=False),
@@ -622,8 +619,7 @@ class ProcessController(QObject):
             ProcessStep(name="DAC2_ZERO", type=StepType.PLC_WRITE_REG, reg="DAC_POWER_2", value=0),
 
             ProcessStep(name="POWER1_SET", type=StepType.PLC_WRITE_COIL, coil="POWER_1_SW", on=use_p1),
-            # 현재 장비 임시 매핑으로 Power1 only 공정에서도 POWER_2_SW를 함께 ON
-            ProcessStep(name="POWER2_SET", type=StepType.PLC_WRITE_COIL, coil="POWER_2_SW", on=temp_force_power2_sw),
+            ProcessStep(name="POWER2_SET", type=StepType.PLC_WRITE_COIL, coil="POWER_2_SW", on=use_p2),
         ]
 
         # 현재 UI active path에서는 preflight/start 단계에서 이미 FTM이 ON 되었을 수 있다.
@@ -689,25 +685,9 @@ class ProcessController(QObject):
         if not (use_p1 or use_p2):
             raise ValueError("Power1/Power2 중 최소 1개는 선택되어야 합니다.")
 
-        # 현재 장비 임시 제약
-        if use_p2:
-            raise ValueError(
-                "현재 장비 상태에서는 Power 2를 사용할 수 없습니다.\n"
-                "임시로 Power 1만 사용해 주세요."
-            )
-
-        # 현재 장비 임시 매핑:
-        # - UI/start path에서는 Power2 사용 금지
-        # - 그러나 실제 하드웨어 구동상 Power1 only 공정 시작 시 POWER_2_SW도 함께 ON 되어야 함
-        # - 셔터는 열지 않음 (SHUTTER_1_OPEN 제거됨)
-        # - DAC command는 DAC_POWER_1 사용
-        # - 실제 feedback은 ADC2 사용
-        #
-        # 장비 수리 후 Power2/dual-power를 다시 활성화할 때는
-        # 아래 temp_force_power2_sw / power1_feedback_adc2 정책과
-        # _build_evap_steps() 상단 guard, process_window의 Power2 차단을 같이 풀어야 한다.
-        temp_force_power2_sw = use_p1 and (not use_p2)
-        power1_feedback_adc2 = use_p1 and (not use_p2)
+        # 장비 수리 완료 - Power1/Power2 정상 매핑
+        temp_force_power2_sw = False
+        power1_feedback_adc2 = False
 
         return {
             "use_power1": use_p1,

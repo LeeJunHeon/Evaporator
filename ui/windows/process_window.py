@@ -107,8 +107,8 @@ class ProcessWindow(QWidget):
         # 현재 재료별 ADC 조회 캐시
 
 
-        self._power2_temporarily_disabled: bool = True
-        self._power1_feedback_uses_adc2: bool = True
+        self._power2_temporarily_disabled: bool = False
+        self._power1_feedback_uses_adc2: bool = False
 
         self.ui.materialEdit.clicked.connect(lambda: self._open_material_dialog(1))
         self.ui.materialEdit2.clicked.connect(lambda: self._open_material_dialog(2))

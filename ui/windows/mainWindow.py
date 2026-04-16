@@ -1497,6 +1497,22 @@ class Ui_Form(object):
             le.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             le.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
 
+        # ✅ tmpDetailEdit 툴팁 스타일
+        self.tmpDetailEdit.setStyleSheet(
+            self.tmpDetailEdit.styleSheet()
+            + """
+            QToolTip {
+                background-color: #1e293b;
+                color: #f1f5f9;
+                border: 1px solid #475569;
+                padding: 6px 10px;
+                border-radius: 4px;
+                font-family: Consolas;
+                font-size: 10pt;
+            }
+            """
+        )
+
 
     def _style_indicator(self, w: QWidget, on: bool):
         bg = "#38d62f" if on else "#d82c2c"

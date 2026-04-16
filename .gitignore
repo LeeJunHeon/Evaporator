@@ -32,3 +32,6 @@ _tmp_db_probe*/
 # Claude Code
 CLAUDE.md
 .claude/settings.local.json
+
+# Google Chat Webhook URL
+secrets.py

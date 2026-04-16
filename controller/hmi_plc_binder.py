@@ -15,9 +15,16 @@ from __future__ import annotations
 import time
 import threading
 import contextlib
+import urllib.request
+import json as _json
 from dataclasses import dataclass, asdict, is_dataclass
 from typing import Dict, Optional, Tuple, Any
 from services.log_service import LogService
+
+try:
+    from secrets import GCHAT_WEBHOOK_URL
+except Exception:
+    GCHAT_WEBHOOK_URL = ""
 
 from PySide6.QtCore import QObject, QSignalBlocker, Qt, QTimer
 from PySide6.QtWidgets import QMessageBox
@@ -99,6 +106,10 @@ class HmiPlcBinder(QObject):
         self._tmp_attach_prompt_open: bool = False
         self._tmp_attach_prompt_done: bool = False
         self._tmp_attach_prompt_suppressed: bool = False
+
+        # TMP 온도 알림 상태
+        self._tmp_temp_alert_last_ts: float = 0.0
+        self._tmp_temp_alert_cooldown_s: float = 300.0  # 5분에 한 번만 재알림
 
         # (선택) 초기 표시
         self._render_status_line()
@@ -620,6 +631,14 @@ class HmiPlcBinder(QObject):
         self._set_tmp_field("tmpDetailEdit", detail_text)
         self._set_tmp_field("tmpAlarmEdit", alarm_disp)
 
+        # ✅ Detail 툴팁: 마우스 오버 시 전체 내용 표시
+        try:
+            w = getattr(self.ui, "tmpDetailEdit", None)
+            if w is not None:
+                w.setToolTip(detail_text if detail_text not in ("", "---") else "")
+        except Exception:
+            pass
+
     def _call_tmp_helper(self, helper_name: str) -> tuple[bool, str]:
         svc = self._turbovac_service
         if svc is None:
@@ -844,12 +863,66 @@ class HmiPlcBinder(QObject):
 
         self._render_tmp_status()
         self._set_controls_enabled(self.is_ui_connected())
+        self._check_tmp_temp_alert(snap)
 
     def _on_tmp_error(self, msg: str) -> None:
         self._render_tmp_status()
 
     def _on_tmp_log(self, msg: str) -> None:
         self._set_hmi_log(str(msg))
+
+    def _check_tmp_temp_alert(self, snap: Dict[str, Any]) -> None:
+        """TMP 모터 온도 50°C 이상이면 Google Chat 알림 전송 (5분 쿨다운)."""
+        try:
+            if not snap.get("connected", False):
+                return
+            motor_temp = snap.get("motor_temp_c", None)
+            if motor_temp is None:
+                return
+
+            threshold = 50.0
+            now = time.time()
+
+            if float(motor_temp) >= threshold:
+                if now - self._tmp_temp_alert_last_ts >= self._tmp_temp_alert_cooldown_s:
+                    self._tmp_temp_alert_last_ts = now
+                    msg = (
+                        f"🚨 [Evaporator] TMP 온도 경고\n"
+                        f"모터 온도: {float(motor_temp):.1f}°C  (기준: {threshold:.0f}°C 이상)\n"
+                        f"시각: {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                        f"즉시 확인 바랍니다."
+                    )
+                    self._set_hmi_log(f"[ALERT] TMP 온도 경고: {float(motor_temp):.1f}°C → Google Chat 알림 전송")
+                    self._send_gchat_alert(msg)
+            else:
+                # 온도 정상 복귀 시 쿨다운 리셋
+                self._tmp_temp_alert_last_ts = 0.0
+        except Exception:
+            pass
+
+    def _send_gchat_alert(self, message: str) -> None:
+        """Google Chat Webhook으로 알림 전송 (별도 daemon 스레드)."""
+        def _send() -> None:
+            try:
+                url = GCHAT_WEBHOOK_URL
+                if not url:
+                    return
+                payload = _json.dumps({"text": message}).encode("utf-8")
+                req = urllib.request.Request(
+                    url,
+                    data=payload,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(req, timeout=5):
+                    pass
+            except Exception as e:
+                try:
+                    self._set_hmi_log(f"[WARN] Google Chat 알림 전송 실패: {e!r}")
+                except Exception:
+                    pass
+
+        threading.Thread(target=_send, daemon=True).start()
 
     def _on_button_toggled(self, binding: ButtonBinding, on: bool) -> None:
         on_i = int(bool(on))

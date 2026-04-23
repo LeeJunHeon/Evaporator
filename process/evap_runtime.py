@@ -41,6 +41,54 @@ def _raise_engine_failed(step_name: str, detail: str) -> None:
     raise EngineFailed(step_name, detail)
 
 
+def _plc_call_with_reconnect(
+    engine,
+    fn_name: str,
+    *args,
+    reconnect_timeout_s: float = 30.0,
+    **kwargs,
+):
+    """
+    PLC 명령을 실행하되, 실패 시 재연결 대기 + 재시도.
+
+    - fn_name: engine 객체의 PLC 메서드 이름 (예: '_plc_write_coil', '_plc_write_reg')
+    - reconnect_timeout_s: 최대 재시도 지속 시간(초)
+    - 성공 시 원래 메서드의 반환값 리턴
+    - timeout 내 복구 실패 시 EngineFailed raise (공정 종료 카드에 사유 표시됨)
+
+    설계 의도:
+    - plc_service.py가 백그라운드에서 이미 reconnect 중이므로 여기선 '기다리기'만 함
+    - 각 시도 간 0.5초 sleep (busy-loop 방지)
+    - 중간 알림은 보내지 않음. 최종 실패 시 EngineFailed → ProcessError → 공정 종료 카드
+    """
+    from process.engine import EngineFailed, EngineTimeout
+
+    t0 = time.monotonic()
+    last_exc: Optional[Exception] = None
+    attempts = 0
+
+    while True:
+        attempts += 1
+        try:
+            fn = getattr(engine, fn_name)
+            return fn(*args, **kwargs)
+        except (EngineTimeout, EngineFailed) as e:
+            last_exc = e
+            elapsed = time.monotonic() - t0
+            if elapsed >= reconnect_timeout_s:
+                # 최종 실패: 공정 종료 카드에 명확히 표시될 메시지로 재raise
+                raise EngineFailed(
+                    f"PLC:{fn_name}",
+                    (
+                        f"PLC 통신 복구 실패 "
+                        f"({reconnect_timeout_s:.0f}s 경과, {attempts}회 시도): "
+                        f"{last_exc!r}"
+                    ),
+                )
+            # 재시도 전 짧은 sleep — plc_service 백그라운드 reconnect 대기
+            time.sleep(0.5)
+
+
 # ------------------------------------------------------------
 # STM helper (material params / zero)
 # ------------------------------------------------------------
@@ -142,10 +190,18 @@ def _evap_apply_dac(engine, use_p1: bool, use_p2: bool, dac: int, *, tag: str, s
     """
     dac = int(max(0, dac))
     if use_p1:
-        engine._plc_write_reg("DAC_POWER_1", dac, tag=f"{tag}_CH1", silent=silent)
+        _plc_call_with_reconnect(
+            engine, "_plc_write_reg",
+            "DAC_POWER_1", dac, tag=f"{tag}_CH1", silent=silent,
+            reconnect_timeout_s=30.0,
+        )
         engine._last_dac_power_1 = dac
     if use_p2:
-        engine._plc_write_reg("DAC_POWER_2", dac, tag=f"{tag}_CH2", silent=silent)
+        _plc_call_with_reconnect(
+            engine, "_plc_write_reg",
+            "DAC_POWER_2", dac, tag=f"{tag}_CH2", silent=silent,
+            reconnect_timeout_s=30.0,
+        )
         engine._last_dac_power_2 = dac
 
 
@@ -879,7 +935,11 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
 
         if shutter_open:
             engine._emit_status(message="EVAP 종료: MAIN SHUTTER CLOSE", force=True)
-            engine._plc_write_coil("MAIN_SHUTTER_SW", False, tag=f"{tag}_SHUTTER_CLOSE")
+            _plc_call_with_reconnect(
+                engine, "_plc_write_coil",
+                "MAIN_SHUTTER_SW", False, tag=f"{tag}_SHUTTER_CLOSE",
+                reconnect_timeout_s=30.0,
+            )
             shutter_open = False
 
         engine._emit_status(message="EVAP 종료: DAC ramp down 시작 (100/sec)", force=True)
@@ -892,7 +952,11 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         # DAC 0 도달 후 STM 즉시 종료
         try:
             if engine.stm is not None:
-                engine._plc_write_coil("FTM_SW", False, tag=f"{tag}_FTM_OFF")
+                _plc_call_with_reconnect(
+                    engine, "_plc_write_coil",
+                    "FTM_SW", False, tag=f"{tag}_FTM_OFF",
+                    reconnect_timeout_s=30.0,
+                )
                 engine.stm.stop()
                 engine._emit_status(message="EVAP 종료: STM 종료 완료", force=True)
         except Exception:
@@ -911,7 +975,11 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
 
     try:
         # 초기 안전 상태
-        engine._plc_write_coil("MAIN_SHUTTER_SW", False, tag="EVAP_INIT_SHUTTER_CLOSE")
+        _plc_call_with_reconnect(
+            engine, "_plc_write_coil",
+            "MAIN_SHUTTER_SW", False, tag="EVAP_INIT_SHUTTER_CLOSE",
+            reconnect_timeout_s=30.0,
+        )
 
         # STM 연결 / material params
         _stm_wait_connected(engine, recipe, step, timeout_s=5.0)
@@ -1287,7 +1355,11 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         # Hold PI가 올바른 baseline에서 시작하도록 None으로 리셋
         filtered_rate = None
 
-        engine._plc_write_coil("MAIN_SHUTTER_SW", True, tag="EVAP_MAIN_SHUTTER_OPEN")
+        _plc_call_with_reconnect(
+            engine, "_plc_write_coil",
+            "MAIN_SHUTTER_SW", True, tag="EVAP_MAIN_SHUTTER_OPEN",
+            reconnect_timeout_s=30.0,
+        )
         shutter_open = True
 
         last_hold_control_m = 0.0

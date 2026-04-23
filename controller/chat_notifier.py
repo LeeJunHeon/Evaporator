@@ -257,7 +257,7 @@ class ChatNotifier(QObject):
             }
 
             self._post_card(
-                title=f"🟢 Evap 공정 시작: {process_name}",
+                title=f"Evap 공정 시작: {process_name}",
                 fields=fields,
                 status="INFO",
                 urgent=True,
@@ -310,7 +310,7 @@ class ChatNotifier(QObject):
                         pass
 
                 self._post_card(
-                    title=f"✅ Evap 공정 완료: {process_name}",
+                    title=f"Evap 공정 완료: {process_name}",
                     fields=fields,
                     status="SUCCESS",
                     urgent=True,
@@ -334,7 +334,7 @@ class ChatNotifier(QObject):
                     fields["마지막 DAC"] = str(last_dac)
 
                 self._post_card(
-                    title=f"❌ Evap 공정 실패: {process_name}",
+                    title=f"Evap 공정 실패: {process_name}",
                     fields=fields,
                     status="FAIL",
                     urgent=True,
@@ -348,7 +348,7 @@ class ChatNotifier(QObject):
     def notify_error(self, title: str, detail: str = "") -> None:
         try:
             self._post_card(
-                title=f"⚠️ {title}",
+                title=title,
                 subtitle=str(detail or ""),
                 status="FAIL",
                 urgent=True,

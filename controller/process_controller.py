@@ -818,6 +818,7 @@ class ProcessController(QObject):
             turbovac=self.turbovac,
             log=self.log,
             callbacks=None,
+            notifier=self._notifier,
         )
 
     def _is_plc_ready(self) -> bool:

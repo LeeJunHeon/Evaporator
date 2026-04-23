@@ -130,6 +130,7 @@ class ProcessEngine:
         callbacks: Optional[EngineCallbacks] = None,
         plc_cmd_timeout_s: float = 2.0,
         status_emit_interval_s: float = 0.2,
+        notifier: Optional[Any] = None,
     ):
         self.plc = plc
         self.stm = stm
@@ -138,6 +139,7 @@ class ProcessEngine:
         self.log = log
 
         self.callbacks = callbacks or EngineCallbacks()
+        self._notifier = notifier
 
         self._plc_cmd_timeout_s = max(0.2, float(plc_cmd_timeout_s))
         self._status_emit_interval_s = max(0.05, float(status_emit_interval_s))
@@ -496,13 +498,53 @@ class ProcessEngine:
 
         실패해도 예외는 삼키고 계속 진행(best-effort)한다.
         """
+        # PLC 미연결 감지 시: 재연결 대기 후 재시도. 최종 실패해도 포기하지 말고
+        # best-effort로 steps 실행 계속 진행 (PLC 복구되면 일부라도 전달 성공 가능).
+        PLC_SHUTDOWN_RECONNECT_TIMEOUT_S = 30.0
         if not self._is_plc_ready():
             self._log_warn(
-                f"[SAFETY:{tag}] PLC 미연결 상태라 안전 출력 시퀀스를 실제로 전달할 수 없습니다.",
+                f"[SAFETY:{tag}] PLC 미연결 감지 — 재연결 대기 시작 "
+                f"(최대 {PLC_SHUTDOWN_RECONNECT_TIMEOUT_S:.0f}s)",
                 tag="ENGINE",
                 also_ui=True,
             )
-            return
+
+            deadline = time.monotonic() + PLC_SHUTDOWN_RECONNECT_TIMEOUT_S
+            while time.monotonic() < deadline:
+                if self._is_plc_ready():
+                    self._log_warn(
+                        f"[SAFETY:{tag}] PLC 재연결 성공 — 안전 종료 재개",
+                        tag="ENGINE",
+                        also_ui=True,
+                    )
+                    break
+                time.sleep(0.5)
+
+            if not self._is_plc_ready():
+                # 🚨 최종 복구 실패 — 긴급 Google Chat 알림 1회 송신
+                try:
+                    if self._notifier is not None:
+                        self._notifier.notify_error(
+                            title="🚨 PLC 복구 실패 — 파워 차단 불확실",
+                            detail=(
+                                f"Safe shutdown 중 PLC 통신 "
+                                f"{PLC_SHUTDOWN_RECONNECT_TIMEOUT_S:.0f}초 두절. "
+                                f"안전 명령 시도는 계속 진행되나 성공 여부 불확실. "
+                                f"장비 수동 확인 권장. "
+                                f"Tag: {tag}, 시각: "
+                                f"{time.strftime('%Y-%m-%d %H:%M:%S')}"
+                            ),
+                        )
+                except Exception:
+                    pass
+
+                self._log_error(
+                    f"[SAFETY:{tag}] 🚨 PLC 복구 실패 — best-effort로 명령 시도 계속 진행",
+                    tag="ENGINE",
+                    also_ui=True,
+                )
+                # 주의: return 하지 않음. 아래 for 루프가 각 step을 try/except로 감싸므로
+                # 중간에 PLC가 살아나면 나머지 명령은 성공할 수 있음.
 
         try:
             if mode is None:

@@ -23,7 +23,7 @@
   "hold_max_dac_delta": 20,
   "rate_abort_ratio": 0.3,
   "rate_abort_sec": 15.0,
-  "sensor_none_abort_s": 5.0,
+  "sensor_none_abort_s": 15.0,
   "adc_none_abort_s": 5.0,
   "pre_hold_entry_ratio": 3.0,
   "pre_hold_entry_sec": 15.0,

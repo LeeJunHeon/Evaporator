@@ -37,6 +37,7 @@ from services.plc_service import PLCService, _COIL_LABEL
 from services.log_service import LogService
 
 from controller.process_worker import ProcessWorker
+from controller.chat_notifier import ChatNotifier
 
 _UNSET = object()
 
@@ -109,6 +110,13 @@ class ProcessController(QObject):
             self._rebind_acs_device(acs, emit_log=False)
         except Exception:
             pass
+
+        # Google Chat 알림 (실패해도 공정에 영향 없게 best-effort)
+        try:
+            self._notifier = ChatNotifier(parent=self)
+            self._notifier.start()
+        except Exception:
+            self._notifier = None
 
     def _signal_bind_key(self, obj: Any, signal_name: str, slot: Any) -> tuple[int, str, int]:
         return (id(obj), signal_name, id(slot))
@@ -756,6 +764,14 @@ class ProcessController(QObject):
         if hasattr(self.plc, "set_process_logging"):
             self.plc.set_process_logging(True)
 
+        # Google Chat: 공정 시작 알림 (실패해도 공정 흐름에 영향 없음)
+        try:
+            if self._notifier is not None and r is not None:
+                params = self._extract_notifier_params_from_recipe(r)
+                self._notifier.notify_process_started(params)
+        except Exception:
+            pass
+
         # start/preflight UI 흐름은 ProcessWindow가 담당한다.
         w.start()
 
@@ -870,7 +886,73 @@ class ProcessController(QObject):
         엔진 실행 결과 수신.
         - finished status/log/run close는 ProcessWindow가 담당한다.
         """
+        # Google Chat: 공정 종료 알림 (실패해도 공정 흐름에 영향 없음)
+        try:
+            if self._notifier is not None:
+                detail = self._build_finish_detail_from_result(result)
+                self._notifier.notify_process_finished_detail(
+                    ok=bool(result.ok), detail=detail
+                )
+        except Exception:
+            pass
+
         self.sig_finished.emit(result)
+
+    def _extract_notifier_params_from_recipe(self, recipe: ProcessRecipe) -> dict:
+        """Recipe.meta 에서 Google Chat 알림용 파라미터 추출."""
+        params: dict = {}
+        meta = getattr(recipe, "meta", None) or {}
+        if isinstance(meta, dict):
+            for key in (
+                "process_name",
+                "recipe_name",
+                "material_name",
+                "target_rate",
+                "target_thickness",
+                "delay_min",
+                "use_power1",
+                "use_power2",
+            ):
+                if key in meta:
+                    params[key] = meta[key]
+
+        if "process_name" not in params:
+            name = getattr(recipe, "recipe_name", None)
+            if name:
+                params["process_name"] = name
+
+        return params
+
+    def _build_finish_detail_from_result(self, result: EngineResult) -> dict:
+        """EngineResult 에서 알림 payload 에 담을 detail 구성."""
+        detail: dict = {
+            "recipe_name": getattr(result, "recipe_name", ""),
+        }
+        try:
+            started = float(getattr(result, "started_ts", 0.0) or 0.0)
+            finished = float(getattr(result, "finished_ts", 0.0) or 0.0)
+            detail["elapsed_sec"] = max(0.0, finished - started)
+        except Exception:
+            pass
+
+        err = getattr(result, "error", None)
+        if err is not None:
+            message = str(getattr(err, "message", "") or "")
+            where = str(getattr(err, "where", "") or "")
+            if not message:
+                message = str(getattr(err, "exception_repr", "") or repr(err))
+            detail["error_message"] = message
+            detail["phase"] = where
+            detail["errors"] = [message] if message else []
+        return detail
+
+    def shutdown_notifier(self) -> None:
+        """프로그램 종료 시 호출(main.py closeEvent/aboutToQuit 등)."""
+        try:
+            if self._notifier is not None:
+                self._notifier.shutdown()
+        except Exception:
+            pass
 
     def _on_worker_finished(self) -> None:
         """

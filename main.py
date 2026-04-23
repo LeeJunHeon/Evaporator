@@ -237,6 +237,14 @@ def main():
             except Exception:
                 pass
 
+            # 1-b) Google Chat notifier flush (best-effort, 실패해도 종료 흐름 방해 없음)
+            try:
+                shutdown_fn = getattr(process_controller, "shutdown_notifier", None)
+                if callable(shutdown_fn):
+                    shutdown_fn()
+            except Exception:
+                pass
+
         # run 파일 open/close는 ProcessWindow가 담당한다.
 
         # 2-a) ACS 스트림 먼저 종료 (장비에 명시적으로 CON 스트림 종료 명령 전달)

@@ -1243,6 +1243,9 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
                     except Exception:
                         ph_control_delta = 0
 
+                    # Pre-Hold 단방향 감쇠: DAC 증가 금지 (Al 소진 등으로 rate=0 시 소스 과열 방어)
+                    if ph_control_delta > 0:
+                        ph_control_delta = 0
                     if ph_control_delta != 0 and ph_control_delta > 0 and adc_total >= adc_max:
                         ph_control_delta = 0
                     if ph_control_delta != 0:

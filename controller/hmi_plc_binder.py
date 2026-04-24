@@ -872,7 +872,7 @@ class HmiPlcBinder(QObject):
         self._set_hmi_log(str(msg))
 
     def _check_tmp_temp_alert(self, snap: Dict[str, Any]) -> None:
-        """TMP 모터 온도 50°C 이상이면 Google Chat 알림 전송 (5분 쿨다운)."""
+        """TMP 모터 온도 55°C 이상이면 Google Chat 알림 전송 (5분 쿨다운)."""
         try:
             if not snap.get("connected", False):
                 return
@@ -880,7 +880,7 @@ class HmiPlcBinder(QObject):
             if motor_temp is None:
                 return
 
-            threshold = 50.0
+            threshold = 55.0
             now = time.time()
 
             if float(motor_temp) >= threshold:

@@ -205,6 +205,7 @@ class _CmdReload:
 class _CmdApplyMaterialParams:
     density_g_cm3: float
     z_factor: float
+    tooling_factor: float
     film_no: Optional[int]
     do_zero_thickness: bool
     future: Future
@@ -303,6 +304,7 @@ class STMServiceWorker(QThread):
         *,
         density_g_cm3: float,
         z_factor: float,
+        tooling_factor: float = 100.0,
         film_no: Optional[int] = None,
         do_zero_thickness: bool = False,
     ) -> Future:
@@ -312,6 +314,7 @@ class STMServiceWorker(QThread):
                 _CmdApplyMaterialParams(
                     density_g_cm3=float(density_g_cm3),
                     z_factor=float(z_factor),
+                    tooling_factor=float(tooling_factor),
                     film_no=film_no,
                     do_zero_thickness=bool(do_zero_thickness),
                     future=fut,
@@ -561,6 +564,7 @@ class STMServiceWorker(QThread):
                     self._stm.apply_material_params(
                         density_g_cm3=float(cmd.density_g_cm3),
                         z_factor=float(cmd.z_factor),
+                        tooling_factor=float(cmd.tooling_factor),
                         film_no=cmd.film_no,
                         do_zero_thickness=bool(cmd.do_zero_thickness),
                     )
@@ -885,6 +889,7 @@ class STMService(QObject):
         *,
         density_g_cm3: float,
         z_factor: float,
+        tooling_factor: float = 100.0,
         film_no: Optional[int] = None,
         do_zero_thickness: bool = False,
     ) -> Future:
@@ -895,6 +900,7 @@ class STMService(QObject):
         return self._worker.request_apply_material_params(
             density_g_cm3=density_g_cm3,
             z_factor=z_factor,
+            tooling_factor=tooling_factor,
             film_no=film_no,
             do_zero_thickness=do_zero_thickness,
         )

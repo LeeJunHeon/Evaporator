@@ -729,6 +729,7 @@ class STM100(BaseSerialDevice):
         *,
         density_g_cm3: float,
         z_factor: float,
+        tooling_factor: float = 100.0,
         film_no: int | None = None,
         do_zero_thickness: bool = False,
         # ✅ 추가: 입력 후 READ-BACK 검증
@@ -760,6 +761,7 @@ class STM100(BaseSerialDevice):
                 # ✅ 네 공정 흐름은 여기로 들어옴(필름 번호 신경 X)
                 self.set_density(den_sent)
                 self.set_z_factor(z_sent)
+                self.set_tooling(float(tooling_factor))
             else:
                 # (호환 유지: 외부에서 film_no를 쓰는 경우도 대비)
                 self.set_film_density(film_no, den_sent)
@@ -776,14 +778,17 @@ class STM100(BaseSerialDevice):
                 if film_no is None:
                     den_got = float(self.get_density())   # E?
                     z_got   = float(self.get_z_factor())  # F?
+                    tooling_got = float(self.get_tooling())
+
                 else:
                     den_got = float(self.get_film_density(film_no))  # jN?
                     z_got   = float(self.get_film_z_factor(film_no)) # kN?
 
                 ok_den = abs(den_got - den_sent) <= float(tol_density)
                 ok_z   = abs(z_got   - z_sent)   <= float(tol_z)
+                ok_tooling = abs(tooling_got - float(tooling_factor)) <= 0.2
 
-                if not (ok_den and ok_z):
+                if not (ok_den and ok_z and ok_tooling):
                     # 불일치 → 재시도 기회가 남아있으면 1회 더 SET→VERIFY
                     if attempt < retries:
                         continue
@@ -793,6 +798,7 @@ class STM100(BaseSerialDevice):
                         f"film_no={film_no} | "
                         f"density got={den_got} sent={den_sent} tol={tol_density} | "
                         f"z got={z_got} sent={z_sent} tol={tol_z}"
+                        f"tooling got={tooling_got} sent={tooling_factor} tol=0.2"
                     )
 
             # 성공

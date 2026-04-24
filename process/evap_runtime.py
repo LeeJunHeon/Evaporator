@@ -148,19 +148,12 @@ def _stm_apply_material_params(
     fut = engine.stm.submit_apply_material_params(
         density_g_cm3=float(density_g_cm3),
         z_factor=float(z_factor),
+        tooling_factor=float(tooling_pct),
         film_no=None,
         do_zero_thickness=False,
     )
     engine._wait_future(fut, timeout_s=5.0, where=f"{step.name}/STM_APPLY", msg="STM film params 적용 실패")
-    # Tooling Factor 설정 (J= 명령)
-    if tooling_pct >= 10.0 and engine.stm is not None:
-        try:
-            stm_dev = getattr(engine.stm, "device", None) or getattr(engine.stm, "_device", None)
-            if stm_dev is not None and hasattr(stm_dev, "set_tooling"):
-                stm_dev.set_tooling(tooling_pct)
-                engine._log_info(f"[STM] Tooling Factor 설정: {tooling_pct:.1f}%")
-        except Exception as _e:
-            engine._log_warn(f"[STM] Tooling Factor 설정 실패 (무시): {_e}")
+
     engine._tele_event(
         event="STM_APPLY",
         target="FILM_PARAM",

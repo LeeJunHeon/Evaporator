@@ -5,7 +5,7 @@
       "material": "Al",
       "density_g_cm3": 2.7,
       "z_factor": 1.08,
-      "tooling_factor": 100.0,
+      "tooling_factor": 294.0,
       "note": "INFICON 매뉴얼의 주석: 재료에 대한 Z-ratio가 라이브러리에 없으면 1.000을 기본값으로 넣어라고 돼 있어서 Ge는 1.000으로 썼습니다. 실제로는 Ge의 음향 임피던스 값을 알면 8.83으로 나눠서 더 정확하게 넣을 수 있습니다."
     },
     {

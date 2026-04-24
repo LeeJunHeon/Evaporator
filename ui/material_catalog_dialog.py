@@ -335,12 +335,19 @@ class MaterialCatalogDialog(QDialog):
             if zfac <= 0:
                 _fail(r, 2, f"{r+1}행(Z factor): 0보다 커야 합니다.")
                 return None
+            
+            tooling = _parse_float_cell(r, 3, "Tooling", 100.0, allow_blank_default=True)
+            if not (10.0 <= tooling <= 399.0):
+                _fail(r, 3, f"{r+1}행(Tooling): 범위는 10.0~399.0% 입니다. (입력값: {tooling})")
+                return None
+
 
             mats.append(
                 MaterialRow(
                     material=material,
                     density_g_cm3=density,
                     z_factor=zfac,
+                    tooling_factor=tooling,
                     note=row_note(r),
                 )
             )

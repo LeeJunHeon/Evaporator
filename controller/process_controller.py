@@ -430,6 +430,7 @@ class ProcessController(QObject):
 
         target_thickness = self._to_float(run_cfg.get("target_thickness", 0.0), "target_thickness")
         delay_min = self._to_float(run_cfg.get("delay_min", 0.0), "delay_min")
+        tooling_factor = self._to_float(run_cfg.get("tooling_factor", 100.0), "tooling_factor")
 
         # target_thickness=0이면 두께 도달 조건 없이 Stop 버튼으로만 종료
         # (recipe 불러오기 경로에서 thickness 미입력 시 0으로 전달됨)
@@ -445,6 +446,7 @@ class ProcessController(QObject):
             "target_rate": target_rate,
             "target_thickness": target_thickness,
             "delay_min": delay_min,
+            "tooling_factor": tooling_factor,
         }
     
     def _build_process_config_from_run_cfg(self, run_cfg: dict[str, Any]) -> dict[str, Any]:
@@ -573,6 +575,7 @@ class ProcessController(QObject):
             "target_rate": material_cfg["target_rate"],
             "target_thickness": material_cfg["target_thickness"],
             "delay_min": material_cfg["delay_min"],
+            "tooling_factor": material_cfg.get("tooling_factor", 100.0),
 
             # 핵심: 공정 제어 파라미터는 exact schema로 nested 전달
             "process_config": self._copy_exact_process_config(process_config),

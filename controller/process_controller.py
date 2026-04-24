@@ -948,6 +948,11 @@ class ProcessController(QObject):
             detail["error_message"] = message
             detail["phase"] = where
             detail["errors"] = [message] if message else []
+
+        # ok=False이고 error가 없으면 사용자가 Stop 버튼을 눌러 중지한 것
+        if not getattr(result, "ok", True) and err is None:
+            detail["is_user_stop"] = True
+
         return detail
 
     def shutdown_notifier(self) -> None:

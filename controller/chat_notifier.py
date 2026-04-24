@@ -238,6 +238,7 @@ class ChatNotifier(QObject):
             material_name = str(params.get("material_name", "") or "-")
             target_rate = params.get("target_rate")
             target_thickness = params.get("target_thickness")
+            target_thickness_nm = (float(target_thickness) / 10.0) if target_thickness is not None else None
             delay_min = params.get("delay_min")
             use_power1 = bool(params.get("use_power1", False))
             use_power2 = bool(params.get("use_power2", False))
@@ -251,7 +252,7 @@ class ChatNotifier(QObject):
             fields = {
                 "물질": material_name,
                 "Target Rate": _fmt_num(target_rate, "{:.2f} Å/s"),
-                "Target 두께": _fmt_num(target_thickness, "{:.1f} nm"),
+                "Target 두께": _fmt_num(target_thickness_nm, "{:.1f} nm"),   # ← /10 변환 후 전달
                 "Shutter Delay": _fmt_num(delay_min, "{:.1f} 분"),
                 "Power 채널": "P1" if use_power1 else ("P2" if use_power2 else "-"),
             }
@@ -283,6 +284,7 @@ class ChatNotifier(QObject):
             )
             material_name = str(merged.get("material_name", "") or "-")
             target_thickness = merged.get("target_thickness")
+            target_thickness_nm = (float(target_thickness) / 10.0) if target_thickness is not None else None
 
             def _fmt_num(v, fmt):
                 try:
@@ -293,7 +295,7 @@ class ChatNotifier(QObject):
             if ok:
                 fields: Dict[str, Any] = {
                     "물질": material_name,
-                    "Target 두께": _fmt_num(target_thickness, "{:.1f} nm"),
+                    "Target 두께": _fmt_num(target_thickness_nm, "{:.1f} nm"),   # ← /10 변환 후 전달
                 }
                 sw = detail.get("final_sw_thickness_nm")
                 if sw is not None:
@@ -316,6 +318,7 @@ class ChatNotifier(QObject):
                     urgent=True,
                 )
             else:
+                is_user_stop = bool(detail.get("is_user_stop", False))
                 errors = detail.get("errors") or []
                 fail_phase = detail.get("phase") or detail.get("error_phase") or "-"
                 fail_reason = (
@@ -324,21 +327,33 @@ class ChatNotifier(QObject):
                     or "알 수 없는 오류"
                 )
 
-                fields = {
-                    "물질": material_name,
-                    "실패 단계": str(fail_phase),
-                    "실패 원인": str(fail_reason),
-                }
-                last_dac = detail.get("last_dac")
-                if last_dac is not None:
-                    fields["마지막 DAC"] = str(last_dac)
+                if is_user_stop:
+                    fields = {
+                        "물질": material_name,
+                        "중지": "사용자가 Stop 버튼을 눌러 중지했습니다.",
+                    }
+                    self._post_card(
+                        title=f"Evap 공정 중지: {process_name}",
+                        fields=fields,
+                        status="INFO",
+                        urgent=True,
+                    )
+                else:
+                    fields = {
+                        "물질": material_name,
+                        "실패 단계": str(fail_phase),
+                        "실패 원인": str(fail_reason),
+                    }
+                    last_dac = detail.get("last_dac")
+                    if last_dac is not None:
+                        fields["마지막 DAC"] = str(last_dac)
 
-                self._post_card(
-                    title=f"Evap 공정 실패: {process_name}",
-                    fields=fields,
-                    status="FAIL",
-                    urgent=True,
-                )
+                    self._post_card(
+                        title=f"Evap 공정 실패: {process_name}",
+                        fields=fields,
+                        status="FAIL",
+                        urgent=True,
+                    )
 
             self._finished_sent = True
             self.flush()

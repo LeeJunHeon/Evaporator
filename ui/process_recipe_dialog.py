@@ -80,6 +80,7 @@ class ProcessRecipeDialog(QDialog):
             "step_count": 1,
             "ramp_steps": [self._default_step()],
             "dac_max": 4000,
+            "adc_max": 200,  
             "rate_tol_ratio": 0.05,
             "rate_stable_sec": 3.0,
             "hold_control_interval_s": 1.0,
@@ -87,6 +88,7 @@ class ProcessRecipeDialog(QDialog):
             "hold_control_mode": "PID",
             "hold_pi_kp": 50.0,
             "hold_pi_ki": 8.0,
+            "hold_pi_kd": 0.0,
             "hold_integral_limit": 2.5,
             "rate_filter_alpha": 0.35,
             "rate_jump_guard_ratio": 0.50,
@@ -96,6 +98,17 @@ class ProcessRecipeDialog(QDialog):
             "rate_abort_sec": 5.0,
             "sensor_none_abort_s": 5.0,
             "adc_none_abort_s": 5.0,
+            "spike_abort_ratio": 3.0,
+            "spike_grace_s": 5.0,
+            "ramp_spike_pct": 100.0,
+            "ramp_spike_abort_sec": 10.0,
+            "ramp_spike_abort_ratio": 10.0,
+            "spike_dac_hold_threshold": 0.3,
+            "spike_dac_hold_sec": 10.0,
+            "pre_hold_entry_ratio": 2.0,
+            "pre_hold_entry_sec": 5.0,
+            "pre_hold_ready_ratio": 0.3,
+            "pre_hold_timeout_sec": 180.0,
         }
 
     def _normalize_config(self, cfg: dict[str, Any]) -> dict[str, Any]:
@@ -187,6 +200,19 @@ class ProcessRecipeDialog(QDialog):
             "rate_abort_sec": _as_float("rate_abort_sec", 5.0, 0.0),
             "sensor_none_abort_s": _as_float("sensor_none_abort_s", 5.0, 0.0),
             "adc_none_abort_s": _as_float("adc_none_abort_s", 5.0, 0.0),
+            "adc_max": _as_int("adc_max", 200, 1),
+            "hold_pi_kd": _as_float("hold_pi_kd", 0.0, 0.0),
+            "spike_abort_ratio": _as_float("spike_abort_ratio", 3.0, 1.0),
+            "spike_grace_s": _as_float("spike_grace_s", 5.0, 0.0),
+            "ramp_spike_pct": _as_float("ramp_spike_pct", 100.0, 10.0),
+            "ramp_spike_abort_sec": _as_float("ramp_spike_abort_sec", 10.0, 1.0),
+            "ramp_spike_abort_ratio": _as_float("ramp_spike_abort_ratio", 10.0, 1.0),
+            "spike_dac_hold_threshold": _as_float("spike_dac_hold_threshold", 0.3, 0.0),
+            "spike_dac_hold_sec": _as_float("spike_dac_hold_sec", 10.0, 0.0),
+            "pre_hold_entry_ratio": _as_float("pre_hold_entry_ratio", 2.0, 1.0),
+            "pre_hold_entry_sec": _as_float("pre_hold_entry_sec", 5.0, 0.0),
+            "pre_hold_ready_ratio": _as_float("pre_hold_ready_ratio", 0.3, 0.01, 1.0),
+            "pre_hold_timeout_sec": _as_float("pre_hold_timeout_sec", 180.0, 0.0),
         }
 
     def _build_ui(self) -> None:

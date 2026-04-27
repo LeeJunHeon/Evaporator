@@ -554,6 +554,13 @@ class ProcessController(QObject):
             "spike_grace_s": _optional_float("spike_grace_s", 5.0, 0.0),
             "ramp_spike_pct": _optional_float("ramp_spike_pct", 100.0, 10.0),
             "ramp_spike_abort_sec": _optional_float("ramp_spike_abort_sec", 10.0, 1.0),
+            "ramp_spike_abort_ratio": _optional_float("ramp_spike_abort_ratio", 10.0, 1.0),
+            "spike_dac_hold_threshold": _optional_float("spike_dac_hold_threshold", 0.3, 0.0),
+            "spike_dac_hold_sec": _optional_float("spike_dac_hold_sec", 10.0, 0.0),
+            "pre_hold_entry_ratio": _optional_float("pre_hold_entry_ratio", 2.0, 1.0),
+            "pre_hold_entry_sec": _optional_float("pre_hold_entry_sec", 5.0, 0.0),
+            "pre_hold_ready_ratio": _optional_float("pre_hold_ready_ratio", 0.3, 0.01, 1.0),
+            "pre_hold_timeout_sec": _optional_float("pre_hold_timeout_sec", 180.0, 0.0),
         })
 
         return cfg
@@ -607,6 +614,13 @@ class ProcessController(QObject):
             "spike_grace_s": process_config.get("spike_grace_s", 5.0),
             "ramp_spike_pct": process_config.get("ramp_spike_pct", 100.0),
             "ramp_spike_abort_sec": process_config.get("ramp_spike_abort_sec", 10.0),
+            "ramp_spike_abort_ratio": process_config.get("ramp_spike_abort_ratio", 10.0),
+            "spike_dac_hold_threshold": process_config.get("spike_dac_hold_threshold", 0.3),
+            "spike_dac_hold_sec": process_config.get("spike_dac_hold_sec", 10.0),
+            "pre_hold_entry_ratio": process_config.get("pre_hold_entry_ratio", 2.0),
+            "pre_hold_entry_sec": process_config.get("pre_hold_entry_sec", 5.0),
+            "pre_hold_ready_ratio": process_config.get("pre_hold_ready_ratio", 0.3),
+            "pre_hold_timeout_sec": process_config.get("pre_hold_timeout_sec", 180.0),
         }
 
     def _build_evap_steps(

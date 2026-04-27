@@ -335,7 +335,7 @@ class ChatNotifier(QObject):
                     self._post_card(
                         title=f"Evap 공정 중지: {process_name}",
                         fields=fields,
-                        status="INFO",
+                        status="FAIL",
                         urgent=True,
                     )
                 else:

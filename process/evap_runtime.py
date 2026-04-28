@@ -1073,6 +1073,14 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         _adc_filtered_state["value"] = filtered
         return float(filtered) if filtered is not None else raw
 
+    def _reset_adc_filter() -> None:
+        """
+        ADC EMA 필터 상태를 초기화한다.
+        모드 전환 시점(shutter open 등 측정 baseline이 바뀌는 순간)에 호출하여
+        직전 mode의 누적 값이 새 mode에 영향 미치지 않도록 한다.
+        """
+        _adc_filtered_state["value"] = None
+
     def _update_rate_stable_state(
         rt: float,
         stable_start_ts: Optional[float],
@@ -1541,27 +1549,27 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
                 target_rate=target_rate,
             )
 
-        # shutter delay 완료 후 STM Zero — delay 중 증착된 두께를 리셋
-        engine._emit_status(message="EVAP HOLD 진입: STM ZERO", force=True)
+        # shutter delay 완료 → 메인 셔터 오픈과 STM Zero를 거의 동시에 수행
+        # 핵심: STM 두께 0 reset과 실제 증착 시작 시점을 일치시켜 두께 측정 정확도 확보
+        engine._emit_status(message="EVAP HOLD 진입: MAIN SHUTTER OPEN + STM ZERO", force=True)
         zero_mode = str(meta.get("zero_mode", "B") or "B")
-        _stm_zero_thickness(engine, recipe, step, mode=zero_mode)
 
-        # STM Zero 후 IIR 필터 오염값(스파이크 등) 제거
-        # Hold PI가 올바른 baseline에서 시작하도록 None으로 리셋
-        filtered_rate = None
-
-        # ✅ STM Zero 직후 N초간 PID 입력 무시 (rate spike 방어)
-        stm_zero_grace_until_m = time.monotonic() + stm_zero_grace_s
-        
-        # ✅ ADC 필터도 모드 전환이라 초기화
-        _reset_adc_filter()
-
+        # 1) 먼저 메인 셔터 ON 명령 enqueue (PLC 처리는 ~100ms 소요)
         _plc_call_with_reconnect(
             engine, "_plc_write_coil",
             "MAIN_SHUTTER_SW", True, tag="EVAP_MAIN_SHUTTER_OPEN",
             reconnect_timeout_s=30.0,
         )
         shutter_open = True
+
+        # 2) 즉시 STM Zero 호출 (셔터 오픈 직후, 시간 차 최소화)
+        # 이 사이의 짧은 시간(~100ms) 동안 증착되는 0.05nm는 STM 분해능 이하로 무시 가능
+        _stm_zero_thickness(engine, recipe, step, mode=zero_mode)
+
+        # 3) Hold 진입 baseline 정리
+        filtered_rate = None
+        _reset_adc_filter()
+        stm_zero_grace_until_m = time.monotonic() + stm_zero_grace_s
 
         last_hold_control_m = 0.0
         spike_dac_hold_start_ts: Optional[float] = None  # 스파이크 감지 시각
@@ -1673,7 +1681,7 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
             now_m = time.monotonic()
             # ✅ STM Zero grace 기간 체크 추가
             in_stm_zero_grace = (now_m < stm_zero_grace_until_m)
-            if (not _spike_dac_hold_active) and (now_m - last_hold_control_m) >= hold_control_interval_s:
+            if (not _spike_dac_hold_active) and (not in_stm_zero_grace) and (now_m - last_hold_control_m) >= hold_control_interval_s:
                 control_delta = 0
                 control_error: Optional[float] = None
                 control_mode_used = hold_control_mode

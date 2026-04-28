@@ -467,7 +467,6 @@ class Turbovac(BaseSerialDevice):
         with self._lock:
             ser = self._require()
             ser.reset_input_buffer()
-            ser.reset_output_buffer()
             ser.write(frame)
             ser.flush()
             rx = self._read_frame(timeout_s=timeout_s)

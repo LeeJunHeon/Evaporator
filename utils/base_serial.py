@@ -108,4 +108,6 @@ class BaseSerialDevice:
                 chunk = ser.read(n - len(buf))
                 if chunk:
                     buf += chunk
+                else:
+                    time.sleep(0.002)   # 데이터 없으면 2ms 대기
             return bytes(buf)

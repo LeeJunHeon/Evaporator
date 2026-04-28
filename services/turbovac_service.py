@@ -66,7 +66,7 @@ class TurbovacService(QObject):
 
         # poll/read 실패 관리
         self._poll_fail_count: int = 0
-        self._poll_fail_threshold: int = 3
+        self._poll_fail_threshold: int = 5
         self._last_good_snapshot_ts: float = 0.0
 
         # reconnect backoff 관리

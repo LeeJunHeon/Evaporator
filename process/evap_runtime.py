@@ -259,6 +259,35 @@ def _filter_hold_rate(
     return filtered, True, jump_clamped
 
 
+def _filter_adc(
+    raw_adc: Optional[float],
+    prev_filtered: Optional[float],
+    *,
+    alpha: float,
+) -> Optional[float]:
+    """
+    ADC 값에 EMA(지수이동평균) 필터 적용.
+    PLC raw ADC 값이 ±10 정도 흔들리는 노이즈 억제용.
+    
+    - alpha: EMA 계수 (0.0~1.0). 작을수록 더 부드럽게 (느린 응답).
+             default 0.3 → 5초 응답시간 (sample 1초 기준)
+    - prev_filtered: 직전 filtered 값. None이면 raw_adc를 그대로 반환 (초기화).
+    - raw_adc: PLC에서 읽은 raw ADC 값. None이면 prev_filtered 반환.
+    
+    return: filtered ADC 값 (None 가능)
+    """
+    if raw_adc is None:
+        return prev_filtered
+    
+    sample = float(raw_adc)
+    
+    if prev_filtered is None:
+        return sample  # 초기화: 첫 sample을 그대로 baseline으로
+    
+    a = min(1.0, max(0.01, float(alpha)))
+    return float(prev_filtered) + a * (sample - float(prev_filtered))
+
+
 def _compute_hold_pi_delta(
     *,
     current_dac: int,
@@ -599,6 +628,16 @@ def _load_runtime_process_config(meta: dict, *, step_name: str) -> dict:
     rate_jump_guard_ratio = float(process_config.get("rate_jump_guard_ratio", 0.50) or 0.50)
     rate_jump_guard_abs = float(process_config.get("rate_jump_guard_abs", 0.15) or 0.15)
 
+    # ✅ ADC EMA 필터 (PLC ADC 노이즈 억제용)
+    adc_filter_alpha = float(process_config.get("adc_filter_alpha", 0.3) or 0.3)
+    if not (0.0 < adc_filter_alpha <= 1.0):
+        adc_filter_alpha = 0.3
+    
+    # ✅ STM Zero 직후 PID grace 기간 (rate spike 무시)
+    stm_zero_grace_s = float(process_config.get("stm_zero_grace_s", 2.0) or 2.0)
+    if stm_zero_grace_s < 0.0:
+        stm_zero_grace_s = 2.0
+
     pre_hold_entry_ratio = float(process_config.get("pre_hold_entry_ratio", 2.0) or 2.0)
     if pre_hold_entry_ratio < 1.0:
         pre_hold_entry_ratio = 2.0
@@ -670,6 +709,8 @@ def _load_runtime_process_config(meta: dict, *, step_name: str) -> dict:
         "pre_hold_entry_sec": pre_hold_entry_sec,
         "pre_hold_ready_ratio": pre_hold_ready_ratio,
         "pre_hold_timeout_sec": pre_hold_timeout_sec,
+        "adc_filter_alpha": adc_filter_alpha,         
+        "stm_zero_grace_s": stm_zero_grace_s,          
     }
 
 def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep) -> None:
@@ -756,6 +797,8 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
     pre_hold_entry_sec = float(proc_cfg.get("pre_hold_entry_sec", 5.0) or 5.0)
     pre_hold_ready_ratio = float(proc_cfg.get("pre_hold_ready_ratio", 0.3) or 0.3)
     pre_hold_timeout_sec = float(proc_cfg.get("pre_hold_timeout_sec", 180.0) or 180.0)
+    adc_filter_alpha = float(proc_cfg.get("adc_filter_alpha", 0.3) or 0.3)              # ✅
+    stm_zero_grace_s = float(proc_cfg.get("stm_zero_grace_s", 2.0) or 2.0)  
 
     dac = 0
     shutter_open = False
@@ -826,6 +869,143 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
 
         engine._emit_status(message=f"[남은 00:00] {label} 완료", force=True)
 
+    def _run_shutter_delay_with_pid(
+        delay_s: float,
+        dac: int,
+        target_rate: float,
+    ) -> int:
+        """
+        Shutter delay 동안 Hold 방식 PID로 rate 능동 유지.
+        
+        - Hold 단계 PID와 동일 알고리즘 (양방향 보정)
+        - 종료 조건: 시간 만료 (delay_s 경과)
+        - 두께 누적 안 함 (메인 셔터 닫혀있어 실제 증착 없음)
+        - rate_abort/spike_abort 체크 그대로 적용 (소스 보호)
+        - DAC 변경은 hold_max_dac_delta로 제한 (한 사이클 변동 ≤ 20)
+        
+        Returns:
+            int: 종료 시점의 DAC 값 (hold 루프가 이어받음)
+        """
+        sd_start_m = time.monotonic()
+        sd_deadline_m = sd_start_m + float(delay_s)
+        sd_last_control_m = 0.0
+        sd_integral = 0.0
+        sd_prev_error_ratio: float = 0.0
+        sd_filtered_rate: Optional[float] = None
+        sd_windup_clamp: bool = False
+        sd_rate_abort_start_ts: Optional[float] = None
+        sd_next_ui_m = sd_start_m
+        
+        engine._tele_event(
+            event="SHUTTER_DELAY_PID_MODE",
+            target="MODE",
+            value=hold_control_mode,
+            detail=(
+                f"delay_s={delay_s:.1f}, target_rate={target_rate:.3f}, "
+                f"kp={hold_pi_kp:.3f}, ki={hold_pi_ki:.3f}, "
+                f"max_delta={hold_max_dac_delta}"
+            ),
+        )
+        
+        while True:
+            engine._check_stop(recipe, step)
+            engine._tick_emit(recipe, step)
+            
+            now_m = time.monotonic()
+            remain_s = sd_deadline_m - now_m
+            if remain_s <= 0:
+                break
+            
+            rt = _read_rate_or_abort(where="shutter_delay")
+            adc_total = _read_adc_filtered(where="shutter_delay")  # ✅ 필터됨
+            
+            # rate filter
+            jump_guard_abs = max(rate_jump_guard_abs, abs(target_rate) * rate_jump_guard_ratio)
+            sd_filtered_rate, sd_control_valid, _ = _filter_hold_rate(
+                rt, sd_filtered_rate,
+                alpha=rate_filter_alpha,
+                max_jump_abs=jump_guard_abs,
+            )
+            
+            # rate abort 체크 (소스 소진/이상 시)
+            abort_threshold = float(target_rate) * rate_abort_ratio
+            if rt is not None and rt <= abort_threshold:
+                if sd_rate_abort_start_ts is None:
+                    sd_rate_abort_start_ts = now_m
+                elif (now_m - sd_rate_abort_start_ts) >= rate_abort_sec:
+                    _raise_engine_failed(
+                        step.name,
+                        f"EVAP: shutter_delay 중 dep.rate 저하 abort "
+                        f"(rate={rt:.3f} <= {abort_threshold:.3f}, 지속 {rate_abort_sec:.1f}s)"
+                    )
+            else:
+                sd_rate_abort_start_ts = None
+            
+            # PID 주기 제어
+            if (now_m - sd_last_control_m) >= hold_control_interval_s:
+                sd_control_delta = 0
+                try:
+                    if hold_control_mode == "PID":
+                        sd_control_delta, sd_integral, sd_prev_error_ratio, _, pi_used, sd_windup_clamp = _compute_hold_pid_delta(
+                            current_dac=dac,
+                            target_rate=target_rate,
+                            filtered_rate=(sd_filtered_rate if sd_control_valid else None),
+                            interval_s=hold_control_interval_s,
+                            tol_ratio=rate_tol_ratio,
+                            kp=hold_pi_kp,
+                            ki=hold_pi_ki,
+                            kd=hold_pi_kd,
+                            integral_state=sd_integral,
+                            prev_error_ratio=sd_prev_error_ratio,
+                            integral_limit=hold_integral_limit,
+                            max_delta=hold_max_dac_delta,
+                            dac_max=dac_max,
+                        )
+                    else:
+                        new_dac = _evap_adjust_dac(
+                            dac,
+                            (sd_filtered_rate if sd_control_valid else None),
+                            target_rate,
+                            tol_ratio=rate_tol_ratio,
+                            fine_step_dac=fine_step_dac,
+                            dac_max=dac_max,
+                        )
+                        sd_control_delta = int(new_dac - dac)
+                except Exception:
+                    sd_control_delta = 0
+                
+                # ADC max 도달 시 DAC 증가 차단 (안전)
+                if sd_control_delta > 0 and adc_total >= adc_max:
+                    sd_control_delta = 0
+                
+                # DAC 적용
+                if sd_control_delta != 0:
+                    dac = max(0, min(dac_max, dac + sd_control_delta))
+                    _evap_apply_dac(
+                        engine, use_p1, use_p2, dac,
+                        tag="EVAP_SHUTTER_DELAY_CONTROL",
+                        silent=True,
+                    )
+                
+                sd_last_control_m = now_m
+            
+            # 1초마다 상태 emit
+            if now_m >= sd_next_ui_m:
+                rate_disp = f"{sd_filtered_rate:.3f}" if sd_filtered_rate is not None else "---"
+                engine._emit_status(
+                    message=(
+                        f"[남은 {engine._fmt_hms(remain_s, ceil=True)}] "
+                        f"셔터 대기 (PID) | DAC={dac} | rate={rate_disp} | ADC={adc_total:.1f}"
+                    ),
+                    force=True,
+                )
+                sd_next_ui_m = now_m + 1.0
+            
+            time.sleep(0.1)
+        
+        engine._emit_status(message="[남은 00:00] 셔터 대기 완료", force=True)
+        return int(dac)
+
     def _read_rate_or_abort(*, where: str) -> float:
         t0 = time.monotonic()
         while True:
@@ -856,6 +1036,9 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
 
             time.sleep(0.1)
 
+    # ✅ ADC EMA 필터 상태 (run_evap_deposition_control 클로저에 보관)
+    _adc_filtered_state: dict = {"value": None}
+
     def _read_adc_or_abort(*, where: str) -> float:
         t0 = time.monotonic()
         while True:
@@ -875,6 +1058,20 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
                 _raise_engine_failed(step.name, f"EVAP: ADC None 지속 {adc_none_abort_s}s ({where})")
 
             time.sleep(0.1)
+
+    def _read_adc_filtered(*, where: str) -> float:
+        """
+        EMA 필터 적용된 ADC 값 읽기.
+        - 첫 호출: raw 값을 baseline으로 사용
+        - 이후: prev + alpha*(raw - prev)
+        - PLC raw ADC가 ±10 흔들려도 필터링된 값은 부드러움.
+        - abort 정책은 _read_adc_or_abort와 동일.
+        """
+        raw = _read_adc_or_abort(where=where)
+        prev = _adc_filtered_state["value"]
+        filtered = _filter_adc(raw, prev, alpha=adc_filter_alpha)
+        _adc_filtered_state["value"] = filtered
+        return float(filtered) if filtered is not None else raw
 
     def _update_rate_stable_state(
         rt: float,
@@ -1229,7 +1426,7 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
                     )
 
                 rt = _read_rate_or_abort(where="pre_hold")
-                adc_total = _read_adc_or_abort(where="pre_hold")
+                adc_total = _read_adc_filtered(where="pre_hold")
 
                 jump_guard_abs = max(rate_jump_guard_abs, abs(target_rate) * rate_jump_guard_ratio)
                 ph_filtered_rate, ph_control_valid, _ = _filter_hold_rate(
@@ -1334,10 +1531,15 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
 
         if delay_s > 0:
             engine._emit_status(
-                message=f"셔터 오픈 대기 중... ({delay_min:.1f}분 / {delay_s:.0f}초)",
+                message=f"셔터 오픈 대기 중... PID 제어 ({delay_min:.1f}분 / {delay_s:.0f}초)",
                 force=True,
             )
-            _wait_with_checks(delay_s, label=f"셔터 오픈 대기 ({delay_min:.1f}분)")
+            # ✅ Hold 방식 PID로 능동 rate 유지 (DAC freeze 대신)
+            dac = _run_shutter_delay_with_pid(
+                delay_s=delay_s,
+                dac=dac,
+                target_rate=target_rate,
+            )
 
         # shutter delay 완료 후 STM Zero — delay 중 증착된 두께를 리셋
         engine._emit_status(message="EVAP HOLD 진입: STM ZERO", force=True)
@@ -1347,6 +1549,12 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         # STM Zero 후 IIR 필터 오염값(스파이크 등) 제거
         # Hold PI가 올바른 baseline에서 시작하도록 None으로 리셋
         filtered_rate = None
+
+        # ✅ STM Zero 직후 N초간 PID 입력 무시 (rate spike 방어)
+        stm_zero_grace_until_m = time.monotonic() + stm_zero_grace_s
+        
+        # ✅ ADC 필터도 모드 전환이라 초기화
+        _reset_adc_filter()
 
         _plc_call_with_reconnect(
             engine, "_plc_write_coil",
@@ -1463,6 +1671,8 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
 
             # hold_control_interval_s 주기 제어
             now_m = time.monotonic()
+            # ✅ STM Zero grace 기간 체크 추가
+            in_stm_zero_grace = (now_m < stm_zero_grace_until_m)
             if (not _spike_dac_hold_active) and (now_m - last_hold_control_m) >= hold_control_interval_s:
                 control_delta = 0
                 control_error: Optional[float] = None

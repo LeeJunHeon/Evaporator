@@ -1601,7 +1601,7 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
             engine._tick_emit(recipe, step)
 
             rt = _read_rate_or_abort(where="hold")
-            adc_total = _read_adc_or_abort(where="hold")
+            adc_total = _read_adc_filtered(where="hold")  # ADC 노이즈 억제
             th = _read_thickness_or_abort(where="hold")
 
             jump_guard_abs = max(rate_jump_guard_abs, abs(target_rate) * rate_jump_guard_ratio)

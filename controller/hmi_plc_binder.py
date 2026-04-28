@@ -1774,6 +1774,7 @@ class HmiPlcBinder(QObject):
             "SHUTTER_2_SW":    "MS2 Shutter",
             "POWER_2_SW":      "MS2 Power",
             "M_V_SW":          "Main Valve (M/V)",
+            "R_V_SW":          "Rough Valve (R/V)",
         }
         for coil, label in MUST_OFF.items():
             if self._get_state_locked(coil, False):

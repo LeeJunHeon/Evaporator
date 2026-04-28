@@ -6,22 +6,24 @@ TURBOVAC USS 통신 watchdog 영구 비활성 스크립트 (1회용)
 
 목적:
 - P182 (USS watchdog) 100 → 0  : 통신 끊겨도 watchdog 발동 안함
-- P179 (Fallback CW) 0 → 1025  : 0x401 = bit10+bit0 유지 (이중 안전장치)
+- P179 (Fallback CW) 0 → 1025  : 0x401 = bit10+bit0 (이중 안전장치)
 
-이 작업 후에는 USB가 끊어져도 펌프는 마지막 control word 그대로 운전 유지.
+연결 파라미터는 devices.ini의 [turbovac] 섹션을 직접 읽어와
+TurbovacService와 100% 동일한 설정으로 연결합니다.
 
 ⚠️ 사용 전 필수 조건:
-  1. Evaporator 프로그램 종료 (COM7 점유 해제)
+  1. Evaporator 프로그램 종료 (시리얼 포트 점유 해제)
   2. 펌프가 정상 운전 중일 것 (freq ≥ 800Hz)
-     → 정지 상태에서 실행하면 START 명령이 전송되어 펌프가 가속됨
 """
 from __future__ import annotations
 
+import configparser
 import sys
 import time
 from pathlib import Path
+from typing import Dict, Any
 
-# 레포 루트를 import path에 추가 (scripts/ 폴더에서 실행 시)
+# 레포 루트
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
@@ -33,24 +35,50 @@ from devices.turbovac import (
 )
 
 # =========================================================
-# 설정값
+# 설정
 # =========================================================
-PORT = "COM7"
-BAUD = 19200
-PARITY = "E"      # USB CDC: 8E1 고정 (매뉴얼 Section 1.4)
+INI_PATH = ROOT / "config" / "devices.ini"
 
 NEW_P182 = 0       # USS watchdog: 0 = Indefinite (비활성)
 NEW_P179 = 1025    # Fallback CW: 0x401 = (1<<10) | (1<<0)
 
-SAFE_FREQ_THRESHOLD_HZ = 800   # 정상 운전 검증 임계값
-SAVE_WAIT_S = 35               # P8 저장 대기 (매뉴얼 30초 + 여유)
+SAFE_FREQ_THRESHOLD_HZ = 800
+SAVE_WAIT_S = 35
 
 
 # =========================================================
 # 헬퍼
 # =========================================================
+def load_turbovac_cfg(ini_path: Path) -> Dict[str, Any]:
+    """
+    services/turbovac_service.py의 _load_config()와 동일한 방식으로
+    devices.ini [turbovac] 섹션 로드.
+    """
+    if not ini_path.exists():
+        raise FileNotFoundError(f"devices.ini not found: {ini_path}")
+    cp = configparser.ConfigParser()
+    cp.read(ini_path, encoding="utf-8")
+    if "turbovac" not in cp:
+        raise KeyError(f"[turbovac] section not found in {ini_path}")
+    sec = cp["turbovac"]
+    cfg = {
+        "port": sec.get("port", "").strip(),
+        "baudrate": sec.getint("baudrate", fallback=19200),
+        "bytesize": sec.getint("bytesize", fallback=8),
+        "parity": sec.get("parity", "E").strip().upper(),
+        "stopbits": sec.getint("stopbits", fallback=1),
+        "timeout_s": sec.getfloat("timeout_s", fallback=0.5),
+        "write_timeout_s": sec.getfloat("write_timeout_s", fallback=2.0),
+        "rtscts": sec.getboolean("rtscts", fallback=False),
+        "dsrdtr": sec.getboolean("dsrdtr", fallback=False),
+    }
+    if not cfg["port"]:
+        raise ValueError("[turbovac] port is empty in devices.ini")
+    return cfg
+
+
 def write_u16(dev: Turbovac, pnu: int, value: int) -> int:
-    """파라미터 P{pnu}에 16-bit 값 쓰고, 응답 echo 값을 반환."""
+    """파라미터 P{pnu}에 16-bit 값 쓰기. echo 값 반환."""
     pke = _make_pke(AK_WRITE_16, pnu)
     resp = dev._txrx(pke=pke, ind=0, pwe=int(value) & 0xFFFF)
     if resp["ak_resp"] != RESP_16:
@@ -67,12 +95,9 @@ def read_u16_with_retry(
     retries: int = 5,
     delay_s: float = 2.0,
 ) -> int:
-    """
-    매뉴얼: P8 저장 중에는 parameter read 불가 (~30초).
-    저장 직후 readback이 일시 실패할 수 있으므로 재시도한다.
-    """
+    """P8 저장 직후 일시적 응답 불가에 대비한 재시도 read."""
     last_e: Exception | None = None
-    for i in range(retries):
+    for _ in range(retries):
         try:
             return dev.read_parameter_u16(pnu)
         except Exception as e:
@@ -88,15 +113,33 @@ def main() -> int:
     print("=" * 64)
     print(" TURBOVAC USS Watchdog 영구 비활성 스크립트 (1회용)")
     print("=" * 64)
+
+    # devices.ini 로드 (TurbovacService와 동일한 방식)
+    try:
+        cfg = load_turbovac_cfg(INI_PATH)
+    except Exception as e:
+        print(f" ❌ ini 로드 실패: {e}")
+        return 1
+
+    print()
+    print(" devices.ini [turbovac]에서 로드한 연결 설정:")
+    print(f"   port            = {cfg['port']}")
+    print(f"   baudrate        = {cfg['baudrate']}")
+    print(f"   bytesize        = {cfg['bytesize']}")
+    print(f"   parity          = {cfg['parity']}")
+    print(f"   stopbits        = {cfg['stopbits']}")
+    print(f"   timeout_s       = {cfg['timeout_s']}")
+    print(f"   write_timeout_s = {cfg['write_timeout_s']}")
+    print(f"   rtscts          = {cfg['rtscts']}")
+    print(f"   dsrdtr          = {cfg['dsrdtr']}")
     print()
     print(" 변경할 파라미터:")
     print(f"   P182 (USS watchdog): default(100) → {NEW_P182} (비활성)")
     print(f"   P179 (Fallback CW):  default(0)   → {NEW_P179} (0x{NEW_P179:04X})")
     print()
     print(" ⚠️ 필수 사전 조건:")
-    print("    1) Evaporator 프로그램 종료 → COM7 해제")
-    print("    2) 펌프 정상 운전 중 (freq ≥ 800Hz)")
-    print(f"    포트: {PORT}, 보드율: {BAUD}, 패리티: {PARITY}")
+    print("    1) Evaporator 프로그램 종료 (시리얼 포트 점유 해제)")
+    print("    2) 펌프가 정상 운전 중 (freq ≥ 800Hz)")
     print()
 
     confirm = input(" 위 조건이 모두 만족되면 'yes' 입력 (취소: Ctrl+C): ").strip().lower()
@@ -106,25 +149,17 @@ def main() -> int:
 
     print()
     print("[1/7] 시리얼 포트 연결 + 상태 확인...")
-
-    dev = Turbovac(
-        port=PORT, baudrate=BAUD,
-        bytesize=8, parity=PARITY, stopbits=1,
-        timeout_s=2.0, write_timeout_s=2.0,
-        rtscts=False, dsrdtr=False,
-    )
-
-    # connect_and_probe(assume_running=True):
-    #   prime_running_control() → connect() → read_fast_status() → adopt_running_state_from_fast()
-    # 첫 telegram부터 control_word = bit10+bit0 으로 운전 중 펌프 안전 attach
-    try:
-        fast = dev.connect_and_probe(assume_running=True)
-    except Exception as e:
-        print(f"  ❌ 연결 실패: {e!r}")
-        print("     → COM7 점유 여부, USB 케이블 확인하세요.")
-        return 2
+    # ✅ ini에서 로드한 cfg를 그대로 unpack → service와 동일한 파라미터
+    dev = Turbovac(**cfg)
 
     try:
+        try:
+            fast = dev.connect_and_probe(assume_running=True)
+        except Exception as e:
+            print(f"  ❌ 연결 실패: {e!r}")
+            print("     → 시리얼 포트 점유, USB 케이블, 전원 확인하세요.")
+            return 2
+
         freq_hz = int(fast.get("freq_hz", 0) or 0)
         state_text = fast.get("state_text", "?")
         print(f"  ✓ 연결됨 | freq={freq_hz}Hz | state={state_text}")
@@ -133,10 +168,10 @@ def main() -> int:
             print()
             print(f" ❌ 펌프 freq({freq_hz}Hz)가 {SAFE_FREQ_THRESHOLD_HZ}Hz 미만입니다.")
             print("    이 스크립트는 운전 중인 펌프에서만 실행해야 합니다.")
-            print("    Evaporator 프로그램으로 펌프 운전 시작 후 다시 실행하세요.")
+            print("    Evaporator 프로그램으로 펌프 시작 후 다시 실행하세요.")
             return 3
 
-        # ---- 현재값 ----
+        # ---- 현재 값 ----
         print()
         print("[2/7] 현재 파라미터 값 읽기...")
         cur_p179 = dev.read_parameter_u16(179)
@@ -149,7 +184,7 @@ def main() -> int:
             print(" ℹ️  이미 원하는 값으로 설정되어 있습니다. 작업 불필요.")
             return 0
 
-        # ---- RAM에 새 값 쓰기 ----
+        # ---- 새 값 RAM에 쓰기 ----
         print()
         print("[3/7] 새 값을 RAM에 쓰기...")
         if cur_p182 != NEW_P182:
@@ -161,7 +196,7 @@ def main() -> int:
             print(f"  ✓ P179 ← {NEW_P179} (echo: {echo})")
             time.sleep(0.1)
 
-        # ---- RAM 검증 ----
+        # ---- RAM 즉시 검증 ----
         print()
         print("[4/7] RAM 즉시 검증...")
         ram_p182 = dev.read_parameter_u16(182)
@@ -173,17 +208,16 @@ def main() -> int:
             print("    펌프 재부팅하면 원상 복구됩니다.")
             return 4
 
-        # ---- P8 = 1 영구 저장 명령 ----
+        # ---- P8 = 1 영구 저장 ----
         print()
         print("[5/7] P8 = 1 영구 저장 명령 전송...")
         print(f"    ⚠️ 저장 약 30초 소요. 이 동안 USB/전원 절대 끊지 마세요.")
         write_u16(dev, 8, 1)
-        print("  ✓ P8 = 1 명령 전송됨 (저장 진행 중)")
+        print("  ✓ P8 = 1 명령 전송 (저장 진행 중)")
 
-        # ---- 저장 대기 ----
-        # 매뉴얼: 저장 중 parameter read/write 불가, PZD만 전달됨
-        # 우리는 telegram 자체를 보내지 않고 sleep
-        # (RAM의 P182=0 덕분에 watchdog은 이미 비활성)
+        # ---- 저장 완료 대기 ----
+        # 저장 중 parameter read/write 불가, PZD만 전달됨.
+        # RAM의 P182=0 덕분에 watchdog은 이미 비활성이므로 telegram 미발신해도 안전.
         print()
         print(f"[6/7] 저장 완료 대기 ({SAVE_WAIT_S}초)...")
         for i in range(SAVE_WAIT_S, 0, -1):
@@ -191,9 +225,9 @@ def main() -> int:
             time.sleep(1)
         print("     대기 완료              ")
 
-        # ---- 영구 저장 검증 (재읽기, 재시도 포함) ----
+        # ---- 영구 저장 검증 ----
         print()
-        print("[7/7] 영구 저장 검증 (재읽기)...")
+        print("[7/7] 영구 저장 검증 (재읽기, 재시도 포함)...")
         try:
             final_p182 = read_u16_with_retry(dev, 182)
             final_p179 = read_u16_with_retry(dev, 179)

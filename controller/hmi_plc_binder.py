@@ -111,6 +111,11 @@ class HmiPlcBinder(QObject):
         self._tmp_temp_alert_last_ts: float = 0.0
         self._tmp_temp_alert_cooldown_s: float = 300.0  # 5분에 한 번만 재알림
 
+        # ✅ 통신 끊김/복구 알림 상태 (변화 시점에만 구글챗 발송)
+        # None = baseline 미설정 → 첫 호출은 알림 없이 baseline만 기록
+        self._last_tmp_alert_state: Optional[bool] = None
+        self._last_plc_alert_state: Optional[bool] = None
+
         # (선택) 초기 표시
         self._render_status_line()
 
@@ -852,6 +857,7 @@ class HmiPlcBinder(QObject):
 
         if prev != self._tmp_connected:
             self._set_hmi_log("TMP CONNECTED" if self._tmp_connected else "TMP DISCONNECTED")
+            self._notify_connection_change("TMP", self._tmp_connected)
 
     def _on_tmp_snapshot(self, snap_obj: object) -> None:
         snap = dict(snap_obj or {})
@@ -923,6 +929,49 @@ class HmiPlcBinder(QObject):
                     pass
 
         threading.Thread(target=_send, daemon=True).start()
+
+    def _notify_connection_change(self, device: str, connected: bool) -> None:
+        """
+        TMP / PLC 연결 상태 변화 시점에만 구글챗 알림.
+        - 첫 호출은 baseline만 기록하고 알림 안 보냄 (앱 시작 시점 spam 방지)
+        - 이후 상태가 바뀐 시점에만 1회 알림
+
+        Args:
+            device: "TMP" 또는 "PLC"
+            connected: 현재 연결 상태 (True=연결, False=끊김)
+        """
+        attr = f"_last_{device.lower()}_alert_state"
+        last = getattr(self, attr, None)
+
+        if last is None:
+            # 첫 호출: baseline 기록만, 알림 없음
+            setattr(self, attr, bool(connected))
+            return
+
+        if bool(last) == bool(connected):
+            # 상태 변화 없음
+            return
+
+        # 상태 변화 → 알림
+        setattr(self, attr, bool(connected))
+
+        ts = time.strftime("%Y-%m-%d %H:%M:%S")
+        if connected:
+            msg = (
+                f"✅ [Evaporator] {device} 통신 복구\n"
+                f"시각: {ts}"
+            )
+        else:
+            msg = (
+                f"🚨 [Evaporator] {device} 통신 끊김\n"
+                f"시각: {ts}\n"
+                f"즉시 확인 바랍니다."
+            )
+
+        self._set_hmi_log(
+            f"[ALERT] {device} {'CONNECTED' if connected else 'DISCONNECTED'} → Google Chat 알림 발송"
+        )
+        self._send_gchat_alert(msg)
 
     def _on_button_toggled(self, binding: ButtonBinding, on: bool) -> None:
         on_i = int(bool(on))
@@ -1249,6 +1298,7 @@ class HmiPlcBinder(QObject):
             self._set_controls_enabled(self.is_ui_connected())
             if now_ui:
                 self._set_hmi_log("PLC CONNECTED (I/O recovered)")
+            self._notify_connection_change("PLC", now_ui)
 
         # ✅ 상태 변화 로그(너무 많아지는 것을 방지하기 위해 "UI에 매핑된 coil"만)
         #    - 필요하면 이 필터를 제거하면 states 전체 변화도 찍을 수 있음.
@@ -1310,6 +1360,7 @@ class HmiPlcBinder(QObject):
 
         if prev_ui != now_ui:
             self._set_hmi_log("PLC CONNECTED" if now_ui else "PLC DISCONNECTED")
+            self._notify_connection_change("PLC", now_ui)
 
     def _on_error(self, msg: str) -> None:
         # ✅ 한 번이라도 I/O 에러면 UI는 끊김으로
@@ -1342,6 +1393,7 @@ class HmiPlcBinder(QObject):
             self._set_dac_actual_text(1, None)
             self._set_dac_actual_text(2, None)
             self._set_hmi_log("PLC DISCONNECTED (I/O failed)")
+            self._notify_connection_change("PLC", False)
 
         if reason:
             self._set_hmi_log(reason)

@@ -121,6 +121,7 @@ class HmiPlcBinder(QObject):
 
         # Door 이동 중 인터락(시간 기반)
         self._door_busy_until: float = 0.0
+        self._vacuum_sequence: Optional[object] = None
         self._door_busy_timer = QTimer(self)
         self._door_busy_timer.setSingleShot(True)
         self._door_busy_timer.timeout.connect(self._end_door_busy)
@@ -425,6 +426,11 @@ class HmiPlcBinder(QObject):
         all_stop = getattr(self.ui, "allstopBtn", None)
         if all_stop is not None:
             all_stop.clicked.connect(self._on_all_stop_clicked)
+
+        vacuum_on_btn = getattr(self.ui, "vacuumOnBtn", None)
+        if vacuum_on_btn is not None:
+            vacuum_on_btn.setCheckable(True)
+            vacuum_on_btn.toggled.connect(self._on_vacuum_on_toggled)
 
     def _get_state_locked(self, coil: str, default: bool = False) -> bool:
         with self._state_lock:
@@ -1094,6 +1100,15 @@ class HmiPlcBinder(QObject):
         self._set_hmi_log(f"[UI] {binding.coil_name} <- {on_i}")
 
     def _on_all_stop_clicked(self) -> None:
+        # ✅ 추가: Vacuum 시퀀스 실행 중이면 먼저 중단 요청
+        vseq = getattr(self, "_vacuum_sequence", None)
+        if vseq is not None and vseq.isRunning():
+            try:
+                vseq.request_abort("ALL STOP")
+                self._set_hmi_log("[UI] ALL STOP → Vacuum 시퀀스 중단 요청")
+            except Exception:
+                pass
+
         if not self.is_ui_connected():
             self._set_hmi_log("[BLOCK] ALL STOP (PLC not connected)")
             self._popup_warn("PLC 미연결", "PLC가 연결되지 않아 ALL STOP을 전송할 수 없습니다.")
@@ -1357,6 +1372,13 @@ class HmiPlcBinder(QObject):
         if not now_ui:
             self._set_dac_actual_text(1, None)
             self._set_dac_actual_text(2, None)
+            vseq = getattr(self, "_vacuum_sequence", None)
+            if vseq is not None and vseq.isRunning():
+                try:
+                    vseq.request_abort("PLC 통신 끊김")
+                    self._set_hmi_log("[VACUUM] PLC 끊김 → 시퀀스 중단 요청")
+                except Exception:
+                    pass
 
         if prev_ui != now_ui:
             self._set_hmi_log("PLC CONNECTED" if now_ui else "PLC DISCONNECTED")
@@ -1688,3 +1710,176 @@ class HmiPlcBinder(QObject):
             self._set_hmi_log(f"[UI] {key} <- {int(v_clamped)} (DAC{ch} set)")
         except Exception as e:
             self._popup_warn("전송 실패", f"DAC 값 전송 실패: {e!r}")
+
+
+    # ============================================================
+    # Vacuum ON 시퀀스
+    # ============================================================
+ 
+    def get_tmp_freq(self) -> Optional[float]:
+        """현재 TMP 주파수(Hz) 반환. 없으면 None."""
+        try:
+            snap = dict(self._tmp_last_snapshot or {})
+            v = snap.get("freq_hz", None)
+            return float(v) if v is not None else None
+        except Exception:
+            return None
+        
+    def _cancel_vacuum_btn(self) -> None:
+        """인터락 실패 시 vacuumOnBtn을 조용히 해제."""
+        btn = getattr(self.ui, "vacuumOnBtn", None)
+        if btn is not None:
+            try:
+                with QSignalBlocker(btn):
+                    btn.setChecked(False)
+            except Exception:
+                pass
+ 
+    def _on_vacuum_on_toggled(self, on: bool) -> None:
+        """
+        Vacuum ON 버튼 클릭 핸들러.
+ 
+        사전 조건 확인 후 VacuumSequence 스레드를 시작한다.
+        """
+        # ── 버튼 OFF: 시퀀스 중단 요청 ──────────────────────────
+        if not on:
+            seq = getattr(self, "_vacuum_sequence", None)
+            if seq is not None and seq.isRunning():
+                seq.request_abort("사용자 중단")
+                self._set_hmi_log("[VACUUM] 사용자가 버튼으로 시퀀스 중단 요청")
+            return
+        
+        # ── 0. PLC 연결 확인 ─────────────────────────────────────
+        if not self.is_ui_connected():
+            self._set_hmi_log("[BLOCK] VACUUM ON (PLC not connected)")
+            self._popup_warn("PLC 미연결", "PLC가 연결되지 않아 Vacuum ON을 시작할 수 없습니다.")
+            self._cancel_vacuum_btn()
+            return
+ 
+        # ── 1. 시퀀스 중복 실행 방지 ─────────────────────────────
+        seq = getattr(self, "_vacuum_sequence", None)
+        if seq is not None and seq.isRunning():
+            self._set_hmi_log("[BLOCK] VACUUM ON (already running)")
+            self._popup_warn("진행 중", "Vacuum ON 시퀀스가 이미 실행 중입니다.")
+            self._cancel_vacuum_btn()
+            return
+ 
+        # ── 2. 사전 조건: 꺼져 있어야 하는 코일 ─────────────────
+        MUST_OFF = {
+            "V_V_SW":          "Vent (V/V)",
+            "DOOR_SW":         "Door",
+            "MAIN_SHUTTER_SW": "Main Shutter",
+            "SHUTTER_1_SW":    "MS1 Shutter",
+            "POWER_1_SW":      "MS1 Power",
+            "SHUTTER_2_SW":    "MS2 Shutter",
+            "POWER_2_SW":      "MS2 Power",
+            "M_V_SW":          "Main Valve (M/V)",
+        }
+        for coil, label in MUST_OFF.items():
+            if self._get_state_locked(coil, False):
+                msg = f"{label}이(가) 켜져 있습니다.\nVacuum ON 시작 전에 꺼주세요."
+                self._set_hmi_log(f"[BLOCK] VACUUM ON ({coil} ON)")
+                self._popup_warn("인터락", msg)
+                self._cancel_vacuum_btn()
+                return
+ 
+        # ── 3. 사전 조건: 켜져 있어야 하는 코일 ─────────────────
+        MUST_ON = {
+            "R_P_SW": "R/P (Rotary Pump)",
+            "F_V_SW": "F/V (Fine Valve)",
+            "TMP_SW": "TMP",
+        }
+        for coil, label in MUST_ON.items():
+            if not self._get_state_locked(coil, False):
+                msg = f"{label}이(가) 꺼져 있습니다.\nVacuum ON 시작 전에 켜주세요."
+                self._set_hmi_log(f"[BLOCK] VACUUM ON ({coil} OFF)")
+                self._popup_warn("인터락", msg)
+                self._cancel_vacuum_btn()
+                return
+ 
+        # ── 4. 사전 조건: TMP 주파수 >= 900 Hz ───────────────────
+        tmp_freq = self.get_tmp_freq()
+        if tmp_freq is None:
+            self._set_hmi_log("[BLOCK] VACUUM ON (TMP freq 읽기 실패)")
+            self._popup_warn(
+                "인터락",
+                "TMP 주파수를 읽을 수 없습니다.\nTMP가 연결되어 있는지 확인해주세요.",
+            )
+            self._cancel_vacuum_btn()
+            return
+ 
+        TMP_FREQ_MIN = 900.0
+        if tmp_freq < TMP_FREQ_MIN:
+            self._set_hmi_log(
+                f"[BLOCK] VACUUM ON (TMP freq {tmp_freq:.0f} Hz < {TMP_FREQ_MIN:.0f} Hz)"
+            )
+            self._popup_warn(
+                "인터락",
+                f"TMP 주파수가 부족합니다.\n"
+                f"현재: {tmp_freq:.0f} Hz  (필요: {TMP_FREQ_MIN:.0f} Hz 이상)\n"
+                f"TMP가 정상 속도에 도달할 때까지 기다려 주세요.",
+            )
+            self._cancel_vacuum_btn()
+            return
+ 
+        # ── 5. ACS 연결 확인 ─────────────────────────────────────
+        acs = getattr(self, "_acs_service", None)
+        if acs is None or not acs.is_connected():
+            self._set_hmi_log("[BLOCK] VACUUM ON (ACS not connected)")
+            self._popup_warn("ACS 미연결", "ACS 압력 센서가 연결되지 않아 Vacuum ON을 시작할 수 없습니다.")
+            self._cancel_vacuum_btn()
+            return
+ 
+        # ── 6. 이미 목표 압력 이하인지 확인 ─────────────────────────
+        snap = acs.get_last_snapshot()
+        current_pressure = snap.pressure if snap is not None else None
+        if current_pressure is not None and current_pressure <= 5e-2:
+            self._set_hmi_log(
+                f"[VACUUM] 이미 목표 압력 이하 ({current_pressure:.3e} Torr) → 시퀀스 생략"
+            )
+            self._popup_warn(
+                "Vacuum ON",
+                f"이미 진공이 잡혀 있습니다.\n"
+                f"현재 압력: {current_pressure:.3e} Torr\n"
+                f"(목표: 5e-2 Torr 이하)",
+            )
+            self._cancel_vacuum_btn()
+            return
+
+        # ── 7. 시퀀스 시작 ───────────────────────────────────────────
+        from controller.vacuum_sequence import VacuumSequence
+ 
+        self._set_hmi_log(
+            f"[VACUUM] 사전 조건 통과 (TMP freq={tmp_freq:.0f} Hz) → 시퀀스 시작"
+        )
+ 
+        seq = VacuumSequence(
+            plc_binder=self,
+            acs_service=acs,
+            get_tmp_freq_fn=self.get_tmp_freq,
+            parent=self,
+        )
+        seq.sig_log.connect(self._set_hmi_log)
+        seq.sig_done.connect(self._on_vacuum_sequence_done)
+ 
+        self._vacuum_sequence = seq
+        seq.start()
+ 
+    def _on_vacuum_sequence_done(self, success: bool, reason: str) -> None:
+        """VacuumSequence 완료 콜백 (UI 스레드에서 호출됨)."""
+        # 버튼 토글 해제 (시그널 재발생 방지)
+        btn = getattr(self.ui, "vacuumOnBtn", None)
+        if btn is not None:
+            try:
+                with QSignalBlocker(btn):
+                    btn.setChecked(False)
+            except Exception:
+                pass
+ 
+        if success:
+            self._set_hmi_log(f"[VACUUM] 완료: {reason}")
+        else:
+            self._set_hmi_log(f"[VACUUM] 실패/중단: {reason}")
+            self._popup_warn("Vacuum ON 실패", f"Vacuum ON 시퀀스 실패:\n{reason}")
+ 
+        self._vacuum_sequence = None

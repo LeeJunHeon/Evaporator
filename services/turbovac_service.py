@@ -72,7 +72,7 @@ class TurbovacService(QObject):
         # reconnect backoff 관리
         self._connect_fail_count: int = 0
         self._reconnect_backoff_s: float = self._reconnect_interval_s
-        self._reconnect_backoff_max_s: float = 30.0
+        self._reconnect_backoff_max_s: float = 8.0
 
         # slow poll 관리
         self._last_slow_poll_ts: float = 0.0
@@ -528,7 +528,6 @@ class TurbovacService(QObject):
 
         except Exception as e:
             self._poll_fail_count += 1
-
             msg = (
                 f"[TMPService] poll failed "
                 f"({self._poll_fail_count}/{self._poll_fail_threshold}): {e!r}"
@@ -537,12 +536,23 @@ class TurbovacService(QObject):
                 self._last_error_text = msg
                 self.sig_error.emit(msg)
                 self.sig_log.emit(msg)
-
-            # threshold 전까지는 연결 유지 / 마지막 정상 snapshot 유지
+            
+            # 추가: 드라이버 레벨 에러는 포트가 broken이므로 즉시 close
+            err_text = repr(e)
+            is_driver_broken = (
+                'PermissionError' in err_text
+                or 'FileNotFoundError' in err_text
+                or 'ClearCommError' in err_text
+                or 'WriteFile failed' in err_text
+            )
+            if is_driver_broken:
+                self.sig_log.emit("[TMPService] driver-level error detected, closing port for clean reconnect")
+                self._close_device()
+                # threshold 무시하고 즉시 재연결 단계로 (worker_loop이 다음 iteration에서 ensure_connected 호출)
+                return
+            
             if self._poll_fail_count < self._poll_fail_threshold:
                 return
-
-            # threshold 초과 시에만 close + backoff reconnect
             self._handle_runtime_error(
                 f"[TMPService] poll failed repeatedly "
                 f"({self._poll_fail_count} times): {e!r}"
@@ -561,6 +571,16 @@ class TurbovacService(QObject):
             self._reconnect_backoff_max_s,
             max(self._reconnect_interval_s, self._reconnect_backoff_s * 2),
         )
+
+        # 추가: 마지막 양호한 snapshot이 운전 중이었다면 reconnect 시 running 기준 attach
+        if self._last_snapshot:
+            was_running = bool(
+                self._last_snapshot.get("pump_turning", False)
+                or self._last_snapshot.get("normal_operation", False)
+                or self._last_snapshot.get("accelerating", False)
+            )
+            if was_running:
+                self._connect_hint_running = True
 
         if msg != self._last_error_text:
             self._last_error_text = msg

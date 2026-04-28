@@ -4,6 +4,7 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass
+from serial.tools import list_ports
 from typing import Optional
 
 try:
@@ -48,11 +49,24 @@ class BaseSerialDevice:
     @property
     def is_connected(self) -> bool:
         return self._ser is not None and self._ser.is_open
+    
+    def _port_exists(self) -> bool:
+        try:
+            return any(p.device == self._port for p in list_ports.comports())
+        except Exception:
+            return True  # 검사 실패 시 일단 시도
 
     def connect(self) -> None:
         with self._lock:
             if self.is_connected:
                 return
+            
+            # 포트가 OS에 존재하지 않으면 즉시 명확한 에러
+            if not self._port_exists():
+                raise SerialDeviceError(
+                    f"port {self._port} not found in system (USB device may be disconnected)"
+                )
+            
             try:
                 self._ser = serial.Serial(
                     port=self._port,

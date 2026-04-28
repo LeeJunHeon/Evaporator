@@ -1535,8 +1535,6 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         # -------------------------
         filtered_rate: Optional[float] = None
 
-        engine._emit_status(message="EVAP HOLD 진입: MAIN SHUTTER OPEN", force=True)
-
         if delay_s > 0:
             engine._emit_status(
                 message=f"셔터 오픈 대기 중... PID 제어 ({delay_min:.1f}분 / {delay_s:.0f}초)",

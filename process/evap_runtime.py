@@ -873,7 +873,11 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         delay_s: float,
         dac: int,
         target_rate: float,
-    ) -> int:
+        *,
+        init_integral: float = 0.0,
+        init_prev_error_ratio: float = 0.0,
+        init_filtered_rate: Optional[float] = None,
+    ) -> dict:
         """
         Shutter delay 동안 Hold 방식 PID로 rate 능동 유지.
         
@@ -884,14 +888,14 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         - DAC 변경은 hold_max_dac_delta로 제한 (한 사이클 변동 ≤ 20)
         
         Returns:
-            int: 종료 시점의 DAC 값 (hold 루프가 이어받음)
+            dict: 종료 시점의 DAC 값 (hold 루프가 이어받음)
         """
         sd_start_m = time.monotonic()
         sd_deadline_m = sd_start_m + float(delay_s)
         sd_last_control_m = 0.0
-        sd_integral = 0.0
-        sd_prev_error_ratio: float = 0.0
-        sd_filtered_rate: Optional[float] = None
+        sd_integral = float(init_integral)
+        sd_prev_error_ratio: float = float(init_prev_error_ratio)
+        sd_filtered_rate: Optional[float] = init_filtered_rate
         sd_windup_clamp: bool = False
         sd_rate_abort_start_ts: Optional[float] = None
         sd_next_ui_m = sd_start_m
@@ -1004,7 +1008,12 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
             time.sleep(0.1)
         
         engine._emit_status(message="[남은 00:00] 셔터 대기 완료", force=True)
-        return int(dac)
+        return {
+            "dac": int(dac),
+            "integral": sd_integral,
+            "prev_error_ratio": sd_prev_error_ratio,
+            "filtered_rate": sd_filtered_rate,
+        }
 
     def _read_rate_or_abort(*, where: str) -> float:
         t0 = time.monotonic()
@@ -1084,18 +1093,19 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
     def _update_rate_stable_state(
         rt: float,
         stable_start_ts: Optional[float],
+        filtered_rate: Optional[float] = None,
     ) -> tuple[bool, Optional[float]]:
         tol = abs(target_rate) * rate_tol_ratio
 
-        # Ramp-up 스파이크 필터:
-        # target_rate의 (100 + ramp_spike_pct)% 이상이면 센서 스파이크로 간주
-        # → stable 카운트를 올리지 않고 리셋
-        # 예: ramp_spike_pct=100, target=1.0 → 2.0 이상이면 스파이크
+        # spike 판정은 raw rate로 (즉시성 필요)
         spike_limit = abs(target_rate) * (1.0 + ramp_spike_pct / 100.0)
         if rt >= spike_limit:
-            return False, None  # 스파이크: stable 카운트 리셋
+            return False, None
 
-        if (target_rate - tol) <= rt <= (target_rate + tol):
+        # stable 판정은 필터된 rate가 있으면 그걸 사용 (잡음 제거)
+        rate_for_judgment = filtered_rate if filtered_rate is not None else rt
+
+        if (target_rate - tol) <= rate_for_judgment <= (target_rate + tol):
             now_m = time.monotonic()
             if stable_start_ts is None:
                 stable_start_ts = now_m
@@ -1230,6 +1240,7 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         spike_over_limit_start_ts: Optional[float] = None
         pre_hold_triggered = False
         pre_hold_over_start_ts: Optional[float] = None
+        ramp_filtered_rate: Optional[float] = None  # ✅ ramp 단계 EMA 필터
 
         for step_cfg in ramp_steps:
             step_no = int(step_cfg["step_no"])
@@ -1258,7 +1269,18 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
                 rt = _read_rate_or_abort(where=f"ramp_step{step_no}")
                 adc_total = _read_adc_or_abort(where=f"ramp_step{step_no}")
 
-                stable_ok, stable_start_ts = _update_rate_stable_state(rt, stable_start_ts)
+                # ✅ EMA 필터 적용 (hold 단계와 동일한 _filter_hold_rate 재사용)
+                jump_guard_abs = max(rate_jump_guard_abs, abs(target_rate) * rate_jump_guard_ratio)
+                ramp_filtered_rate, _, _ = _filter_hold_rate(
+                    rt, ramp_filtered_rate,
+                    alpha=rate_filter_alpha,
+                    max_jump_abs=jump_guard_abs,
+                )
+
+                stable_ok, stable_start_ts = _update_rate_stable_state(
+                    rt, stable_start_ts, filtered_rate=ramp_filtered_rate
+                )
+                
                 if stable_ok:
                     reached_stable = True
                     engine._emit_status(
@@ -1535,17 +1557,26 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         # -------------------------
         filtered_rate: Optional[float] = None
 
+        # shutter_delay 미실행 시 기본값
+        sd_state = {
+            "dac": dac,
+            "integral": 0.0,
+            "prev_error_ratio": 0.0,
+            "filtered_rate": None,
+        }
+
         if delay_s > 0:
             engine._emit_status(
                 message=f"셔터 오픈 대기 중... PID 제어 ({delay_min:.1f}분 / {delay_s:.0f}초)",
                 force=True,
             )
             # ✅ Hold 방식 PID로 능동 rate 유지 (DAC freeze 대신)
-            dac = _run_shutter_delay_with_pid(
+            sd_state = _run_shutter_delay_with_pid(
                 delay_s=delay_s,
                 dac=dac,
                 target_rate=target_rate,
             )
+            dac = sd_state["dac"]
 
         # shutter delay 완료 → 메인 셔터 오픈과 STM Zero를 거의 동시에 수행
         # 핵심: STM 두께 0 reset과 실제 증착 시작 시점을 일치시켜 두께 측정 정확도 확보
@@ -1564,8 +1595,8 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         # 이 사이의 짧은 시간(~100ms) 동안 증착되는 0.05nm는 STM 분해능 이하로 무시 가능
         _stm_zero_thickness(engine, recipe, step, mode=zero_mode)
 
-        # 3) Hold 진입 baseline 정리
-        filtered_rate = None
+        # 3) Hold 진입 baseline 정리 (PID 상태는 shutter_delay에서 인계)
+        filtered_rate = sd_state["filtered_rate"]
         _reset_adc_filter()
         stm_zero_grace_until_m = time.monotonic() + stm_zero_grace_s
 
@@ -1579,8 +1610,8 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         rate_abort_start_ts: Optional[float] = None
         spike_detected_ts: Optional[float] = None
         abort_threshold = target_rate * rate_abort_ratio
-        hold_integral = 0.0
-        hold_prev_error_ratio: float = 0.0
+        hold_integral = sd_state["integral"]
+        hold_prev_error_ratio: float = sd_state["prev_error_ratio"]
         hold_windup_clamp: bool = False
 
         engine._tele_event(

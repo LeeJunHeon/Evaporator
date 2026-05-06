@@ -115,12 +115,9 @@ class VacuumSequence(QThread):
         if self._read_coil("M_V_SW"):
             # 혹시라도 ON이면 먼저 닫음
             self._log("[VACUUM] M/V가 열려 있음 → 닫기")
-            ok, err = self._write_coil("M_V_SW", False, "M/V 닫기")
+            ok, err = self._write_and_verify("M_V_SW", False, "M/V 닫기")
             if not ok:
                 self._fail(f"M/V 닫기 실패: {err}")
-                return
-            if not self._settle():
-                self._check_abort()
                 return
 
         if self._check_abort():
@@ -128,29 +125,23 @@ class VacuumSequence(QThread):
 
         # ── Step 2: F/V 닫기 ───────────────────────────────────
         self._log("[VACUUM] Step 2: F/V 닫기 (F_V_SW = OFF)")
-        ok, err = self._write_coil("F_V_SW", False, "F/V 닫기")
+        ok, err = self._write_and_verify("F_V_SW", False, "F/V 닫기")
         if not ok:
-            self._fail(f"F/V 닫기 실패: {err}")
-            return
-        if not self._settle():
-            self._check_abort()
-            return
-
-        if self._check_abort():
+            self._restore_rough_phase()
+            if not self._check_abort():
+                self._fail(f"F/V 닫기 실패: {err}")
             return
 
         # ── Step 3: R/V 열기 ───────────────────────────────────
         self._log("[VACUUM] Step 3: R/V 열기 (R_V_SW = ON)")
-        ok, err = self._write_coil("R_V_SW", True, "R/V 열기")
+        ok, err = self._write_and_verify("R_V_SW", True, "R/V 열기")
         if not ok:
+            self._restore_rough_phase()
             self._fail(f"R/V 열기 실패: {err}")
-            return
-        if not self._settle():
-            self._check_abort()
             return
 
         if self._check_abort():
-            self._safe_close_rv()
+            self._restore_rough_phase()
             return
 
         # ── Step 4: 압력 대기 (ACS <= 5e-2 Torr) ──────────────
@@ -161,12 +152,13 @@ class VacuumSequence(QThread):
         reached = self._wait_pressure(self._pressure_target, self._pressure_timeout_s)
 
         if self._check_abort():
+            self._restore_rough_phase()
             return
 
         if not reached:
-            # 타임아웃: R/V 닫고 실패 처리
-            self._log("[VACUUM] 압력 타임아웃 → R/V 닫기 후 중단")
-            self._safe_close_rv()
+            # 타임아웃: R/V 닫고 복구 후 중단
+            self._log("[VACUUM] 압력 타임아웃 → 복구 후 중단")
+            self._restore_rough_phase()
             self._fail(
                 f"압력 {self._pressure_target:.1e} Torr 도달 타임아웃 "
                 f"({self._pressure_timeout_s:.0f}초)"
@@ -175,39 +167,36 @@ class VacuumSequence(QThread):
 
         # ── Step 5: R/V 닫기 ───────────────────────────────────
         self._log("[VACUUM] Step 5: R/V 닫기 (R_V_SW = OFF)")
-        ok, err = self._write_coil("R_V_SW", False, "R/V 닫기")
+        ok, err = self._write_and_verify("R_V_SW", False, "R/V 닫기")
         if not ok:
+            self._restore_rough_phase()
             self._fail(f"R/V 닫기 실패: {err}")
-            return
-        if not self._settle():
-            self._check_abort()
             return
 
         if self._check_abort():
+            self._restore_rough_phase()
             return
 
         # ── Step 6: F/V 열기 ───────────────────────────────────
         self._log("[VACUUM] Step 6: F/V 열기 (F_V_SW = ON)")
-        ok, err = self._write_coil("F_V_SW", True, "F/V 열기")
+        ok, err = self._write_and_verify("F_V_SW", True, "F/V 열기")
         if not ok:
+            self._restore_fine_phase()
             self._fail(f"F/V 열기 실패: {err}")
-            return
-        if not self._settle():
-            self._check_abort()
             return
 
         if self._check_abort():
+            self._restore_fine_phase()
             return
 
         # ── Step 7: M/V 열기 ───────────────────────────────────
         self._log("[VACUUM] Step 7: M/V 열기 (M_V_SW = ON)")
-        ok, err = self._write_coil("M_V_SW", True, "M/V 열기")
+        ok, err = self._write_and_verify("M_V_SW", True, "M/V 열기")
         if not ok:
+            self._restore_fine_phase()
             self._fail(f"M/V 열기 실패: {err}")
             return
-        if not self._settle():
-            self._check_abort()
-            return
+        
         self._log("[VACUUM] === Vacuum ON 시퀀스 완료 ✅ ===")
         self.sig_done.emit(True, "진공 도달 완료")
 
@@ -263,20 +252,30 @@ class VacuumSequence(QThread):
             return None
 
     # ── 헬퍼: PLC 코일 쓰기 ──────────────────────────────────────
-    def _write_coil(self, coil: str, on: bool, label: str) -> tuple[bool, str]:
-        """
-        binder.submit_write()로 blocking write.
-        Returns (success, error_message).
-        """
+    def _write_and_verify(self, coil: str, on: bool, label: str) -> tuple[bool, str]:
+        # 1. 명령 전송
         try:
             fut = self._binder.submit_write(coil, on, tag=f"VACUUM:{coil}")
-            # Future.result() 대기 (타임아웃 포함)
             if fut is not None and hasattr(fut, "result"):
                 fut.result(timeout=PLC_WRITE_TIMEOUT_S)
-            self._log(f"[VACUUM]   {label} ({coil} = {'ON' if on else 'OFF'}) ✅")
-            return True, ""
+            self._log(f"[VACUUM]   {label} ({coil} = {'ON' if on else 'OFF'}) 전송 완료")
         except Exception as e:
             return False, repr(e)
+
+        # 2. 3초 대기 (밸브 물리적 동작 시간)
+        deadline = time.monotonic() + STEP_SETTLE_S
+        while time.monotonic() < deadline:
+            if self._abort_requested:
+                return False, "중단 요청"
+            time.sleep(SETTLE_TICK_S)
+
+        # 3. PLC 직접 읽어서 확인
+        actual = self._read_coil(coil)
+        if actual != on:
+            return False, f"{coil} 상태 불일치 (기대: {'ON' if on else 'OFF'}, 실제: {'ON' if actual else 'OFF'})"
+
+        self._log(f"[VACUUM]   {label} ({coil} = {'ON' if on else 'OFF'}) 확인 ✅")
+        return True, ""
 
     # ── 헬퍼: PLC 코일 읽기 ──────────────────────────────────────
     def _read_coil(self, coil: str) -> bool:
@@ -285,19 +284,7 @@ class VacuumSequence(QThread):
         except Exception:
             return False
 
-    # ── 헬퍼: 안정 대기 ──────────────────────────────────────────
-    def _settle(self) -> bool:
-        """True=정상완료 / False=abort 또는 PLC 끊김"""
-        deadline = time.monotonic() + STEP_SETTLE_S
-        while time.monotonic() < deadline:
-            if self._abort_requested:
-                return False
-            if not self._is_plc_ok():
-                self.request_abort("PLC 통신 끊김")
-                return False
-            time.sleep(SETTLE_TICK_S)
-        return True
-
+    # ── 헬퍼: PLC 연결 확인 ───────────────────────────────────────
     def _is_plc_ok(self) -> bool:
         try:
             return bool(self._binder.is_connected())
@@ -313,11 +300,41 @@ class VacuumSequence(QThread):
             return True
         return False
 
-    # ── 헬퍼: R/V 안전 닫기 (에러/중단 시 복구) ─────────────────
-    def _safe_close_rv(self) -> None:
+    # ── 헬퍼: Step 2~5 실패 시 복구 (Rough 구간) ─────────────────
+    def _restore_rough_phase(self) -> None:
+        """PLC 실제 상태를 읽어서 안전 순서로 밸브 복구.
+        목표: M/V=OFF, R/V=OFF, F/V=ON
+        """
         try:
-            self._log("[VACUUM] R/V 안전 닫기 시도 (복구)")
-            self._write_coil("R_V_SW", False, "R/V 안전 닫기")
+            # 1. M/V 먼저 닫기 (F/V 닫힌 상태에서 M/V ON 금지 규칙)
+            if self._read_coil("M_V_SW"):
+                self._log("[VACUUM] 복구: M/V 닫기")
+                self._write_and_verify("M_V_SW", False, "복구: M/V 닫기")
+
+            # 2. R/V 닫기 (F/V 열기 전에 반드시 먼저)
+            if self._read_coil("R_V_SW"):
+                self._log("[VACUUM] 복구: R/V 닫기")
+                self._write_and_verify("R_V_SW", False, "복구: R/V 닫기")
+
+            # 3. F/V 열기
+            if not self._read_coil("F_V_SW"):
+                self._log("[VACUUM] 복구: F/V 열기")
+                self._write_and_verify("F_V_SW", True, "복구: F/V 열기")
+        except Exception:
+            pass
+
+    # ── 헬퍼: Step 6~7 실패 시 복구 (Fine 구간) ──────────────────
+    def _restore_fine_phase(self) -> None:
+        try:
+            rp  = self._read_coil("R_P_SW")
+            fv  = self._read_coil("F_V_SW")
+            tmp = self._read_coil("TMP_SW")
+            mv  = self._read_coil("M_V_SW")
+            self._log(f"[VACUUM] 복구 확인: R/P={rp}, F/V={fv}, TMP={tmp}, M/V={mv}")
+            if rp and fv and tmp and mv:
+                self._log("[VACUUM] 복구: R/P·F/V·TMP·M/V 모두 ON → 그대로 유지")
+                return
+            self._restore_rough_phase()
         except Exception:
             pass
 

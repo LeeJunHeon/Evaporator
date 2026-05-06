@@ -122,18 +122,27 @@ class MaterialCatalogDialog(QDialog):
         root.addWidget(self.table, 1)
 
         btn_row = QHBoxLayout()
+
+        # 왼쪽: 행 추가/삭제
+        self.addBtn    = QPushButton("+ Add",    self)
+        self.deleteBtn = QPushButton("- Delete", self)
+        btn_row.addWidget(self.addBtn)
+        btn_row.addWidget(self.deleteBtn)
+
         btn_row.addStretch(1)
 
         self.saveBtn = QPushButton("Save", self)
         self.applyBtn = QPushButton("Apply", self)
         self.cancelBtn = QPushButton("Cancel", self)
-
         btn_row.addWidget(self.saveBtn)
         btn_row.addWidget(self.applyBtn)
         btn_row.addWidget(self.cancelBtn)
+
         root.addLayout(btn_row)
 
         # ---------- signals ----------
+        self.addBtn.clicked.connect(self._on_add_row)
+        self.deleteBtn.clicked.connect(self._on_delete_row)
         self.saveBtn.clicked.connect(self._on_save)
         self.applyBtn.clicked.connect(self._on_apply)
         self.cancelBtn.clicked.connect(self.reject)
@@ -374,3 +383,31 @@ class MaterialCatalogDialog(QDialog):
         self._save_json_items(mats)
         self._selected = mats[row]
         self.accept()
+
+    def _on_add_row(self) -> None:
+        r = self.table.rowCount()
+        self.table.insertRow(r)
+        defaults = ["", "1.0", "1.0", "100.0"]
+        for c, val in enumerate(defaults):
+            item = QTableWidgetItem(val)
+            self.table.setItem(r, c, item)
+            if c == 0:
+                item.setData(Qt.UserRole, "")  # note 초기화
+        self.table.selectRow(r)
+        self.table.setCurrentCell(r, 0)
+        self.table.editItem(self.table.item(r, 0))  # Material 셀 바로 편집 시작
+
+    def _on_delete_row(self) -> None:
+        row = self.table.currentRow()
+        if row < 0:
+            QMessageBox.information(self, "Select", "삭제할 행을 먼저 선택하세요.")
+            return
+        mat_name = self.table.item(row, 0).text() if self.table.item(row, 0) else ""
+        reply = QMessageBox.question(
+            self, "Delete",
+            f"'{mat_name}' 행을 삭제하시겠습니까?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply == QMessageBox.Yes:
+            self.table.removeRow(row)

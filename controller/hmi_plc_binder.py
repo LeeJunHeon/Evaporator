@@ -110,6 +110,7 @@ class HmiPlcBinder(QObject):
         # TMP 온도 알림 상태
         self._tmp_temp_alert_last_ts: float = 0.0
         self._tmp_temp_alert_cooldown_s: float = 300.0  # 5분에 한 번만 재알림
+        self._tmp_emergency_stop_triggered: bool = False  # 100°C 긴급 정지 중복 방지
 
         # ✅ 통신 끊김/복구 알림 상태 (변화 시점에만 구글챗 발송)
         # None = baseline 미설정 → 첫 호출은 알림 없이 baseline만 기록
@@ -884,7 +885,10 @@ class HmiPlcBinder(QObject):
         self._set_hmi_log(str(msg))
 
     def _check_tmp_temp_alert(self, snap: Dict[str, Any]) -> None:
-        """TMP 모터 온도 55°C 이상이면 Google Chat 알림 전송 (5분 쿨다운)."""
+        """TMP 모터 온도 감시:
+        - 80°C 이상: Google Chat 알림 (5분 쿨다운)
+        - 100°C 이상: M/V 닫기 + TMP stop 긴급 처리 (별도 스레드)
+        """
         try:
             if not snap.get("connected", False):
                 return
@@ -892,23 +896,50 @@ class HmiPlcBinder(QObject):
             if motor_temp is None:
                 return
 
-            threshold = 55.0
+            temp = float(motor_temp)
             now = time.time()
 
-            if float(motor_temp) >= threshold:
+            # ── 100°C 긴급 정지 ──────────────────────────────────
+            EMERGENCY_THRESHOLD = 100.0
+            if temp >= EMERGENCY_THRESHOLD:
+                if not self._tmp_emergency_stop_triggered:
+                    self._tmp_emergency_stop_triggered = True
+                    self._set_hmi_log(
+                        f"[EMERGENCY] TMP 온도 {temp:.1f}°C → M/V 닫기 + TMP 정지 시작"
+                    )
+                    msg = (
+                        f"🚨🚨 [Evaporator] TMP 긴급 정지\n"
+                        f"모터 온도: {temp:.1f}°C (기준: {EMERGENCY_THRESHOLD:.0f}°C)\n"
+                        f"시각: {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                        f"M/V 닫기 후 TMP 정지 명령 실행"
+                    )
+                    self._send_gchat_alert(msg)
+                    threading.Thread(
+                        target=self._emergency_tmp_stop,
+                        daemon=True,
+                        name="TmpEmergencyStop",
+                    ).start()
+                return
+
+            # ── 80°C 알림 ────────────────────────────────────────
+            ALERT_THRESHOLD = 80.0
+            if temp >= ALERT_THRESHOLD:
                 if now - self._tmp_temp_alert_last_ts >= self._tmp_temp_alert_cooldown_s:
                     self._tmp_temp_alert_last_ts = now
                     msg = (
                         f"🚨 [Evaporator] TMP 온도 경고\n"
-                        f"모터 온도: {float(motor_temp):.1f}°C  (기준: {threshold:.0f}°C 이상)\n"
+                        f"모터 온도: {temp:.1f}°C  (기준: {ALERT_THRESHOLD:.0f}°C 이상)\n"
                         f"시각: {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
                         f"즉시 확인 바랍니다."
                     )
-                    self._set_hmi_log(f"[ALERT] TMP 온도 경고: {float(motor_temp):.1f}°C → Google Chat 알림 전송")
+                    self._set_hmi_log(
+                        f"[ALERT] TMP 온도 경고: {temp:.1f}°C → Google Chat 알림 전송"
+                    )
                     self._send_gchat_alert(msg)
             else:
-                # 온도 정상 복귀 시 쿨다운 리셋
+                # 온도 정상 복귀 시 쿨다운 및 긴급 정지 플래그 리셋
                 self._tmp_temp_alert_last_ts = 0.0
+                self._tmp_emergency_stop_triggered = False
         except Exception:
             pass
 
@@ -935,6 +966,73 @@ class HmiPlcBinder(QObject):
                     pass
 
         threading.Thread(target=_send, daemon=True).start()
+
+    def _emergency_tmp_stop(self) -> None:
+        """
+        TMP 100°C 긴급 정지 처리 (별도 스레드에서 실행).
+        1. M/V 닫기 명령 전송
+        2. 3초 대기 후 PLC 직접 읽어서 상태 확인
+        3. TMP stop_pump() 명령 전송
+        """
+        try:
+            # 1. M/V 닫기
+            self._set_hmi_log("[EMERGENCY] M/V 닫기 명령 전송")
+            try:
+                fut = self.submit_write("M_V_SW", False, tag="EMERGENCY:M_V")
+                if fut is not None and hasattr(fut, "result"):
+                    fut.result(timeout=5.0)
+            except Exception as e:
+                self._set_hmi_log(f"[EMERGENCY] M/V 닫기 명령 실패: {e!r}")
+
+            # 2. M/V 닫힘 확인될 때까지 반복 시도 (최대 5회)
+            MAX_RETRY = 5
+            mv_closed = False
+            for attempt in range(1, MAX_RETRY + 1):
+                time.sleep(3.0)
+                mv_state = self.read_coil("M_V_SW", True)
+                if not mv_state:
+                    self._set_hmi_log(f"[EMERGENCY] M/V 닫힘 확인 ✅ (시도 {attempt}/{MAX_RETRY})")
+                    mv_closed = True
+                    break
+                else:
+                    self._set_hmi_log(
+                        f"[EMERGENCY] M/V 닫힘 확인 실패 ({attempt}/{MAX_RETRY}) → 재시도"
+                    )
+                    # 재시도: M/V 닫기 명령 재전송
+                    try:
+                        fut = self.submit_write("M_V_SW", False, tag="EMERGENCY:M_V_RETRY")
+                        if fut is not None and hasattr(fut, "result"):
+                            fut.result(timeout=5.0)
+                    except Exception as e:
+                        self._set_hmi_log(f"[EMERGENCY] M/V 닫기 재시도 실패: {e!r}")
+
+            if not mv_closed:
+                # 최대 재시도 초과 → TMP 정지 금지, Google Chat 알림
+                self._set_hmi_log(
+                    f"[EMERGENCY] M/V 닫힘 확인 {MAX_RETRY}회 모두 실패 → TMP 정지 중단 (역류 방지)"
+                )
+                msg = (
+                    f"🚨🚨 [Evaporator] TMP 긴급 정지 실패\n"
+                    f"M/V 닫힘 {MAX_RETRY}회 시도 모두 실패 → TMP 정지 취소 (역류 방지)\n"
+                    f"시각: {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                    f"즉시 수동 확인 바랍니다."
+                )
+                self._send_gchat_alert(msg)
+                return  # ← TMP stop 실행 안 함
+
+            # 3. M/V 닫힘 확인된 경우에만 TMP stop 명령 전송
+            svc = self._turbovac_service
+            if svc is not None and hasattr(svc, "stop_pump"):
+                try:
+                    svc.stop_pump()
+                    self._set_hmi_log("[EMERGENCY] TMP stop_pump() 명령 전송 ✅")
+                except Exception as e:
+                    self._set_hmi_log(f"[EMERGENCY] TMP stop_pump() 실패: {e!r}")
+            else:
+                self._set_hmi_log("[EMERGENCY] TMP 서비스 없음 → stop_pump 스킵")
+
+        except Exception as e:
+            self._set_hmi_log(f"[EMERGENCY] 긴급 정지 처리 중 예외: {e!r}")
 
     def _notify_connection_change(self, device: str, connected: bool) -> None:
         """

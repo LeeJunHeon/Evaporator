@@ -1411,7 +1411,6 @@ class HmiPlcBinder(QObject):
             self._set_controls_enabled(self.is_ui_connected())
             if now_ui:
                 self._set_hmi_log("PLC CONNECTED (I/O recovered)")
-            self._notify_connection_change("PLC", now_ui)
 
         # ✅ 상태 변화 로그(너무 많아지는 것을 방지하기 위해 "UI에 매핑된 coil"만)
         #    - 필요하면 이 필터를 제거하면 states 전체 변화도 찍을 수 있음.
@@ -1513,7 +1512,6 @@ class HmiPlcBinder(QObject):
             self._set_dac_actual_text(1, None)
             self._set_dac_actual_text(2, None)
             self._set_hmi_log("PLC DISCONNECTED (I/O failed)")
-            self._notify_connection_change("PLC", False)
 
         if reason:
             self._set_hmi_log(reason)

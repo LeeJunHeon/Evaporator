@@ -110,7 +110,7 @@ class HmiPlcBinder(QObject):
         # TMP 온도 알림 상태
         self._tmp_temp_alert_last_ts: float = 0.0
         self._tmp_temp_alert_cooldown_s: float = 300.0  # 5분에 한 번만 재알림
-        self._tmp_emergency_stop_triggered: bool = False  # 100°C 긴급 정지 중복 방지
+        self._tmp_emergency_stop_triggered: bool = False  # 79°C 긴급 정지 중복 방지
 
         # ✅ 통신 끊김/복구 알림 상태 (변화 시점에만 구글챗 발송)
         # None = baseline 미설정 → 첫 호출은 알림 없이 baseline만 기록
@@ -886,8 +886,8 @@ class HmiPlcBinder(QObject):
 
     def _check_tmp_temp_alert(self, snap: Dict[str, Any]) -> None:
         """TMP 모터 온도 감시:
-        - 80°C 이상: Google Chat 알림 (5분 쿨다운)
-        - 100°C 이상: M/V 닫기 + TMP stop 긴급 처리 (별도 스레드)
+        - 75°C 이상: Google Chat 알림 (5분 쿨다운)
+        - 79°C 이상: M/V 닫기 + TMP stop 긴급 처리 (별도 스레드)
         """
         try:
             if not snap.get("connected", False):
@@ -899,8 +899,8 @@ class HmiPlcBinder(QObject):
             temp = float(motor_temp)
             now = time.time()
 
-            # ── 100°C 긴급 정지 ──────────────────────────────────
-            EMERGENCY_THRESHOLD = 100.0
+            # ── 79°C 긴급 정지 ──────────────────────────────────
+            EMERGENCY_THRESHOLD = 79.0
             if temp >= EMERGENCY_THRESHOLD:
                 if not self._tmp_emergency_stop_triggered:
                     self._tmp_emergency_stop_triggered = True
@@ -921,8 +921,8 @@ class HmiPlcBinder(QObject):
                     ).start()
                 return
 
-            # ── 80°C 알림 ────────────────────────────────────────
-            ALERT_THRESHOLD = 80.0
+            # ── 75°C 알림 ────────────────────────────────────────
+            ALERT_THRESHOLD = 75.0
             if temp >= ALERT_THRESHOLD:
                 if now - self._tmp_temp_alert_last_ts >= self._tmp_temp_alert_cooldown_s:
                     self._tmp_temp_alert_last_ts = now
@@ -969,7 +969,7 @@ class HmiPlcBinder(QObject):
 
     def _emergency_tmp_stop(self) -> None:
         """
-        TMP 100°C 긴급 정지 처리 (별도 스레드에서 실행).
+        TMP 79°C 긴급 정지 처리 (별도 스레드에서 실행).
         1. M/V 닫기 명령 전송
         2. 3초 대기 후 PLC 직접 읽어서 상태 확인
         3. TMP stop_pump() 명령 전송

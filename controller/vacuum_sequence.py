@@ -137,7 +137,8 @@ class VacuumSequence(QThread):
         ok, err = self._write_and_verify("R_V_SW", True, "R/V 열기")
         if not ok:
             self._restore_rough_phase()
-            self._fail(f"R/V 열기 실패: {err}")
+            if not self._check_abort():
+                self._fail(f"R/V 열기 실패: {err}")
             return
 
         if self._check_abort():
@@ -170,7 +171,8 @@ class VacuumSequence(QThread):
         ok, err = self._write_and_verify("R_V_SW", False, "R/V 닫기")
         if not ok:
             self._restore_rough_phase()
-            self._fail(f"R/V 닫기 실패: {err}")
+            if not self._check_abort():
+                self._fail(f"R/V 닫기 실패: {err}")
             return
 
         if self._check_abort():
@@ -182,7 +184,8 @@ class VacuumSequence(QThread):
         ok, err = self._write_and_verify("F_V_SW", True, "F/V 열기")
         if not ok:
             self._restore_fine_phase()
-            self._fail(f"F/V 열기 실패: {err}")
+            if not self._check_abort():
+                self._fail(f"F/V 열기 실패: {err}")
             return
 
         if self._check_abort():
@@ -194,7 +197,8 @@ class VacuumSequence(QThread):
         ok, err = self._write_and_verify("M_V_SW", True, "M/V 열기")
         if not ok:
             self._restore_fine_phase()
-            self._fail(f"M/V 열기 실패: {err}")
+            if not self._check_abort():
+                self._fail(f"M/V 열기 실패: {err}")
             return
         
         self._log("[VACUUM] === Vacuum ON 시퀀스 완료 ✅ ===")
@@ -343,6 +347,9 @@ class VacuumSequence(QThread):
 
     # ── 헬퍼: Step 6~7 실패 시 복구 (Fine 구간) ──────────────────
     def _restore_fine_phase(self) -> None:
+        """Fine 구간(F/V·M/V 열기) 실패/중단 시 복구.
+        모두 정상 ON이면 그대로 유지, 아니면 Rough 구간 복구로 위임.
+        """
         try:
             rp  = self._read_coil("R_P_SW")
             fv  = self._read_coil("F_V_SW")
@@ -353,8 +360,8 @@ class VacuumSequence(QThread):
                 self._log("[VACUUM] 복구: R/P·F/V·TMP·M/V 모두 ON → 그대로 유지")
                 return
             self._restore_rough_phase()
-        except Exception:
-            pass
+        except Exception as e:
+            self._log(f"[VACUUM][WARN] Fine 구간 복구 중 예외: {e!r}")
 
     # ── 헬퍼: 실패 처리 ──────────────────────────────────────────
     def _fail(self, reason: str) -> None:

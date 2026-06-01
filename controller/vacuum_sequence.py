@@ -252,7 +252,9 @@ class VacuumSequence(QThread):
             return None
 
     # ── 헬퍼: PLC 코일 쓰기 ──────────────────────────────────────
-    def _write_and_verify(self, coil: str, on: bool, label: str) -> tuple[bool, str]:
+    def _write_and_verify(
+        self, coil: str, on: bool, label: str, *, ignore_abort: bool = False
+    ) -> tuple[bool, str]:
         # 1. 명령 전송
         try:
             fut = self._binder.submit_write(coil, on, tag=f"VACUUM:{coil}")
@@ -263,9 +265,10 @@ class VacuumSequence(QThread):
             return False, repr(e)
 
         # 2. 3초 대기 (밸브 물리적 동작 시간)
+        #    ignore_abort=True 면 abort 중에도 안정 대기를 끝까지 수행 (복구 경로 전용)
         deadline = time.monotonic() + STEP_SETTLE_S
         while time.monotonic() < deadline:
-            if self._abort_requested:
+            if self._abort_requested and not ignore_abort:
                 return False, "중단 요청"
             time.sleep(SETTLE_TICK_S)
 
@@ -304,24 +307,39 @@ class VacuumSequence(QThread):
     def _restore_rough_phase(self) -> None:
         """PLC 실제 상태를 읽어서 안전 순서로 밸브 복구.
         목표: M/V=OFF, R/V=OFF, F/V=ON
+
+        주의: abort 요청 직후에도 호출되므로, 내부 밸브 쓰기는
+        ignore_abort=True 로 안정 대기/검증을 끝까지 수행한다.
         """
         try:
             # 1. M/V 먼저 닫기 (F/V 닫힌 상태에서 M/V ON 금지 규칙)
             if self._read_coil("M_V_SW"):
                 self._log("[VACUUM] 복구: M/V 닫기")
-                self._write_and_verify("M_V_SW", False, "복구: M/V 닫기")
+                ok, err = self._write_and_verify(
+                    "M_V_SW", False, "복구: M/V 닫기", ignore_abort=True
+                )
+                if not ok:
+                    self._log(f"[VACUUM][WARN] 복구 M/V 닫기 검증 실패: {err}")
 
             # 2. R/V 닫기 (F/V 열기 전에 반드시 먼저)
             if self._read_coil("R_V_SW"):
                 self._log("[VACUUM] 복구: R/V 닫기")
-                self._write_and_verify("R_V_SW", False, "복구: R/V 닫기")
+                ok, err = self._write_and_verify(
+                    "R_V_SW", False, "복구: R/V 닫기", ignore_abort=True
+                )
+                if not ok:
+                    self._log(f"[VACUUM][WARN] 복구 R/V 닫기 검증 실패: {err}")
 
             # 3. F/V 열기
             if not self._read_coil("F_V_SW"):
                 self._log("[VACUUM] 복구: F/V 열기")
-                self._write_and_verify("F_V_SW", True, "복구: F/V 열기")
-        except Exception:
-            pass
+                ok, err = self._write_and_verify(
+                    "F_V_SW", True, "복구: F/V 열기", ignore_abort=True
+                )
+                if not ok:
+                    self._log(f"[VACUUM][WARN] 복구 F/V 열기 검증 실패: {err}")
+        except Exception as e:
+            self._log(f"[VACUUM][WARN] 복구 중 예외: {e!r}")
 
     # ── 헬퍼: Step 6~7 실패 시 복구 (Fine 구간) ──────────────────
     def _restore_fine_phase(self) -> None:

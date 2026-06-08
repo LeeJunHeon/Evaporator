@@ -26,6 +26,11 @@ try:
 except Exception:
     GCHAT_WEBHOOK_URL = ""
 
+try:
+    from secrets import CHAT_WEBHOOK_PLC_DISCONNECT_URL
+except Exception:
+    CHAT_WEBHOOK_PLC_DISCONNECT_URL = ""
+
 from PySide6.QtCore import QObject, QSignalBlocker, Qt, QTimer
 from PySide6.QtWidgets import QMessageBox
 
@@ -117,15 +122,34 @@ class HmiPlcBinder(QObject):
         self._last_tmp_alert_state: Optional[bool] = None
         self._last_plc_alert_state: Optional[bool] = None
 
+        # ✅ 연결 끊김 60초 grace 알림 상태 (PLC/TMP 공통)
+        # - 끊긴 시각 기록 → 60초 후에도 끊겨 있으면 1회 알림
+        # - 60초 안에 복구되면 알림 없음 (일시적 끊김 노이즈 제거)
+        self._disconnect_grace_s: float = 60.0
+        self._plc_disconnect_since: float = 0.0   # monotonic 시각, 0=끊김 아님
+        self._plc_disconnect_alerted: bool = False
+        self._tmp_disconnect_since: float = 0.0
+        self._tmp_disconnect_alerted: bool = False
+
         # (선택) 초기 표시
         self._render_status_line()
 
         # Door 이동 중 인터락(시간 기반)
         self._door_busy_until: float = 0.0
         self._vacuum_sequence: Optional[object] = None
+
         self._door_busy_timer = QTimer(self)
         self._door_busy_timer.setSingleShot(True)
         self._door_busy_timer.timeout.connect(self._end_door_busy)
+
+        # ✅ PLC/TMP 끊김 60초 grace 타이머 (single-shot)
+        self._plc_disconnect_timer = QTimer(self)
+        self._plc_disconnect_timer.setSingleShot(True)
+        self._plc_disconnect_timer.timeout.connect(self._on_plc_disconnect_timeout)
+
+        self._tmp_disconnect_timer = QTimer(self)
+        self._tmp_disconnect_timer.setSingleShot(True)
+        self._tmp_disconnect_timer.timeout.connect(self._on_tmp_disconnect_timeout)
 
         # ✅ 단일 PLC 게이트웨이
         self._plc = PLCService(settings=settings, parent=self)
@@ -303,6 +327,11 @@ class HmiPlcBinder(QObject):
         self._plc.start()
 
     def stop(self) -> None:
+        # ✅ 끊김 grace 타이머 정리
+        with contextlib.suppress(Exception):
+            self._plc_disconnect_timer.stop()
+        with contextlib.suppress(Exception):
+            self._tmp_disconnect_timer.stop()
         # PLCService 내부 워커 종료
         self._plc.stop()
 
@@ -1036,9 +1065,11 @@ class HmiPlcBinder(QObject):
 
     def _notify_connection_change(self, device: str, connected: bool) -> None:
         """
-        TMP / PLC 연결 상태 변화 시점에만 구글챗 알림.
+        TMP / PLC 연결 상태 변화 시점 처리 (60초 grace 적용).
         - 첫 호출은 baseline만 기록하고 알림 안 보냄 (앱 시작 시점 spam 방지)
-        - 이후 상태가 바뀐 시점에만 1회 알림
+        - 끊김: 즉시 알림하지 않고 60초 타이머 시작.
+                60초 후에도 끊겨 있으면 1회 알림. (일시적 끊김 노이즈 제거)
+        - 복구: 타이머 취소. 끊김 알림을 보냈던 경우에만 복구 알림 1회.
 
         Args:
             device: "TMP" 또는 "PLC"
@@ -1056,26 +1087,147 @@ class HmiPlcBinder(QObject):
             # 상태 변화 없음
             return
 
-        # 상태 변화 → 알림
         setattr(self, attr, bool(connected))
 
-        ts = time.strftime("%Y-%m-%d %H:%M:%S")
-        if connected:
-            msg = (
-                f"✅ [Evaporator] {device} 통신 복구\n"
-                f"시각: {ts}"
-            )
+        dev = device.lower()  # "plc" / "tmp"
+        if not connected:
+            self._start_disconnect_grace(dev)
         else:
-            msg = (
-                f"🚨 [Evaporator] {device} 통신 끊김\n"
-                f"시각: {ts}\n"
-                f"즉시 확인 바랍니다."
-            )
+            self._handle_reconnect(dev)
 
+    # ------------------------------------------------------------
+    # 연결 끊김 60초 grace 처리 (PLC/TMP 공통)
+    # ------------------------------------------------------------
+    def _start_disconnect_grace(self, dev: str) -> None:
+        """끊김 감지: 끊긴 시각 기록 + 60초 타이머 시작 (즉시 알림 X)."""
+        timer = getattr(self, f"_{dev}_disconnect_timer", None)
+        if timer is None:
+            return
+        # 끊긴 시각 기록 (이미 카운트 중이면 갱신하지 않음)
+        if getattr(self, f"_{dev}_disconnect_since", 0.0) <= 0.0:
+            setattr(self, f"_{dev}_disconnect_since", time.monotonic())
+        setattr(self, f"_{dev}_disconnect_alerted", False)
         self._set_hmi_log(
-            f"[ALERT] {device} {'CONNECTED' if connected else 'DISCONNECTED'} → Google Chat 알림 발송"
+            f"[ALERT] {dev.upper()} DISCONNECTED → {int(self._disconnect_grace_s)}초 후 알림 예정"
         )
-        self._send_gchat_alert(msg)
+        # 60초 single-shot 시작 (이미 돌고 있어도 재시작 무방)
+        timer.start(int(self._disconnect_grace_s * 1000))
+
+    def _is_device_connected(self, dev: str) -> bool:
+        """현재 연결 상태를 실제 값으로 재확인 (타이머 만료 시 방어용)."""
+        if dev == "plc":
+            return self.is_ui_connected()
+        if dev == "tmp":
+            return bool(self._tmp_connected)
+        return False
+
+    def _on_plc_disconnect_timeout(self) -> None:
+        self._fire_disconnect_alert("plc", "PLC")
+
+    def _on_tmp_disconnect_timeout(self) -> None:
+        self._fire_disconnect_alert("tmp", "TMP")
+
+    def _fire_disconnect_alert(self, dev: str, device: str) -> None:
+        """60초 만료: 여전히 끊겨 있을 때만 끊김 알림 발송."""
+        # ✅ 방어: 타이머 도는 사이 이미 복구됐으면 알림 보내지 않음
+        if self._is_device_connected(dev):
+            setattr(self, f"_{dev}_disconnect_since", 0.0)
+            setattr(self, f"_{dev}_disconnect_alerted", False)
+            return
+
+        since = getattr(self, f"_{dev}_disconnect_since", 0.0)
+        elapsed_s = (time.monotonic() - since) if since > 0.0 else self._disconnect_grace_s
+        port = self._get_plc_port() if dev == "plc" else self._get_tmp_port()
+
+        msg = (
+            f"[Evaporator] {device} 연결 끊김 {int(elapsed_s)}초 경과, "
+            f"재연결 실패 ({port})"
+        )
+        self._set_hmi_log(f"[ALERT] {device} 연결 끊김 {int(elapsed_s)}초 → Google Chat 알림 발송")
+
+        if dev == "plc":
+            self._send_gchat_alert_multi(msg, [GCHAT_WEBHOOK_URL, CHAT_WEBHOOK_PLC_DISCONNECT_URL])
+        else:
+            self._send_gchat_alert(msg)
+
+        setattr(self, f"_{dev}_disconnect_alerted", True)
+
+    def _handle_reconnect(self, dev: str) -> None:
+        """복구: 타이머 취소 + (끊김 알림을 보냈던 경우에만) 복구 알림."""
+        timer = getattr(self, f"_{dev}_disconnect_timer", None)
+        if timer is not None:
+            with contextlib.suppress(Exception):
+                timer.stop()
+
+        alerted = bool(getattr(self, f"_{dev}_disconnect_alerted", False))
+        setattr(self, f"_{dev}_disconnect_since", 0.0)
+        setattr(self, f"_{dev}_disconnect_alerted", False)
+
+        if not alerted:
+            # 60초 전에 복구됨 → 끊김 알림을 안 보냈으니 복구 알림도 안 보냄
+            self._set_hmi_log(f"[ALERT] {dev.upper()} 복구 (60초 이내, 알림 생략)")
+            return
+
+        device = dev.upper()
+        port = self._get_plc_port() if dev == "plc" else self._get_tmp_port()
+        msg = f"[Evaporator] {device} 재연결 성공 ({port})"
+        self._set_hmi_log(f"[ALERT] {device} 재연결 성공 → Google Chat 알림 발송")
+
+        if dev == "plc":
+            self._send_gchat_alert_multi(msg, [GCHAT_WEBHOOK_URL, CHAT_WEBHOOK_PLC_DISCONNECT_URL])
+        else:
+            self._send_gchat_alert(msg)
+
+    def _get_plc_port(self) -> str:
+        try:
+            return str(getattr(self.settings, "port", "") or "PLC")
+        except Exception:
+            return "PLC"
+
+    def _get_tmp_port(self) -> str:
+        svc = self._turbovac_service
+        try:
+            cfg = getattr(svc, "_cfg", None)
+            if isinstance(cfg, dict):
+                p = str(cfg.get("port", "") or "").strip()
+                if p:
+                    return p
+        except Exception:
+            pass
+        return "TMP"
+
+    def _send_gchat_alert_multi(self, message: str, urls: list) -> None:
+        """여러 webhook URL로 동일 메시지 발송 (중복/빈 URL 제거)."""
+        seen = set()
+        for url in urls:
+            u = (url or "").strip()
+            if not u or u in seen:
+                continue
+            seen.add(u)
+            self._send_gchat_alert_to(message, u)
+
+    def _send_gchat_alert_to(self, message: str, url: str) -> None:
+        """지정한 webhook URL로 알림 전송 (별도 daemon 스레드)."""
+        def _send() -> None:
+            try:
+                if not url:
+                    return
+                payload = _json.dumps({"text": message}).encode("utf-8")
+                req = urllib.request.Request(
+                    url,
+                    data=payload,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(req, timeout=5):
+                    pass
+            except Exception as e:
+                try:
+                    self._set_hmi_log(f"[WARN] Google Chat 알림 전송 실패: {e!r}")
+                except Exception:
+                    pass
+
+        threading.Thread(target=_send, daemon=True).start()
 
     def _on_button_toggled(self, binding: ButtonBinding, on: bool) -> None:
         on_i = int(bool(on))

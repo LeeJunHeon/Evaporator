@@ -1,15 +1,33 @@
 {
-  "step_count": 1,
+  "step_count": 4,
   "ramp_steps": [
     {
+      "target_adc": 60.0,
+      "dac_step": 100,
+      "dac_interval_sec": 8.0,
+      "hold_sec": 0.0
+    },
+    {
       "target_adc": 100.0,
-      "dac_step": 10,
+      "dac_step": 50,
+      "dac_interval_sec": 15.0,
+      "hold_sec": 0.0
+    },
+    {
+      "target_adc": 140.0,
+      "dac_step": 30,
+      "dac_interval_sec": 30.0,
+      "hold_sec": 0.0
+    },
+    {
+      "target_adc": 180.0,
+      "dac_step": 20,
       "dac_interval_sec": 30.0,
       "hold_sec": 0.0
     }
   ],
   "dac_max": 4000,
-  "rate_tol_ratio": 0.10,
+  "rate_tol_ratio": 0.1,
   "rate_stable_sec": 3.0,
   "hold_control_interval_s": 3.0,
   "fine_step_dac": 10,
@@ -25,13 +43,17 @@
   "rate_abort_sec": 15.0,
   "sensor_none_abort_s": 15.0,
   "adc_none_abort_s": 5.0,
+  "adc_max": 200,
+  "hold_pi_kd": 0.0,
+  "spike_abort_ratio": 3.0,
+  "spike_grace_s": 5.0,
+  "ramp_spike_pct": 200.0,
+  "ramp_spike_abort_sec": 15.0,
+  "ramp_spike_abort_ratio": 10.0,
   "pre_hold_entry_ratio": 3.0,
   "pre_hold_entry_sec": 15.0,
   "pre_hold_ready_ratio": 0.3,
   "pre_hold_timeout_sec": 180.0,
-  "ramp_spike_pct": 200.0,
-  "ramp_spike_abort_sec": 15.0,
-  "ramp_spike_abort_ratio": 10.0,
   "spike_dac_hold_threshold": 0.3,
   "spike_dac_hold_sec": 10.0
 }

@@ -760,6 +760,15 @@ class ProcessController(QObject):
         if not self._is_plc_ready():
             self._ui_warn("PLC가 아직 연결되지 않아 공정을 시작할 수 없습니다.")
             return
+        
+        # ✅ Main Valve(M/V) 개방 인터락: M/V가 실제로 열려 있을 때만 공정 시작
+        #    (MV_SW AND MV_interlock == 실제 M/V 출력 P00043)
+        if not self._is_main_valve_open():
+            self._ui_warn(
+                "Main Valve(M/V)가 열려 있지 않아 공정을 시작할 수 없습니다.\n"
+                "진공 시퀀스로 M/V를 먼저 개방한 뒤 다시 시도하세요."
+            )
+            return
 
         # 엔진 구성
         engine = self._create_engine()
@@ -851,6 +860,26 @@ class ProcessController(QObject):
 
             snap = self.plc.get_last_snapshot() if hasattr(self.plc, "get_last_snapshot") else None
             return bool(getattr(snap, "connected", False)) if snap is not None else False
+        except Exception:
+            return False
+        
+    def _is_main_valve_open(self) -> bool:
+        """
+        공정 시작 전, Main Valve(M/V)가 실제로 '열림' 상태인지 확인.
+        - PLC 래더 기준 실제 M/V 출력(P00043) = MV_SW(M00003) AND MV_interlock(M00102).
+        - 따라서 두 코일이 모두 True일 때만 '열림'으로 판정한다.
+        - 스냅샷이 없거나 코일 정보가 비어 있으면(상태 확인 불가) 안전하게 False 반환.
+        """
+        try:
+            snap = self.plc.get_last_snapshot() if hasattr(self.plc, "get_last_snapshot") else None
+            if snap is None:
+                return False
+            coils = getattr(snap, "coils", None)
+            if not coils:
+                return False
+            mv_sw = bool(coils.get("M_V_SW", False))
+            mv_interlock = bool(coils.get("MV_INTERLOCK", False))
+            return mv_sw and mv_interlock
         except Exception:
             return False
 

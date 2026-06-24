@@ -670,6 +670,14 @@ class PlcServiceWorker(QThread):
         block0 = await plc.read_coils_block(0, 13)   # 0..12
         block1 = await plc.read_coils_block(32, 4)   # 32..35 (AIR/WATER + GAUGE1/2)
 
+        # M00102(coil 258): M/V 실제 개방 판정용(= MV_SW AND MV_interlock).
+        # 일부 PLC Modbus 매핑에서 미노출일 수 있으므로 실패해도 전체 폴링은 유지.
+        try:
+            block2 = await plc.read_coils_block(258, 1)  # 258 = M00102 (MV_interlock)
+            mv_interlock = bool(block2[0])
+        except Exception:
+            mv_interlock = False
+
         out: Dict[str, bool] = {
             "R_P_SW": bool(block0[0]),
             "R_V_SW": bool(block0[1]),
@@ -689,6 +697,8 @@ class PlcServiceWorker(QThread):
             "WATER_SW": bool(block1[1]),
             "GAUGE_1_SW": bool(block1[2]),
             "GAUGE_2_SW": bool(block1[3]),
+
+            "MV_INTERLOCK": mv_interlock,   # M00102 (MV open permissive)
         }
         return out
     

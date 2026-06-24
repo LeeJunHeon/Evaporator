@@ -763,7 +763,7 @@ class ProcessController(QObject):
         
         # ✅ Main Valve(M/V) 개방 인터락: M/V가 실제로 열려 있을 때만 공정 시작
         #    (MV_SW AND MV_interlock == 실제 M/V 출력 P00043)
-        if not self._is_main_valve_open():
+        if not self.is_main_valve_open():
             self._ui_warn(
                 "Main Valve(M/V)가 열려 있지 않아 공정을 시작할 수 없습니다.\n"
                 "진공 시퀀스로 M/V를 먼저 개방한 뒤 다시 시도하세요."
@@ -863,7 +863,7 @@ class ProcessController(QObject):
         except Exception:
             return False
         
-    def _is_main_valve_open(self) -> bool:
+    def is_main_valve_open(self) -> bool:
         """
         공정 시작 전, Main Valve(M/V)가 실제로 '열림' 상태인지 확인.
         - PLC 래더 기준 실제 M/V 출력(P00043) = MV_SW(M00003) AND MV_interlock(M00102).

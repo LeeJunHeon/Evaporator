@@ -1106,10 +1106,6 @@ class ProcessWindow(QWidget):
 
         try:
             pc.start_from_ui(run_cfg, run_id=self._active_run_id)
-            self._append_process_log("[PRECHECK] STM preflight 완료 -> 공정 시작")
-            self._set_process_status("공정 시작", "STM preflight 완료")
-            self._pending_run_cfg = None
-            self._set_start_busy(False)
         except Exception as e:
             with contextlib.suppress(Exception):
                 self._emergency_safe_shutdown_plc_best_effort()
@@ -1119,6 +1115,33 @@ class ProcessWindow(QWidget):
                 title="Process Start Failed",
                 message=f"{e!r}",
             )
+            return
+
+        # ✅ 컨트롤러 게이트(M/V 개방 등)로 공정이 실제로 시작되지 않았는지 확인.
+        #    start()는 차단 시 예외 없이 return하므로 is_running()으로 판별한다.
+        #    (start()는 성공 시 동기적으로 worker.start()까지 수행 → 러닝 공정 오정리 없음)
+        started = True
+        try:
+            if hasattr(pc, "is_running"):
+                started = bool(pc.is_running())
+        except Exception:
+            started = True  # 판별 불가 시 정상 진행으로 간주(러닝 공정 오정리 방지)
+
+        if not started:
+            # run log / STM 등 side effect 정리 + 팝업. 구체 사유는 게이트가 로그에 남김.
+            self._abort_start_preflight(
+                show_warning=True,
+                title="Process",
+                message="공정이 시작되지 않았습니다.\n"
+                        "Main Valve(M/V) 개방 등 인터락 조건을 확인한 뒤 다시 시작하세요.\n"
+                        "자세한 사유는 로그를 확인하세요.",
+            )
+            return
+
+        self._append_process_log("[PRECHECK] STM preflight 완료 -> 공정 시작")
+        self._set_process_status("공정 시작", "STM preflight 완료")
+        self._pending_run_cfg = None
+        self._set_start_busy(False)
 
     def _has_active_start_preflight(self) -> bool:
         worker = self._start_worker
@@ -1202,6 +1225,20 @@ class ProcessWindow(QWidget):
         except Exception:
             pass
 
+        # ✅ Main Valve(M/V) 개방 사전점검 (fail-fast)
+        #    run log open / STM 기동 등 side effect 전에 즉시 차단한다.
+        #    (컨트롤러 start()의 게이트는 race 대비 backstop으로 유지)
+        try:
+            mv_ok = bool(pc.is_main_valve_open()) if hasattr(pc, "is_main_valve_open") else True
+        except Exception:
+            mv_ok = False
+        if not mv_ok:
+            QMessageBox.warning(
+                self, "Process",
+                "Main Valve(M/V)가 열려 있지 않아 공정을 시작할 수 없습니다.\n"
+                "진공 시퀀스로 M/V를 먼저 개방한 뒤 다시 시작하세요."
+            )
+            return
 
         run_cfg = self._collect_ui_run_cfg(require_process_name=True)
         if run_cfg is None:

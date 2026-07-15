@@ -79,9 +79,6 @@ PLC_COIL_MAP: Dict[str, int] = {
     "WATER_SW": 33,    # M00021
     "GAUGE_1_SW": 34,  # M00022
     "GAUGE_2_SW": 35,  # M00023
-
-    # --- Interlock relays (read-only; 공정 시작 인터락용) ---
-    "MV_INTERLOCK": 258,  # M00102 (MV open permissive = Air·RP·FV·Gauge_SP1_ilk·Turbo·/Door)
 }
 
 PLC_REG_MAP: Dict[str, int] = {

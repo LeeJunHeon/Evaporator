@@ -864,12 +864,6 @@ class ProcessController(QObject):
             return False
         
     def is_main_valve_open(self) -> bool:
-        """
-        공정 시작 전, Main Valve(M/V)가 실제로 '열림' 상태인지 확인.
-        - PLC 래더 기준 실제 M/V 출력(P00043) = MV_SW(M00003) AND MV_interlock(M00102).
-        - 따라서 두 코일이 모두 True일 때만 '열림'으로 판정한다.
-        - 스냅샷이 없거나 코일 정보가 비어 있으면(상태 확인 불가) 안전하게 False 반환.
-        """
         try:
             snap = self.plc.get_last_snapshot() if hasattr(self.plc, "get_last_snapshot") else None
             if snap is None:
@@ -877,9 +871,10 @@ class ProcessController(QObject):
             coils = getattr(snap, "coils", None)
             if not coils:
                 return False
-            mv_sw = bool(coils.get("M_V_SW", False))
-            mv_interlock = bool(coils.get("MV_INTERLOCK", False))
-            return mv_sw and mv_interlock
+            # PLC 래더가 M00102(인터락) OFF 시 M00003(MV_SW)를 강제 리셋 →
+            # MV_SW=1 이면 인터락 성립(P00043 물리 개방)이 이미 보장됨.
+            # 신뢰 불가한 coil 258은 읽지 않고 MV_SW만으로 판정.
+            return bool(coils.get("M_V_SW", False))
         except Exception:
             return False
 

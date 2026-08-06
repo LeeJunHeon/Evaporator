@@ -1651,6 +1651,23 @@ class HmiPlcBinder(QObject):
         box = QMessageBox(QMessageBox.Warning, title, message, QMessageBox.Ok, parent)
         box.setWindowFlag(Qt.WindowStaysOnTopHint, True)
         box.exec()
+
+    def _popup_confirm(self, title: str, message: str) -> bool:
+        """확인/취소 팝업. '확인'을 누르면 True, 그 외에는 False."""
+        parent = None
+        try:
+            btn = getattr(self.ui, "processBtn", None)
+            parent = btn.window() if btn is not None else None
+        except Exception:
+            parent = None
+
+        box = QMessageBox(QMessageBox.Question, title, message, QMessageBox.NoButton, parent)
+        ok_btn = box.addButton("확인", QMessageBox.AcceptRole)
+        box.addButton("취소", QMessageBox.RejectRole)
+        box.setDefaultButton(ok_btn)
+        box.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+        box.exec()
+        return box.clickedButton() is ok_btn
             
     def _mark_io_failed(self, reason: str = "") -> None:
         with self._state_lock:
@@ -2095,11 +2112,32 @@ class HmiPlcBinder(QObject):
             self._cancel_vacuum_btn()
             return
 
-        # ── 7. 시퀀스 시작 ───────────────────────────────────────────
+        # ── 7. 사용자 최종 확인 ──────────────────────────────────────
+        pressure_line = (
+            f"현재 압력   : {current_pressure:.3e} Torr\n"
+            if current_pressure is not None else ""
+        )
+        if not self._popup_confirm(
+            "Vacuum ON 시작 확인",
+            "Vacuum ON 자동 시퀀스를 시작합니다.\n\n"
+            "  1. F/V 닫기\n"
+            "  2. R/V 열기\n"
+            "  3. 5e-2 Torr 이하까지 배기 대기\n"
+            "  4. R/V 닫기 → F/V 열기\n"
+            "  5. M/V 열기\n\n"
+            f"TMP 주파수 : {tmp_freq:.0f} Hz\n"
+            f"{pressure_line}"
+            "\n진행하시겠습니까?",
+        ):
+            self._set_hmi_log("[VACUUM] 사용자가 시작 확인을 취소함")
+            self._cancel_vacuum_btn()
+            return
+
+        # ── 8. 시퀀스 시작 ───────────────────────────────────────────
         from controller.vacuum_sequence import VacuumSequence
  
         self._set_hmi_log(
-            f"[VACUUM] 사전 조건 통과 (TMP freq={tmp_freq:.0f} Hz) → 시퀀스 시작"
+            f"[VACUUM] 사전 조건 통과 + 사용자 확인 (TMP freq={tmp_freq:.0f} Hz) → 시퀀스 시작"
         )
  
         seq = VacuumSequence(

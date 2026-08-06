@@ -593,6 +593,7 @@ class ProcessController(QObject):
             "step_count": process_config["step_count"],
             "ramp_steps": process_config["ramp_steps"],
             "dac_max": process_config["dac_max"],
+            "adc_max": process_config.get("adc_max", 200),
             "rate_tol_ratio": process_config["rate_tol_ratio"],
             "rate_stable_sec": process_config["rate_stable_sec"],
             "hold_control_interval_s": process_config["hold_control_interval_s"],

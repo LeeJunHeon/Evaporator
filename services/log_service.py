@@ -1176,7 +1176,13 @@ class LogService(QObject):
             fmt = re.compile(
                 r"^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\] \[[A-Z]+\]( \[[^\]]+\])? "
             )
-            lines = [line for line in lines if not fmt.match(line)]
+
+            # HMI 바인더 진단 태그는 파일에도 반드시 남긴다(코일 readback/인터락 추적용)
+            KEEP_TAGS = ("[STATE]", "[UI]", "[BLOCK]", "[CMD]", "[VACUUM]")
+            lines = [
+                line for line in lines
+                if any(t in line for t in KEEP_TAGS) or not fmt.match(line)
+            ]
 
         return lines
 

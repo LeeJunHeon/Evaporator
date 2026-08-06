@@ -1371,8 +1371,19 @@ class ProcessEngine:
                     if self._last_dac_power_2 is not None:
                         _dac_parts.append(f"DAC2={self._last_dac_power_2}")
 
-                # ADC 문자열 (현재 배선: 항상 ADC2 피드백)
-                _adc_str = f"ADC2={adc2_v:.1f}" if adc2_v is not None else "ADC2=---"
+                # ADC 문자열 (DAC와 동일하게 선택된 파워 채널만 표시)
+                _adc_parts = []
+                if _use_p1 and adc1_v is not None:
+                    _adc_parts.append(f"ADC1={adc1_v:.1f}")
+                if _use_p2 and adc2_v is not None:
+                    _adc_parts.append(f"ADC2={adc2_v:.1f}")
+                # meta 없는 step이면 양쪽 다 표시(DAC fallback과 동일 규칙)
+                if not _adc_parts and not (_use_p1 or _use_p2):
+                    if adc1_v is not None:
+                        _adc_parts.append(f"ADC1={adc1_v:.1f}")
+                    if adc2_v is not None:
+                        _adc_parts.append(f"ADC2={adc2_v:.1f}")
+                _adc_str = ", ".join(_adc_parts) if _adc_parts else "ADC=---"
 
                 _plc_str = (", ".join(_dac_parts) + ", " + _adc_str) if _dac_parts else _adc_str
 

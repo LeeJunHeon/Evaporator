@@ -642,7 +642,21 @@ class ProcessController(QObject):
 
             ProcessStep(name="DAC1_ZERO", type=StepType.PLC_WRITE_REG, reg="DAC_POWER_1", value=0),
             ProcessStep(name="DAC2_ZERO", type=StepType.PLC_WRITE_REG, reg="DAC_POWER_2", value=0),
+        ]
 
+        # 선택된 소스의 셔터를 POWER ON '이전'에 연다.
+        # 5c61ba2(2026-03-27) Power 배선 임시 대응으로 제거됐다가
+        # ee268fd(2026-04-10) 수리 완료 복구 시 누락된 스텝을 복원한 것.
+        if use_p1:
+            steps.append(
+                ProcessStep(name="SHUTTER_1_OPEN", type=StepType.PLC_WRITE_COIL, coil="SHUTTER_1_SW", on=True)
+            )
+        if use_p2:
+            steps.append(
+                ProcessStep(name="SHUTTER_2_OPEN", type=StepType.PLC_WRITE_COIL, coil="SHUTTER_2_SW", on=True)
+            )
+
+        steps += [
             ProcessStep(name="POWER1_SET", type=StepType.PLC_WRITE_COIL, coil="POWER_1_SW", on=use_p1),
             ProcessStep(name="POWER2_SET", type=StepType.PLC_WRITE_COIL, coil="POWER_2_SW", on=use_p2),
         ]

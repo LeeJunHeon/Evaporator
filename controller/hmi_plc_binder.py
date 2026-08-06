@@ -2135,6 +2135,14 @@ class HmiPlcBinder(QObject):
 
         # ── 8. 시퀀스 시작 ───────────────────────────────────────────
         from controller.vacuum_sequence import VacuumSequence
+
+        # 팝업 대기 중 상태가 변했을 수 있으므로 TMP만 재확인
+        tmp_freq_now = self.get_tmp_freq()
+        if tmp_freq_now is None or tmp_freq_now < TMP_FREQ_MIN:
+            self._set_hmi_log(f"[BLOCK] VACUUM ON (확인 대기 중 TMP freq 저하: {tmp_freq_now})")
+            self._popup_warn("인터락", "확인을 기다리는 동안 TMP 주파수가 기준 밑으로 떨어졌습니다.\n다시 시도해 주세요.")
+            self._cancel_vacuum_btn()
+            return
  
         self._set_hmi_log(
             f"[VACUUM] 사전 조건 통과 + 사용자 확인 (TMP freq={tmp_freq:.0f} Hz) → 시퀀스 시작"

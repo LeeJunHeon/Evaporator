@@ -709,14 +709,6 @@ class ProcessController(QObject):
             return int(round(float(value)))
         except Exception:
             return None
-
-    def _extract_runtime_recommendation(
-        self,
-        run_cfg: dict[str, Any],
-        *,
-        process_config: dict[str, Any],
-    ) -> dict[str, Any]:
-        return {}
         
     def _extract_power_mode(self, run_cfg: dict[str, Any]) -> dict[str, Any]:
         use_p1 = bool(run_cfg.get("use_power1", False))

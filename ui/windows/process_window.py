@@ -105,11 +105,6 @@ class ProcessWindow(QWidget):
         self._run_use_power2: Optional[bool] = None
 
         # 현재 재료별 ADC 조회 캐시
-
-
-        self._power2_temporarily_disabled: bool = False
-        self._power1_feedback_uses_adc2: bool = False
-
         self.ui.materialEdit.clicked.connect(lambda: self._open_material_dialog(1))
         self.ui.materialEdit2.clicked.connect(lambda: self._open_material_dialog(2))
 
@@ -2290,12 +2285,6 @@ class ProcessWindow(QWidget):
         """
         use1, use2 = self._selected_power_flags()
 
-        # 현재 선택된 전원 표시 조회:
-
-        if use1 and not use2 and self._power1_feedback_uses_adc2:
-            fb = self._to_float_or_none(adc2)
-            return fb, None, fb
-
         graph_power = self._sum_selected_pair(
             self._to_float_or_none(adc1),
             self._to_float_or_none(adc2),
@@ -2582,18 +2571,6 @@ class ProcessWindow(QWidget):
         if not (p1 or p2):
             QMessageBox.warning(self, "Input", "Power1/Power2 중 최소 1개는 선택해야 합니다.")
             return None
-
-
-        if self._power2_temporarily_disabled and p2:
-            QMessageBox.warning(
-                self,
-                "Input",
-                "현재 장비 상태에서는 Power 2를 사용할 수 없습니다.\n"
-                "임시로 Power 1만 사용해 주세요.\n"
-                "(장비 수리 후 Power2/dual-power 경로를 다시 활성화할 예정입니다.)"
-            )
-            return None
-
 
         rate1 = self._read_float("deprateEdit")
         rate2 = self._read_float("deprateEdit2")

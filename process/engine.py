@@ -174,6 +174,7 @@ class ProcessEngine:
         self._shutdown_already_executed: bool = False
         self._graph_frozen: bool = False
         self._last_sw_thickness_nm: Optional[float] = None  # 소프트웨어 두께 캐시
+        self._shadow_tele: dict = {}  # 그림자 모드(읽기 전용) CSV 값 캐시
 
     # --------------------------------------------------------
     # External controls (thread-safe-ish: 단순 플래그)
@@ -214,6 +215,8 @@ class ProcessEngine:
         self._last_adc_power_2 = None
         self._ui_last_message = ""
         self._shutdown_already_executed = False
+        self._last_sw_thickness_nm = None
+        self._shadow_tele = {}
 
         # run 파일 open/close는 ProcessWindow가 담당한다.
         # engine은 현재 열려 있는 run에 내부 이벤트만 기록한다.
@@ -1341,6 +1344,7 @@ class ProcessEngine:
                 "dep.rate": rate,
                 "thickness_nm": thickness_nm,
                 "sw_thickness_nm": self._last_sw_thickness_nm,
+                **self._shadow_tele_cells(),
             })
 
             now = time.monotonic()
@@ -1484,9 +1488,23 @@ class ProcessEngine:
                 "adc2": adc2_raw,
                 "dep.rate": self._get_rate(),
                 "thickness_nm": _th_nm,
+                "sw_thickness_nm": self._last_sw_thickness_nm,
+                **self._shadow_tele_cells(),
             })
         except Exception:
             pass
+
+    def _shadow_tele_cells(self) -> dict:
+        """그림자 모드(읽기 전용) CSV 4칸. 값이 없으면 빈칸."""
+        sh = getattr(self, "_shadow_tele", None)
+        if not isinstance(sh, dict):
+            sh = {}
+        return {
+            "shadow_thk_nm": sh.get("shadow_thk_nm"),
+            "shadow_rate": sh.get("shadow_rate"),
+            "shadow_slope": sh.get("shadow_slope"),
+            "shadow_flag": sh.get("shadow_flag"),
+        }
 
     @staticmethod
     def _fmt_hms(sec: float, *, ceil: bool = False) -> str:

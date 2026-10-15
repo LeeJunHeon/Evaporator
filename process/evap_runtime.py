@@ -30,6 +30,12 @@ from typing import Optional
 
 from process.models import ProcessRecipe, ProcessStep
 
+try:
+    # 그림자 모드(읽기 전용) 관찰기. import 실패 시 그림자 기능만 꺼지고 공정은 그대로 진행된다.
+    from process.stm_shadow import StmShadowObserver as _StmShadowObserver
+except Exception:  # pragma: no cover
+    _StmShadowObserver = None
+
 
 def _raise_engine_failed(step_name: str, detail: str) -> None:
     """
@@ -804,6 +810,89 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
     shutter_open = False
     shutdown_done = False
 
+    # ------------------------------------------------------------
+    # 그림자 모드(읽기 전용): STM 신호 관찰 결과를 로그/CSV에만 남긴다.
+    # - DAC/PID 제어, abort, 종료 판정에는 전혀 관여하지 않는다.
+    # - 여기서 생기는 예외는 모두 삼키고, 3회 누적되면 이번 런에서만 끈다.
+    # ------------------------------------------------------------
+    _shadow: dict = {"obs": None, "errors": 0, "last_ts": None, "started": False, "done": False}
+    engine._shadow_tele = {}
+    if _StmShadowObserver is not None:
+        try:
+            _shadow["obs"] = _StmShadowObserver(target_rate, target_th)
+            engine._log_info(_shadow["obs"].start_line(), tag="SHADOW")
+        except Exception:
+            _shadow["obs"] = None
+
+    def _shadow_error(where: str, ex: Exception) -> None:
+        _shadow["errors"] += 1
+        if _shadow["errors"] >= 3 and _shadow["obs"] is not None:
+            _shadow["obs"] = None
+            engine._shadow_tele = {}
+            try:
+                engine._log_warn(f"그림자 모드 중지(오류 3회, 공정에는 영향 없음) | {where}: {ex!r}", tag="SHADOW")
+            except Exception:
+                pass
+
+    def _shadow_log(msgs) -> None:
+        for m in (msgs or []):
+            try:
+                engine._log_info(str(m), tag="SHADOW")
+            except Exception:
+                pass
+
+    def _shadow_phase(phase: str) -> None:
+        obs = _shadow["obs"]
+        if obs is None:
+            return
+        try:
+            _shadow_log(obs.start_phase(phase, time.monotonic()))
+            _shadow["last_ts"] = None
+            _shadow["started"] = True
+        except Exception as ex:
+            _shadow_error("start_phase", ex)
+
+    def _shadow_feed(dac_now: int, sw_a: Optional[float] = None) -> None:
+        obs = _shadow["obs"]
+        if obs is None or not _shadow["started"]:
+            return
+        try:
+            snap = engine._get_stm_snapshot()
+            if snap is None or not bool(getattr(snap, "connected", False)):
+                return
+            ts = getattr(snap, "ts", None)
+            if ts is None or ts == _shadow["last_ts"]:
+                return  # STM 새 샘플(약 1초 간격)일 때만 관찰
+            _shadow["last_ts"] = ts
+            adc_total, _, _ = _read_selected_adc_total(
+                engine, use_p1, use_p2, power1_feedback_adc2=power1_feedback_adc2,
+            )
+            msgs = obs.update(
+                t=time.monotonic(),
+                rate=getattr(snap, "rate_angstrom_per_s", None),
+                thickness_a=getattr(snap, "thickness_angstrom", None),
+                pressure=engine._get_pressure(),
+                adc=adc_total,
+                dac=dac_now,
+                sw_thickness_a=sw_a,
+            )
+            engine._shadow_tele = obs.snapshot()
+            _shadow_log(msgs)
+        except Exception as ex:
+            _shadow_error("update", ex)
+
+    def _shadow_finish(reason: str) -> None:
+        obs = _shadow["obs"]
+        if obs is None or _shadow["done"] or not _shadow["started"]:
+            return
+        _shadow["done"] = True
+        try:
+            _shadow_log(obs.finish())
+            engine._log_info(f"{obs.summary_line()} | 종료 사유: {reason}", tag="SHADOW")
+        except Exception as ex:
+            _shadow_error("finish", ex)
+        engine._shadow_tele = {}
+
     def _wait_with_checks(wait_s: float, *, label: str) -> None:
         wait_s = float(wait_s)
         if wait_s <= 0:
@@ -910,6 +999,7 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
                 f"max_delta={hold_max_dac_delta}"
             ),
         )
+        _shadow_phase("sdelay")  # 그림자 모드(읽기 전용)
         
         while True:
             engine._check_stop(recipe, step)
@@ -930,6 +1020,7 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
                 alpha=rate_filter_alpha,
                 max_jump_abs=jump_guard_abs,
             )
+            _shadow_feed(dac)  # 그림자 모드(읽기 전용)
             
             # rate abort 체크 (소스 소진/이상 시)
             abort_threshold = float(target_rate) * rate_abort_ratio
@@ -1594,6 +1685,7 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         # 2) 즉시 STM Zero 호출 (셔터 오픈 직후, 시간 차 최소화)
         # 이 사이의 짧은 시간(~100ms) 동안 증착되는 0.05nm는 STM 분해능 이하로 무시 가능
         _stm_zero_thickness(engine, recipe, step, mode=zero_mode)
+        _shadow_phase("hold")  # 그림자 모드(읽기 전용): STM ZERO 직후 HOLD 관찰 시작
 
         # 3) Hold 진입 baseline 정리 (PID 상태는 shutter_delay에서 인계)
         filtered_rate = sd_state["filtered_rate"]
@@ -1655,6 +1747,7 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
 
             # engine 캐시 갱신 (telemetry에서 읽어감)
             engine._last_sw_thickness_nm = sw_thickness_a / 10.0
+            _shadow_feed(dac, sw_a=sw_thickness_a)  # 그림자 모드(읽기 전용)
 
             # STM ZERO 이후에는 현재 thickness 자체를 증착 두께로 본다.
             dep_th = max(0.0, th)
@@ -1828,6 +1921,7 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
         # -------------------------
         # 3) 파워 하강
         # -------------------------
+        _shadow_finish("정상 종료(SW 두께 도달)")  # 그림자 모드 요약 1줄
         _ramp_down_then_shutdown(tag="EVAP_DONE")
         engine._emit_status(message="EVAP 완료", force=True)
 
@@ -1843,6 +1937,10 @@ def run_evap_deposition_control(engine, recipe: ProcessRecipe, step: ProcessStep
                 _ramp_down_then_shutdown(tag="EVAP_STOP")
             else:
                 _ramp_down_then_shutdown(tag="EVAP_FAIL")
+        except Exception:
+            pass
+        try:
+            _shadow_finish("사용자 정지" if is_stop_requested else f"오류 종료: {ex}")
         except Exception:
             pass
         raise

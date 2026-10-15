@@ -204,6 +204,12 @@ class LogWriterWorker(QThread):
             "thickness_nm",
             "step",
             "detail",
+            # 아래 5칸은 맨 끝에 추가(기존 열 순서 유지)
+            "sw_thickness_nm",
+            "shadow_thk_nm",
+            "shadow_rate",
+            "shadow_slope",
+            "shadow_flag",
         ]
 
         # NAS 장애 복구 시 fallback 파일을 NAS로 병합하는 주기 체크 타임스탬프

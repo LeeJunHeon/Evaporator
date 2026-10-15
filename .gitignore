@@ -35,3 +35,8 @@ CLAUDE.md
 
 # Google Chat Webhook URL
 secrets.py
+
+# 장비마다 값이 다른 설정 파일 (장비 화면에서 저장됨). Git 은 예시 파일(*.example)만 관리한다.
+config/devices.ini
+config/process_config.json
+config/material_catalog.json

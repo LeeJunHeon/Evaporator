@@ -63,6 +63,13 @@ NAS_LOG_ROOT = Path(r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs\Evaporator")
 # main
 # ============================================================
 def main():
+    # 장비별 설정 파일(Git 관리 안 함)이 없으면 config/*.example 에서 처음 한 번만 복사한다. 이미 있는 파일은 덮어쓰지 않는다.
+    try:
+        from config.local_files import ensure_local_configs
+        _copied_cfg = ensure_local_configs(_BASE_DIR)
+    except Exception as _cfg_ex:  # 확인에 실패해도 기존 시작 흐름은 그대로 진행
+        _copied_cfg = [f"(설정 파일 확인 실패: {_cfg_ex!r})"]
+
     app = QApplication(sys.argv)
     if sys.platform == "win32":
         from PySide6.QtGui import QFont
@@ -99,6 +106,11 @@ def main():
             _append_text(getattr(hmi.ui, 'hmiLogWindow', None), f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {s}")
         except Exception:
             pass
+
+    if _copied_cfg:
+        _cfg_msg = f"[BOOT][WARN] 설정 파일이 없어서 예시(.example)로 새로 만들었습니다: {', '.join(_copied_cfg)} - 값 확인 필요"
+        print(_cfg_msg)
+        _hmi_log(_cfg_msg)
 
     # ✅ STM은 Start에서(FTM ON 후) 연결한다.
     stm_service: Any = None

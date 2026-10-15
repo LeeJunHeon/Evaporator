@@ -1,0 +1,19 @@
+# 저장소와 작업 폴더의 줄바꿈을 LF 로 통일한다 (Chamber K 와 같은 방식).
+#  core.autocrlf=true 만 쓰면 받을 때 CRLF 로 바뀌어, 같은 파일이 PC 마다 바이트가 달라진다.
+#  윈도우 파이썬은 LF 파일을 그대로 읽으므로 작업 폴더를 LF 로 두어도 문제가 없다.
+* text=auto eol=lf
+
+# 윈도우 전용 스크립트는 CRLF 로 둔다 (cmd 는 LF 배치 파일에서 오동작할 수 있음).
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# 아래는 절대 변환하지 않는다.
+*.png binary
+*.jpg binary
+*.ico binary
+*.pdf binary
+*.xlsx binary
+*.xls binary
+*.sqlite binary
+*.db binary

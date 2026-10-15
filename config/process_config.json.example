@@ -4,26 +4,26 @@
     {
       "target_adc": 60.0,
       "dac_step": 100,
-      "dac_interval_sec": 8.0,
+      "dac_interval_sec": 10.0,
       "hold_sec": 0.0
     },
     {
-      "target_adc": 100.0,
+      "target_adc": 120.0,
       "dac_step": 50,
-      "dac_interval_sec": 15.0,
-      "hold_sec": 0.0
-    },
-    {
-      "target_adc": 140.0,
-      "dac_step": 30,
-      "dac_interval_sec": 30.0,
+      "dac_interval_sec": 20.0,
       "hold_sec": 0.0
     },
     {
       "target_adc": 180.0,
       "dac_step": 20,
       "dac_interval_sec": 30.0,
-      "hold_sec": 0.0
+      "hold_sec": 60.0
+    },
+    {
+      "target_adc": 200.0,
+      "dac_step": 10,
+      "dac_interval_sec": 30.0,
+      "hold_sec": 60.0
     }
   ],
   "dac_max": 4000,
@@ -40,7 +40,7 @@
   "rate_jump_guard_abs": 0.15,
   "hold_max_dac_delta": 20,
   "rate_abort_ratio": 0.3,
-  "rate_abort_sec": 180.0,
+  "rate_abort_sec": 15.0,
   "sensor_none_abort_s": 15.0,
   "adc_none_abort_s": 5.0,
   "adc_max": 200,
